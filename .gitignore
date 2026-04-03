@@ -2,3 +2,10 @@
 .env.*
 __pycache__/
 .venv/
+
+.env
+.env.*
+error.log
+*.log
+*APP key 정보*.docx
+~.docx
