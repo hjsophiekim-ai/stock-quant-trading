@@ -9,3 +9,10 @@ error.log
 *.log
 *APP key 정보*.docx
 ~.docx
+
+.env
+.env.*
+error.log
+*.log
+*APP key 정보*.docx
+~.docx
