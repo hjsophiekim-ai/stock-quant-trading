@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import pandas as pd
+from dataclasses import dataclass
 
 
 def unrealized_pnl(entry_price: float, current_price: float, quantity: int) -> float:
@@ -41,3 +42,57 @@ def split_trade_realized_pnl(
         return 0.0
     avg_buy_price = sum(q * p for q, p in buy_fills) / total_buy_qty
     return sum((sell_price - avg_buy_price) * sell_qty for sell_qty, sell_price in sell_fills)
+
+
+@dataclass(frozen=True)
+class TradePerformanceSummary:
+    window: int
+    total_pnl: float
+    avg_pnl: float
+    win_rate: float
+    consecutive_losses: int
+    rolling_pnl_pct: float
+
+
+def summarize_recent_trade_performance(
+    trade_pnls: list[float],
+    *,
+    equity: float,
+    window: int = 10,
+) -> TradePerformanceSummary:
+    if window <= 0:
+        window = 1
+    samples = trade_pnls[-window:]
+    if not samples:
+        return TradePerformanceSummary(
+            window=window,
+            total_pnl=0.0,
+            avg_pnl=0.0,
+            win_rate=0.0,
+            consecutive_losses=0,
+            rolling_pnl_pct=0.0,
+        )
+    total = float(sum(samples))
+    avg = total / len(samples)
+    wins = sum(1 for x in samples if x > 0)
+    win_rate = wins / len(samples)
+    consec_losses = consecutive_loss_streak(samples)
+    rolling_pct = (total / equity) * 100.0 if equity > 0 else 0.0
+    return TradePerformanceSummary(
+        window=window,
+        total_pnl=total,
+        avg_pnl=avg,
+        win_rate=win_rate,
+        consecutive_losses=consec_losses,
+        rolling_pnl_pct=rolling_pct,
+    )
+
+
+def consecutive_loss_streak(trade_pnls: list[float]) -> int:
+    streak = 0
+    for pnl in reversed(trade_pnls):
+        if pnl < 0:
+            streak += 1
+            continue
+        break
+    return streak

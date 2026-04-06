@@ -1,13 +1,22 @@
 ﻿from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pandas as pd
 
 from app.orders.models import OrderRequest
-from app.strategy.base_strategy import BaseStrategy, StrategyContext
-from app.strategy.filters import evaluate_global_market_filter, filter_quality_swing_candidates
+from app.strategy.base_strategy import BaseStrategy, StrategyContext, StrategySignal
+from app.strategy.bear_strategy import BearStrategy, BearStrategyConfig
+from app.strategy.bull_strategy import BullStrategy
+from app.strategy.filters import filter_quality_swing_candidates
 from app.strategy.indicators import add_basic_indicators
+from app.strategy.market_regime import (
+    MarketRegimeConfig,
+    MarketRegimeInputs,
+    classify_market_regime,
+)
+from app.strategy.ranking import RankedCandidate, rank_candidates
+from app.strategy.sideways_strategy import SidewaysStrategy
 
 
 @dataclass(frozen=True)
@@ -19,31 +28,51 @@ class SwingStrategyConfig:
     first_take_profit_pct: float = 6.0
     second_take_profit_pct: float = 10.0
     time_exit_days: int = 7
+    ranking_top_n: int = 3
 
 
 @dataclass
 class SwingStrategy(BaseStrategy):
     config: SwingStrategyConfig = SwingStrategyConfig()
+    regime_config: MarketRegimeConfig = MarketRegimeConfig()
+    bull_strategy: BullStrategy = field(default_factory=BullStrategy)
+    bear_strategy: BearStrategy = field(default_factory=BearStrategy)
+    sideways_strategy: SidewaysStrategy = field(default_factory=SidewaysStrategy)
+    last_ranking: list[RankedCandidate] = field(default_factory=list)
+
+    def generate_signals(self, context: StrategyContext) -> list[StrategySignal]:
+        regime = classify_market_regime(
+            MarketRegimeInputs(
+                kospi=context.kospi_index,
+                sp500=context.sp500_index,
+                volatility=context.volatility_index,
+            ),
+            self.regime_config,
+        )
+        candidates = filter_quality_swing_candidates(context.prices)
+        ranked = rank_candidates(
+            prices_df=context.prices,
+            candidate_symbols=candidates,
+            regime=regime.regime,
+            top_n=self.config.ranking_top_n,
+        )
+        self.last_ranking = ranked
+        top_symbols = {r.symbol for r in ranked}
+        reduced_context = _filter_context_by_candidates(context, top_symbols)
+
+        if regime.regime == "bullish_trend":
+            return self.bull_strategy.generate_signals(reduced_context)
+        if regime.regime == "bearish_trend":
+            return self.bear_strategy.generate_signals(reduced_context)
+        if regime.regime == "sideways":
+            return self.sideways_strategy.generate_signals(reduced_context)
+
+        # high_volatility_risk: block new entries, only allow risk-reduction exits.
+        defensive = BearStrategy(config=BearStrategyConfig(allow_new_entries=False, order_quantity=0, stop_loss_pct=2.0))
+        return defensive.generate_signals(reduced_context)
 
     def generate_orders(self, context: StrategyContext) -> list[OrderRequest]:
-        market_filter = evaluate_global_market_filter(context.kospi_index, context.sp500_index)
-        candidates = set(filter_quality_swing_candidates(context.prices))
-        orders: list[OrderRequest] = []
-
-        for symbol, symbol_df in context.prices.groupby("symbol", sort=False):
-            if symbol not in candidates:
-                continue
-            signal = build_symbol_signal(symbol_df)
-            position_row = _get_position_row(context.portfolio, symbol)
-
-            if position_row is None:
-                if market_filter.allow_new_buy and should_enter_long(signal):
-                    orders.extend(_build_split_buy_orders(symbol, self.config))
-                continue
-
-            orders.extend(_build_exit_orders(symbol, signal, position_row, self.config))
-
-        return orders
+        return super().generate_orders(context)
 
 
 def build_symbol_signal(symbol_df: pd.DataFrame) -> dict[str, float | bool]:
@@ -118,3 +147,23 @@ def _get_position_row(portfolio_df: pd.DataFrame, symbol: str) -> pd.Series | No
     if matched.empty:
         return None
     return matched.iloc[-1]
+
+
+def _filter_context_by_candidates(context: StrategyContext, candidates: set[str]) -> StrategyContext:
+    if not candidates:
+        return StrategyContext(
+            prices=context.prices.iloc[0:0].copy(),
+            kospi_index=context.kospi_index,
+            sp500_index=context.sp500_index,
+            portfolio=context.portfolio,
+            volatility_index=context.volatility_index,
+        )
+    prices = context.prices[context.prices["symbol"].isin(candidates)].copy()
+    portfolio = context.portfolio[context.portfolio["symbol"].isin(candidates)].copy() if not context.portfolio.empty else context.portfolio
+    return StrategyContext(
+        prices=prices,
+        kospi_index=context.kospi_index,
+        sp500_index=context.sp500_index,
+        portfolio=portfolio,
+        volatility_index=context.volatility_index,
+    )

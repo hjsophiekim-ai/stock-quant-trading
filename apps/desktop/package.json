@@ -1,0 +1,12 @@
+{
+  "name": "stock-quant-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "electron": "^31.0.0"
+  }
+}

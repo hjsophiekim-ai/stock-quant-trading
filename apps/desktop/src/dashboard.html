@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+  <body>
+    <h2>Desktop Dashboard</h2>
+    <p id="user"></p>
+    <button id="brokerSettingsBtn">Broker Settings</button>
+    <button id="logoutBtn">Logout</button>
+    <script>
+      const accessToken = localStorage.getItem("accessToken");
+      const email = localStorage.getItem("email");
+      const userText = document.getElementById("user");
+      if (!accessToken) {
+        window.location.href = "./login.html";
+      } else {
+        userText.innerText = `User: ${email || "-"}`;
+      }
+      document.getElementById("logoutBtn").addEventListener("click", () => {
+        localStorage.removeItem("accessToken");
+        localStorage.removeItem("refreshToken");
+        localStorage.removeItem("email");
+        window.location.href = "./login.html";
+      });
+      document.getElementById("brokerSettingsBtn").addEventListener("click", () => {
+        window.location.href = "./broker-settings.html";
+      });
+    </script>
+  </body>
+</html>

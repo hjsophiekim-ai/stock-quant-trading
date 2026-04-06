@@ -1,55 +1,42 @@
-# Stock Quant Trading
+# Stock Quant Trading Platform (Monorepo)
 
-초보자도 따라올 수 있도록 설계한 **안전 우선형 퀀트 트레이딩 프로젝트**입니다.
+설치형 자동매매 플랫폼 구조로 확장한 모노레포입니다.  
+핵심 목표는 **수익률 개선**이지만, 시스템 최우선 제약은 **손실 최소화**입니다.
 
-## 프로젝트 한 줄 목표
+## 플랫폼 구성
 
-**수익률 극대화를 추구하되 손실 최소화를 최우선 제약으로 둔다.**
+- `backend/` : FastAPI 기반 API 서버
+- `apps/mobile/` : Expo React Native 모바일 앱
+- `apps/desktop/` : Electron 데스크톱 앱
+- `shared/` : 공통 타입/공통 API 모델/공통 유틸
+- `app/` : 기존 트레이딩 코어 엔진(전략/리스크/브로커)  
+  - 점진적으로 `backend` 서비스 계층으로 통합 예정
 
-## 핵심 전략
+## 보안 원칙
 
-- 우량주 스윙: 재무/유동성이 안정적인 종목 위주로 중기 스윙
-- 추세 필터: 상승 추세일 때만 진입하고, 약세 구간은 관망
-- 분할매매: 한 번에 몰빵하지 않고 나눠서 진입/청산
+- 한국투자 App Key/Secret를 모바일/데스크톱 앱에 저장하지 않습니다.
+- 브로커 비밀정보는 서버에서 암호화 저장합니다.
+- 앱은 자체 로그인(JWT) 후 서버를 통해서만 한국투자 API에 접근합니다.
+- 기본값은 `paper trading`
+- `live trading`은 잠금 상태이며 다중 확인 플래그 없이는 주문 불가
 
-## 안전 원칙
+## 브로커 계정 관리
 
-- 기본 운용 환경은 **모의투자**입니다.
-- **실거래는 잠금(기본 비활성화)** 상태를 유지합니다.
-- 리스크 엔진이 아래 규칙을 강제합니다.
-  - 종목별 손절(Stop Loss)
-  - 일일 손실 제한(Daily Loss Limit)
-  - 총 손실 제한(Max Drawdown / Total Loss Limit)
+- 사용자는 앱의 Broker Settings 화면에서 KIS 연동 정보를 입력/수정합니다.
+- 서버는 사용자별 브로커 계정을 암호화 저장하고 CRUD를 제공합니다.
+- 앱에서 "토큰 발급 테스트"를 실행하면 서버가 한국투자 토큰 API를 호출해 연결 상태를 갱신합니다.
 
-## 문서 안내
+## 주요 문서
 
-- `docs/system_design.md`: 시스템 전체 구성과 데이터 흐름
-- `docs/architecture.md`: 모듈 구조와 책임 분리
-- `docs/trading_rules.md`: 전략/진입/청산/리스크 규칙
-- `docs/api_plan.md`: 한국투자증권 연동 단계별 API 계획
-- `docs/paper_trading_flow.md`: 모의투자 실행 시나리오
-- `AGENTS.md`: 개발 에이전트/작업 규칙
+- `docs/system_design.md` : 전체 시스템 설계(앱+서버+트레이딩 코어)
+- `docs/app_architecture.md` : 앱/서버/공유모듈 아키텍처 상세
+- `docs/trading_rules.md` : 전략/리스크/국면별 운영 규칙
+- `docs/live_trading_checklist.md` : 실거래 전 필수 체크리스트
+- `docs/backtest_method.md` : 과최적화 방지 검증 방법론
 
-## 한국투자증권 연동 로드맵(순서 고정)
+## 한국투자 API 연동 순서
 
 1. 토큰 발급
-2. 조회 API
-3. 모의주문
-4. 실거래(잠금 해제 조건 충족 시)
-
-## 현재 연동 상태 (실제 API 준비)
-
-- `app/auth/kis_auth.py`
-  - `/oauth2/tokenP` 기반 토큰 발급/캐시/만료 체크/리프레시 흐름 구현
-- `app/clients/kis_client.py`
-  - 공통 GET/POST 래퍼 + 헤더 + Bearer 토큰 연동 + retry/timeout 처리
-  - 조회 API 우선 구현: 잔고 조회, 현재가 조회, 보유종목 조회(잔고 API 기반)
-- 실거래 잠금
-  - `LIVE_TRADING=true`가 아니면 실주문 금지 정책 유지
-
-## 빠른 점검 순서
-
-1. `.env`에 KIS 키/계좌 정보 입력
-2. `scripts/check_kis_connection.py` 실행
-3. `scripts/check_kis_quotes.py` 실행
-4. 조회 응답 필드 확인 후 전략/리스크 입력 매핑
+2. 조회 API 검증
+3. 모의주문 검증
+4. 실거래 전환(잠금 해제 조건 충족 시)

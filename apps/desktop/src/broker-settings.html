@@ -1,0 +1,117 @@
+<!doctype html>
+<html>
+  <body>
+    <h2>Broker Settings</h2>
+    <p>Status: <span id="statusBadge">unknown</span></p>
+    <input id="kis_app_key" placeholder="KIS_APP_KEY" />
+    <input id="kis_app_secret" type="password" placeholder="KIS_APP_SECRET" />
+    <input id="kis_account_no" placeholder="KIS_ACCOUNT_NO" />
+    <input id="kis_account_product_code" placeholder="KIS_ACCOUNT_PRODUCT_CODE" />
+    <select id="trading_mode">
+      <option value="paper">paper</option>
+      <option value="live">live</option>
+    </select>
+    <div>
+      <button id="saveBtn">Save</button>
+      <button id="testBtn">Test Token Issuance</button>
+      <button id="backBtn">Back</button>
+    </div>
+    <p id="message"></p>
+    <script>
+      const backendUrl = "http://localhost:8000";
+      const accessToken = localStorage.getItem("accessToken");
+      const msg = document.getElementById("message");
+      const badge = document.getElementById("statusBadge");
+      if (!accessToken) {
+        window.location.href = "./login.html";
+      }
+
+      function authHeaders(extra = {}) {
+        return {
+          Authorization: `Bearer ${accessToken}`,
+          ...extra,
+        };
+      }
+
+      function readForm() {
+        return {
+          kis_app_key: document.getElementById("kis_app_key").value.trim(),
+          kis_app_secret: document.getElementById("kis_app_secret").value.trim(),
+          kis_account_no: document.getElementById("kis_account_no").value.trim(),
+          kis_account_product_code: document.getElementById("kis_account_product_code").value.trim(),
+          trading_mode: document.getElementById("trading_mode").value,
+        };
+      }
+
+      function validate(form) {
+        if (form.kis_app_key.length < 8) return "KIS_APP_KEY 길이가 너무 짧습니다.";
+        if (form.kis_app_secret.length < 8) return "KIS_APP_SECRET 길이가 너무 짧습니다.";
+        if (form.kis_account_no.length < 4) return "KIS_ACCOUNT_NO 길이가 너무 짧습니다.";
+        if (form.kis_account_product_code.length < 1) return "KIS_ACCOUNT_PRODUCT_CODE를 입력하세요.";
+        if (!["paper", "live"].includes(form.trading_mode)) return "TRADING_MODE는 paper/live만 허용됩니다.";
+        return "";
+      }
+
+      async function loadCurrentStatus() {
+        try {
+          const res = await fetch(`${backendUrl}/api/broker-accounts/me`, {
+            method: "GET",
+            headers: authHeaders(),
+          });
+          if (!res.ok) return;
+          const data = await res.json();
+          badge.innerText = data.connection_status || "unknown";
+        } catch {}
+      }
+
+      document.getElementById("saveBtn").addEventListener("click", async () => {
+        const form = readForm();
+        const error = validate(form);
+        if (error) {
+          msg.innerText = error;
+          return;
+        }
+        try {
+          const res = await fetch(`${backendUrl}/api/broker-accounts/me`, {
+            method: "POST",
+            headers: authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify(form),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            msg.innerText = data?.detail || "Save failed";
+            return;
+          }
+          badge.innerText = data.connection_status || "unknown";
+          msg.innerText = "저장 완료";
+        } catch {
+          msg.innerText = "네트워크 오류";
+        }
+      });
+
+      document.getElementById("testBtn").addEventListener("click", async () => {
+        try {
+          const res = await fetch(`${backendUrl}/api/broker-accounts/me/test-connection`, {
+            method: "POST",
+            headers: authHeaders(),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            msg.innerText = data?.detail || "연결 테스트 실패";
+            return;
+          }
+          badge.innerText = data.status || "unknown";
+          msg.innerText = data.message || "";
+        } catch {
+          msg.innerText = "네트워크 오류";
+        }
+      });
+
+      document.getElementById("backBtn").addEventListener("click", () => {
+        window.location.href = "./dashboard.html";
+      });
+
+      loadCurrentStatus();
+    </script>
+  </body>
+</html>

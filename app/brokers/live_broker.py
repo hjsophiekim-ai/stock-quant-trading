@@ -1,9 +1,10 @@
 ﻿from dataclasses import dataclass
-import os
+import logging
 from typing import Any
 
 from app.brokers.base_broker import BaseBroker, Fill, OpenOrder, PositionView
 from app.clients.kis_client import KISClient
+from app.config import Settings, get_settings
 from app.orders.models import OrderRequest, OrderResult
 
 
@@ -13,15 +14,22 @@ class LiveBroker(BaseBroker):
     account_no: str
     account_product_code: str
     live_trading_enabled: bool = False
+    live_trading_confirm: bool = False
+    trading_mode: str = "paper"
+    dry_run_log_enabled: bool = True
+    logger: logging.Logger = logging.getLogger("app.brokers.live_broker")
 
     @classmethod
-    def from_env(cls, kis_client: KISClient, account_no: str, account_product_code: str) -> "LiveBroker":
-        enabled = os.getenv("LIVE_TRADING", "false").lower() == "true"
+    def from_env(cls, kis_client: KISClient, account_no: str, account_product_code: str, settings: Settings | None = None) -> "LiveBroker":
+        cfg = settings or get_settings()
         return cls(
             kis_client=kis_client,
             account_no=account_no,
             account_product_code=account_product_code,
-            live_trading_enabled=enabled,
+            live_trading_enabled=cfg.resolved_live_trading_enabled,
+            live_trading_confirm=cfg.live_trading_confirm,
+            trading_mode=cfg.trading_mode,
+            dry_run_log_enabled=cfg.live_order_dry_run_log,
         )
 
     def get_cash(self) -> float:
@@ -33,8 +41,11 @@ class LiveBroker(BaseBroker):
         return self._extract_positions(payload)
 
     def place_order(self, order: OrderRequest) -> OrderResult:
-        if not self.live_trading_enabled:
-            return OrderResult(order_id="", accepted=False, message="Live trading is disabled (LIVE_TRADING!=true)")
+        guard = self._validate_live_order_guard()
+        if guard is not None:
+            return guard
+        if self.dry_run_log_enabled:
+            self._log_dry_run(order)
 
         price = int(order.price) if order.price is not None else 0
         response = self.kis_client.place_order(
@@ -49,8 +60,9 @@ class LiveBroker(BaseBroker):
         return OrderResult(order_id=order_id, accepted=True, message="Live order submitted")
 
     def cancel_order(self, order_id: str) -> OrderResult:
-        if not self.live_trading_enabled:
-            return OrderResult(order_id=order_id, accepted=False, message="Live trading is disabled (LIVE_TRADING!=true)")
+        guard = self._validate_live_order_guard()
+        if guard is not None:
+            return OrderResult(order_id=order_id, accepted=False, message=guard.message)
         response = self.kis_client.cancel_order(
             account_no=self.account_no,
             account_product_code=self.account_product_code,
@@ -117,3 +129,28 @@ class LiveBroker(BaseBroker):
             if isinstance(candidate, str) and candidate:
                 return candidate
         return fallback
+
+    def _validate_live_order_guard(self) -> OrderResult | None:
+        if self.trading_mode != "live":
+            return OrderResult(order_id="", accepted=False, message="Live order blocked: TRADING_MODE is not live")
+        if not self.live_trading_enabled:
+            return OrderResult(order_id="", accepted=False, message="Live order blocked: LIVE_TRADING is not true")
+        if not self.live_trading_confirm:
+            return OrderResult(order_id="", accepted=False, message="Live order blocked: LIVE_TRADING_CONFIRM is not true")
+        if not self.account_no or not self.account_product_code:
+            return OrderResult(order_id="", accepted=False, message="Live order blocked: account info is missing")
+        return None
+
+    def _log_dry_run(self, order: OrderRequest) -> None:
+        # Do not log secrets or full account number.
+        masked_account = f"***{self.account_no[-4:]}" if len(self.account_no) >= 4 else "***"
+        self.logger.warning(
+            "[DRY-RUN BEFORE LIVE ORDER] mode=%s account=%s side=%s symbol=%s qty=%s price=%s strategy=%s",
+            self.trading_mode,
+            masked_account,
+            order.side,
+            order.symbol,
+            order.quantity,
+            order.price,
+            order.strategy_id,
+        )

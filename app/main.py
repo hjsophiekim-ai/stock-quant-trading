@@ -43,9 +43,11 @@ def run(settings: Settings | None = None) -> dict[str, object]:
     setup_logging()
     logger = logging.getLogger("app.main")
 
-    logger.info("Starting paper trading app")
+    _validate_startup_runtime_safety(cfg, logger)
+    logger.info("Starting trading app")
     logger.info("Trading mode: %s", cfg.trading_mode)
-    logger.info("Live trading enabled: %s", cfg.live_trading_enabled)
+    logger.info("Live trading enabled: %s", cfg.resolved_live_trading_enabled)
+    logger.info("Live trading confirm: %s", cfg.live_trading_confirm)
 
     health_server = start_health_server(port=8000)
     logger.info("Health endpoint ready: GET http://localhost:8000/health")
@@ -53,10 +55,49 @@ def run(settings: Settings | None = None) -> dict[str, object]:
     jobs = SchedulerJobs()
     report = jobs.run_daily_cycle()
     logger.info("End-of-day report generated: %s", report)
+    _check_shutdown_on_loss_limit(report, cfg, logger)
 
     health_server.shutdown()
     logger.info("Paper trading app finished")
     return report
+
+
+def _validate_startup_runtime_safety(cfg: Settings, logger: logging.Logger) -> None:
+    """
+    Startup safety validation:
+    - default mode should remain paper
+    - live orders require dual-confirm flags + account readiness
+    """
+    if cfg.trading_mode not in {"paper", "live"}:
+        raise RuntimeError("Invalid TRADING_MODE; must be 'paper' or 'live'")
+
+    if cfg.trading_mode == "paper":
+        logger.info("Startup safety check: paper mode active (safe default)")
+        return
+
+    if not cfg.resolved_live_trading_enabled:
+        logger.warning("Startup safety check: live mode selected but LIVE_TRADING is false; live orders will be blocked")
+        return
+
+    if not cfg.live_trading_confirm:
+        logger.warning("Startup safety check: LIVE_TRADING_CONFIRM is false; live orders will be blocked")
+        return
+
+    if not cfg.resolved_account_no or not cfg.resolved_account_product_code:
+        raise RuntimeError("Live mode requires KIS_ACCOUNT_NO and KIS_ACCOUNT_PRODUCT_CODE")
+
+    logger.warning("Startup safety check: live mode fully enabled with dual confirmation")
+
+
+def _check_shutdown_on_loss_limit(report: dict[str, object], cfg: Settings, logger: logging.Logger) -> None:
+    cumulative = float(report.get("cumulative_return_pct", 0.0))
+    if cumulative <= -abs(cfg.total_loss_limit_pct):
+        logger.critical(
+            "Auto shutdown triggered: cumulative return %.2f%% breached total loss limit -%.2f%%",
+            cumulative,
+            abs(cfg.total_loss_limit_pct),
+        )
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 
 from app.brokers.base_broker import BaseBroker
 from app.orders.models import OrderIntent, OrderRequest, OrderResult, OrderSignal, OrderStatus
+from app.portfolio.positions import Position, apply_buy_fill, apply_sell_fill, update_high_watermark
 from app.risk.rules import RiskRules, RiskSnapshot
 
 
@@ -69,3 +70,21 @@ class OrderManager:
             filled_quantity=result.filled_quantity,
             avg_fill_price=result.avg_fill_price,
         )
+
+    def apply_fill_to_position(
+        self,
+        *,
+        position: Position | None,
+        order: OrderRequest,
+        fill_price: float,
+        filled_quantity: int | None = None,
+    ) -> Position | None:
+        qty = filled_quantity if filled_quantity is not None and filled_quantity > 0 else order.quantity
+        if qty <= 0:
+            return position
+        if order.side == "buy":
+            updated = apply_buy_fill(position=position, quantity=qty, fill_price=fill_price, symbol=order.symbol)
+            return update_high_watermark(updated, fill_price)
+        if position is None:
+            return None
+        return apply_sell_fill(position=position, quantity=qty)

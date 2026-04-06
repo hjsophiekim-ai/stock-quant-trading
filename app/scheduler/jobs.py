@@ -41,6 +41,12 @@ class SchedulerJobs:
         )
         strategy_orders = self.strategy.generate_orders(context)
         self.logger.info("[INTRADAY] Generated %s raw strategy orders", len(strategy_orders))
+        if getattr(self.strategy, "last_ranking", None):
+            ranking_lines = [
+                f"{r.symbol}:{r.total_score:.3f} ({', '.join(r.reasons)})"
+                for r in self.strategy.last_ranking
+            ]
+            self.logger.info("[INTRADAY] Ranking top picks: %s", " | ".join(ranking_lines))
 
         order_manager = OrderManager(broker=self.broker, risk_rules=self.risk_rules)
         accepted = 0
@@ -66,6 +72,15 @@ class SchedulerJobs:
 
         self.logger.info("[CLOSE] Building end-of-day report")
         report = self._build_end_of_day_report(universe, accepted=accepted, rejected=rejected)
+        report["ranking"] = [
+            {
+                "symbol": r.symbol,
+                "score": round(r.total_score, 4),
+                "factors": r.factor_scores,
+                "reasons": r.reasons,
+            }
+            for r in getattr(self.strategy, "last_ranking", [])
+        ]
         self.logger.info("[DONE] Daily cycle complete: %s", report)
         return report
 
