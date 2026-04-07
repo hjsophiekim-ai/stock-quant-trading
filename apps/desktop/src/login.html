@@ -6,8 +6,9 @@
     <input id="password" type="password" placeholder="Password" />
     <button id="loginBtn">Login</button>
     <p id="message"></p>
+    <script src="./runtime-config.js"></script>
     <script>
-      const backendUrl = "http://localhost:8000";
+      const backendUrl = window.RUNTIME_CONFIG?.BACKEND_URL || "http://localhost:8000";
       const msg = document.getElementById("message");
       document.getElementById("loginBtn").addEventListener("click", async () => {
         const email = document.getElementById("email").value;

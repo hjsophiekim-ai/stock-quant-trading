@@ -4,6 +4,7 @@
 
 본 문서는 프로젝트를 설치형 플랫폼으로 확장한 전체 시스템 구조를 정의합니다.  
 핵심은 **앱(모바일/데스크톱) + 백엔드 API + 트레이딩 코어**를 분리하고, 보안/리스크 통제를 서버 중심으로 강제하는 것입니다.
+수익 목표는 존재하지만, **월 15%는 연구 목표일 뿐 보장 수익이 아닙니다.**
 
 ## 2) 상위 아키텍처
 
@@ -33,6 +34,18 @@
 - 기본값은 `paper trading`입니다.
 - `live trading`은 잠금 상태이며, 다중 확인 플래그가 없으면 실주문을 차단합니다.
 
+### 3-1) 앱 직접 호출 금지 이유
+
+- 모바일/데스크톱 앱은 키 노출 공격면이 커서 브로커 비밀 보호에 불리합니다.
+- 리스크 엔진/kill switch를 우회한 주문 경로가 생기면 손실 통제가 무너질 수 있습니다.
+- 서버 단일 진입점으로 감사 로그, 접근 통제, 오류 대응을 일관되게 유지할 수 있습니다.
+
+### 3-2) 서버 암호화 저장 이유
+
+- 사용자별 계정 분리 저장이 가능해 다중 사용자 운영에 적합합니다.
+- 키/계좌정보를 암호화하여 저장해 평문 노출 위험을 낮춥니다.
+- 토큰 발급, 연결 검증, 주문 가능 여부 검증을 서버에서만 실행할 수 있습니다.
+
 ## 4) 트레이딩 실행 흐름
 
 1. 앱 로그인(JWT 발급)
@@ -46,6 +59,18 @@
    - 기본: paper
    - live: 이중 확인 플래그 + 모드 검증 통과 시에만
 9. 체결/포지션/손익 저장 및 API 응답
+
+## 4-1) 사용자/관리자 운영 관점
+
+- 사용자 관점:
+  1. 로그인
+  2. 대시보드/성과 확인
+  3. 브로커 설정(서버 저장)
+  4. paper trading 실행/중지/모니터링
+- 관리자 관점:
+  1. 런타임 상태/리스크 경고 확인
+  2. live 잠금 해제 조건 점검
+  3. 손실 제한 초과 시 즉시 중단/복구 절차 수행
 
 ## 5) 장애/안전 중단 경로
 
@@ -62,7 +87,43 @@
 - 포트폴리오 조회(보유/평가금액/비중)
 - 거래내역 조회(주문/체결/리스크 이벤트)
 
-## 7) 확장 계획
+## 7) Paper Trading 운영 API
+
+- 목적: 앱에서 모의투자 실행/중지/상태 모니터링을 안전하게 수행
+- 엔드포인트:
+  - `POST /api/paper-trading/start`
+  - `POST /api/paper-trading/stop`
+  - `GET /api/paper-trading/status`
+  - `GET /api/paper-trading/positions`
+  - `GET /api/paper-trading/pnl`
+  - `GET /api/paper-trading/logs`
+- 원칙:
+  - 항상 `paper` 모드로만 동작
+  - `live` 경로와 완전 분리
+  - 내부 브로커는 `PaperBroker` 사용
+  - 앱은 모니터링/제어만 수행하고 실주문 경로는 노출하지 않음
+
+## 8) Live Trading 다단계 안전장치
+
+- 잠금 기본값: 항상 live 잠금 상태
+- 해제 조건(모두 충족 필요):
+  - ENV `LIVE_TRADING=true`
+  - ENV `LIVE_TRADING_CONFIRM=true`
+  - 앱 `live_trading_flag=true`
+  - 앱 `secondary_confirm_flag=true`
+  - 앱 `extra_approval_flag=true`
+  - `TRADING_MODE=live`
+- 제공 API:
+  - `GET /api/live-trading/status`
+  - `POST /api/live-trading/settings`
+  - `GET /api/live-trading/settings-history`
+  - `GET /api/live-trading/runtime-safety-validation`
+  - `GET /api/live-trading/kill-switch-status`
+- 계좌 손실 제한 초과 시:
+  - 앱에 즉시 경고 배너 표시
+  - live 주문 차단 상태 유지
+
+## 9) 확장 계획
 
 - 모바일 푸시 알림(리스크 이벤트, 체결 알림)
 - 데스크톱 운영 자동화(스케줄/복구)

@@ -17,8 +17,9 @@
       <button id="backBtn">Back</button>
     </div>
     <p id="message"></p>
+    <script src="./runtime-config.js"></script>
     <script>
-      const backendUrl = "http://localhost:8000";
+      const backendUrl = window.RUNTIME_CONFIG?.BACKEND_URL || "http://localhost:8000";
       const accessToken = localStorage.getItem("accessToken");
       const msg = document.getElementById("message");
       const badge = document.getElementById("statusBadge");

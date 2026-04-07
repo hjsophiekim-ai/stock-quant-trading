@@ -1,19 +1,164 @@
 <!doctype html>
 <html>
+  <head>
+    <style>
+      body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        background: #f8fafc;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 220px 1fr 320px;
+        min-height: 100vh;
+      }
+      .sidebar {
+        background: #0f172a;
+        color: #e2e8f0;
+        padding: 16px;
+      }
+      .sidebar button {
+        width: 100%;
+        margin-bottom: 8px;
+      }
+      .main {
+        padding: 16px;
+      }
+      .admin {
+        border-left: 1px solid #cbd5e1;
+        background: #ffffff;
+        padding: 16px;
+      }
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .card {
+        background: white;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        padding: 10px;
+      }
+      .risk-banner {
+        background: #fff7ed;
+        border: 1px solid #fdba74;
+        border-radius: 8px;
+        padding: 10px;
+        margin-bottom: 12px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      td,
+      th {
+        border-bottom: 1px solid #e2e8f0;
+        padding: 6px;
+        text-align: left;
+      }
+    </style>
+  </head>
   <body>
-    <h2>Desktop Dashboard</h2>
-    <p id="user"></p>
-    <button id="brokerSettingsBtn">Broker Settings</button>
-    <button id="logoutBtn">Logout</button>
+    <div class="layout">
+      <aside class="sidebar">
+        <h3>Auto Trading</h3>
+        <p id="user"></p>
+        <button id="dashboardBtn">Dashboard</button>
+        <button id="performanceBtn">Performance</button>
+        <button id="paperTradingBtn">Paper Trading</button>
+        <button id="liveSettingsBtn">Live Settings</button>
+        <button id="brokerSettingsBtn">Broker Settings</button>
+        <button id="logoutBtn">Logout</button>
+      </aside>
+      <main class="main">
+        <h2>Main Dashboard</h2>
+        <div class="risk-banner" id="riskBanner">Risk alert loading...</div>
+        <div class="cards">
+          <div class="card"><b>현재 모드</b><div id="mode"></div></div>
+          <div class="card"><b>계좌 상태</b><div id="accountStatus"></div></div>
+          <div class="card"><b>시스템 상태</b><div id="systemStatus"></div></div>
+          <div class="card"><b>오늘 수익률</b><div id="todayReturn"></div></div>
+          <div class="card"><b>월간 수익률</b><div id="monthlyReturn"></div></div>
+          <div class="card"><b>누적 수익률</b><div id="cumulativeReturn"></div></div>
+          <div class="card"><b>보유 포지션 수</b><div id="positionCount"></div></div>
+          <div class="card"><b>실현 손익</b><div id="realizedPnl"></div></div>
+          <div class="card"><b>미실현 손익</b><div id="unrealizedPnl"></div></div>
+        </div>
+        <h3>최근 거래 5건</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Symbol</th>
+              <th>Side</th>
+              <th>Qty</th>
+              <th>Price</th>
+            </tr>
+          </thead>
+          <tbody id="recentTradesBody"></tbody>
+        </table>
+      </main>
+      <aside class="admin">
+        <h3>관리자 상세 패널</h3>
+        <p>Runtime Control: running</p>
+        <p>Risk Layer: adaptive_deleverage=ON</p>
+        <p>Live Trading Lock: enabled</p>
+        <p>TODO: 관리자 전용 API 연결 (권한 role=admin 필요)</p>
+      </aside>
+    </div>
+    <script src="./runtime-config.js"></script>
     <script>
       const accessToken = localStorage.getItem("accessToken");
       const email = localStorage.getItem("email");
+      const backendUrl = window.RUNTIME_CONFIG?.BACKEND_URL || "http://localhost:8000";
       const userText = document.getElementById("user");
       if (!accessToken) {
         window.location.href = "./login.html";
       } else {
         userText.innerText = `User: ${email || "-"}`;
       }
+      const summaryMock = {
+        mode: "paper",
+        account_status: "connected",
+        today_return_pct: 0.41,
+        monthly_return_pct: 4.2,
+        cumulative_return_pct: 12.8,
+        position_count: 4,
+        realized_pnl: 1840000,
+        unrealized_pnl: 260000,
+        system_status: "running",
+        risk_banner: { level: "warning", message: "연속 손실 2회 감지: 신규 진입 크기 자동 축소 중" },
+      };
+      const tradesMock = [
+        { trade_id: "T-20260406-0005", symbol: "005930", side: "sell", quantity: 5, price: 78400 },
+        { trade_id: "T-20260406-0004", symbol: "000660", side: "buy", quantity: 2, price: 170500 },
+        { trade_id: "T-20260405-0011", symbol: "035420", side: "sell", quantity: 4, price: 188500 },
+        { trade_id: "T-20260405-0009", symbol: "207940", side: "buy", quantity: 1, price: 790000 },
+        { trade_id: "T-20260404-0002", symbol: "051910", side: "buy", quantity: 3, price: 394000 },
+      ];
+
+      document.getElementById("mode").innerText = summaryMock.mode;
+      document.getElementById("accountStatus").innerText = summaryMock.account_status;
+      document.getElementById("systemStatus").innerText = summaryMock.system_status;
+      document.getElementById("todayReturn").innerText = `${summaryMock.today_return_pct}%`;
+      document.getElementById("monthlyReturn").innerText = `${summaryMock.monthly_return_pct}%`;
+      document.getElementById("cumulativeReturn").innerText = `${summaryMock.cumulative_return_pct}%`;
+      document.getElementById("positionCount").innerText = String(summaryMock.position_count);
+      document.getElementById("realizedPnl").innerText = summaryMock.realized_pnl.toLocaleString();
+      document.getElementById("unrealizedPnl").innerText = summaryMock.unrealized_pnl.toLocaleString();
+      document.getElementById("riskBanner").innerText = `Risk Warning: ${summaryMock.risk_banner.message}`;
+      const tbody = document.getElementById("recentTradesBody");
+      tradesMock.forEach((trade) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${trade.trade_id}</td><td>${trade.symbol}</td><td>${trade.side}</td><td>${trade.quantity}</td><td>${trade.price}</td>`;
+        tbody.appendChild(tr);
+      });
+      // TODO: Replace mock bindings with backend API calls:
+      // - GET `${backendUrl}/api/dashboard/summary`
+      // - GET `${backendUrl}/api/portfolio/summary`
+      // - GET `${backendUrl}/api/trading/recent-trades`
+
       document.getElementById("logoutBtn").addEventListener("click", () => {
         localStorage.removeItem("accessToken");
         localStorage.removeItem("refreshToken");
@@ -22,6 +167,18 @@
       });
       document.getElementById("brokerSettingsBtn").addEventListener("click", () => {
         window.location.href = "./broker-settings.html";
+      });
+      document.getElementById("paperTradingBtn").addEventListener("click", () => {
+        window.location.href = "./paper-trading.html";
+      });
+      document.getElementById("performanceBtn").addEventListener("click", () => {
+        window.location.href = "./performance.html";
+      });
+      document.getElementById("liveSettingsBtn").addEventListener("click", () => {
+        window.location.href = "./live-settings.html";
+      });
+      document.getElementById("dashboardBtn").addEventListener("click", () => {
+        window.location.href = "./dashboard.html";
       });
     </script>
   </body>

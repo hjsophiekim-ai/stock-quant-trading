@@ -1,0 +1,138 @@
+<!doctype html>
+<html>
+  <head>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 0; background: #f8fafc; }
+      .layout { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+      .sidebar { background: #0f172a; color: #e2e8f0; padding: 16px; }
+      .sidebar button { width: 100%; margin-bottom: 8px; }
+      .main { padding: 16px; }
+      .row { margin-bottom: 10px; }
+      .panel { background: white; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+      .chart { font-family: monospace; white-space: pre-line; }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar">
+        <h3>Auto Trading</h3>
+        <button id="dashboardBtn">Dashboard</button>
+        <button id="performanceBtn">Performance</button>
+        <button id="brokerSettingsBtn">Broker Settings</button>
+        <button id="paperTradingBtn">Paper Trading</button>
+        <button id="liveSettingsBtn">Live Settings</button>
+        <button id="logoutBtn">Logout</button>
+      </aside>
+      <main class="main">
+        <h2>Paper Trading Console</h2>
+        <div class="row">
+          <b>Mode:</b> paper (live separated)
+          <br />
+          <b>Status:</b> <span id="statusText">stopped</span>
+        </div>
+        <div class="row">
+          <label>Strategy: </label>
+          <select id="strategyId">
+            <option value="swing_v1">swing_v1</option>
+            <option value="bull_focus_v1">bull_focus_v1</option>
+            <option value="defensive_v1">defensive_v1</option>
+          </select>
+          <button id="startBtn">Start</button>
+          <button id="stopBtn">Stop</button>
+          <span id="message"></span>
+        </div>
+        <div class="panel">
+          <h3>Positions</h3>
+          <ul id="positionsList"></ul>
+        </div>
+        <div class="panel">
+          <h3>Return Chart (mock)</h3>
+          <div id="chart" class="chart"></div>
+        </div>
+        <div class="panel">
+          <h3>Recent Logs</h3>
+          <ul id="logsList"></ul>
+        </div>
+        <!-- TODO: connect real APIs
+          GET /api/paper-trading/status
+          GET /api/paper-trading/positions
+          GET /api/paper-trading/pnl
+          GET /api/paper-trading/logs
+        -->
+      </main>
+    </div>
+    <script src="./runtime-config.js"></script>
+    <script>
+      const backendUrl = window.RUNTIME_CONFIG?.BACKEND_URL || "http://localhost:8000";
+      const accessToken = localStorage.getItem("accessToken");
+      if (!accessToken) window.location.href = "./login.html";
+
+      const statusText = document.getElementById("statusText");
+      const message = document.getElementById("message");
+      const positionsList = document.getElementById("positionsList");
+      const logsList = document.getElementById("logsList");
+      const chart = document.getElementById("chart");
+
+      const mockPositions = [
+        { symbol: "005930", quantity: 2, average_price: 77000 },
+        { symbol: "000660", quantity: 1, average_price: 168000 },
+      ];
+      const mockChart = [0.1, 0.12, 0.18, 0.15, 0.23, 0.31, 0.29];
+      const mockLogs = [
+        "Paper trading started with strategy=swing_v1",
+        "Risk engine approved buy signal for 005930",
+        "Filled BUY 2 @ 77000",
+      ];
+      mockPositions.forEach((p) => {
+        const li = document.createElement("li");
+        li.innerText = `${p.symbol} / qty=${p.quantity} / avg=${p.average_price}`;
+        positionsList.appendChild(li);
+      });
+      chart.innerText = mockChart.map((v) => "▇".repeat(Math.max(1, Math.round(v * 10)))).join("\n");
+      mockLogs.forEach((l) => {
+        const li = document.createElement("li");
+        li.innerText = l;
+        logsList.appendChild(li);
+      });
+
+      document.getElementById("startBtn").addEventListener("click", async () => {
+        const strategyId = document.getElementById("strategyId").value;
+        const res = await fetch(`${backendUrl}/api/paper-trading/start`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ strategy_id: strategyId }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          message.innerText = data?.detail || "start failed";
+          return;
+        }
+        statusText.innerText = data.status;
+        message.innerText = "started";
+      });
+
+      document.getElementById("stopBtn").addEventListener("click", async () => {
+        const res = await fetch(`${backendUrl}/api/paper-trading/stop`, { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) {
+          message.innerText = data?.detail || "stop failed";
+          return;
+        }
+        statusText.innerText = data.status;
+        message.innerText = "stopped";
+      });
+
+      document.getElementById("dashboardBtn").addEventListener("click", () => (window.location.href = "./dashboard.html"));
+      document.getElementById("performanceBtn").addEventListener("click", () => (window.location.href = "./performance.html"));
+      document.getElementById("brokerSettingsBtn").addEventListener("click", () => (window.location.href = "./broker-settings.html"));
+      document.getElementById("paperTradingBtn").addEventListener("click", () => (window.location.href = "./paper-trading.html"));
+      document.getElementById("liveSettingsBtn").addEventListener("click", () => (window.location.href = "./live-settings.html"));
+      document.getElementById("logoutBtn").addEventListener("click", () => {
+        localStorage.removeItem("accessToken");
+        localStorage.removeItem("refreshToken");
+        localStorage.removeItem("email");
+        window.location.href = "./login.html";
+      });
+    </script>
+  </body>
+</html>

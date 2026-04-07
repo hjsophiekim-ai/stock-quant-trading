@@ -1,0 +1,150 @@
+<!doctype html>
+<html>
+  <head>
+    <style>
+      body { margin: 0; font-family: Arial, sans-serif; background: #f8fafc; }
+      .layout { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+      .sidebar { background: #0f172a; color: #e2e8f0; padding: 16px; }
+      .sidebar button { width: 100%; margin-bottom: 8px; }
+      .main { padding: 16px; }
+      .filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+      .cards { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+      .card { background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px; }
+      .panel { background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { border-bottom: 1px solid #e2e8f0; padding: 6px; text-align: left; }
+      .chart-line { font-family: monospace; white-space: pre-line; }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar">
+        <h3>Auto Trading</h3>
+        <button id="dashboardBtn">Dashboard</button>
+        <button id="performanceBtn">Performance</button>
+        <button id="paperTradingBtn">Paper Trading</button>
+        <button id="liveSettingsBtn">Live Settings</button>
+        <button id="brokerSettingsBtn">Broker Settings</button>
+      </aside>
+      <main class="main">
+        <h2>성과 분석</h2>
+        <div class="filters">
+          <input id="startDate" type="date" />
+          <input id="endDate" type="date" />
+          <select id="strategyFilter">
+            <option value="">전략 전체</option>
+            <option value="swing_v1">swing_v1</option>
+            <option value="bull_focus_v1">bull_focus_v1</option>
+            <option value="defensive_v1">defensive_v1</option>
+          </select>
+          <input id="symbolFilter" placeholder="종목코드(예:005930)" />
+          <button id="applyFilterBtn">필터 적용</button>
+        </div>
+
+        <div class="cards" id="kpiCards"></div>
+
+        <div class="panel">
+          <h3>수익률 차트(mock)</h3>
+          <div id="chartLine" class="chart-line"></div>
+        </div>
+
+        <div class="panel">
+          <h3>종목별 손익</h3>
+          <table><thead><tr><th>Symbol</th><th>PnL</th><th>Return%</th><th>Win%</th></tr></thead><tbody id="symbolBody"></tbody></table>
+        </div>
+
+        <div class="panel">
+          <h3>전략별 손익</h3>
+          <table><thead><tr><th>Strategy</th><th>PnL</th><th>Return%</th><th>Win%</th></tr></thead><tbody id="strategyBody"></tbody></table>
+        </div>
+
+        <div class="panel">
+          <h3>국면별 성과</h3>
+          <table><thead><tr><th>Regime</th><th>PnL</th><th>Return%</th><th>Win%</th></tr></thead><tbody id="regimeBody"></tbody></table>
+        </div>
+
+        <div class="panel">
+          <h3>최근 거래</h3>
+          <table><thead><tr><th>ID</th><th>Symbol</th><th>Strategy</th><th>PnL</th><th>Result</th></tr></thead><tbody id="tradeBody"></tbody></table>
+        </div>
+      </main>
+    </div>
+    <script src="./runtime-config.js"></script>
+    <script>
+      const backendUrl = window.RUNTIME_CONFIG?.BACKEND_URL || "http://localhost:8000";
+      const kpiCards = document.getElementById("kpiCards");
+      const chartLine = document.getElementById("chartLine");
+
+      function qp() {
+        const params = new URLSearchParams();
+        const s = document.getElementById("startDate").value;
+        const e = document.getElementById("endDate").value;
+        const st = document.getElementById("strategyFilter").value;
+        const sy = document.getElementById("symbolFilter").value;
+        if (s) params.set("start_date", s);
+        if (e) params.set("end_date", e);
+        if (st) params.set("strategy_id", st);
+        if (sy) params.set("symbol", sy);
+        return params.toString();
+      }
+
+      function addRows(id, rows, mapFn) {
+        const body = document.getElementById(id);
+        body.innerHTML = "";
+        rows.forEach((r) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = mapFn(r);
+          body.appendChild(tr);
+        });
+      }
+
+      async function loadData() {
+        const q = qp();
+        const metrics = await (await fetch(`${backendUrl}/api/performance/metrics?${q}`)).json();
+        const pnl = await (await fetch(`${backendUrl}/api/performance/pnl-history?${q}`)).json();
+        const trade = await (await fetch(`${backendUrl}/api/performance/trade-history?${q}`)).json();
+        const sym = await (await fetch(`${backendUrl}/api/performance/symbol-performance?${q}`)).json();
+        const strat = await (await fetch(`${backendUrl}/api/performance/strategy-performance?${q}`)).json();
+        const reg = await (await fetch(`${backendUrl}/api/performance/regime-performance?${q}`)).json();
+
+        const kpis = [
+          ["일간", `${metrics.daily_return_pct}%`],
+          ["주간", `${metrics.weekly_return_pct}%`],
+          ["월간", `${metrics.monthly_return_pct}%`],
+          ["누적", `${metrics.cumulative_return_pct}%`],
+          ["실현손익", metrics.realized_pnl.toLocaleString()],
+          ["미실현손익", metrics.unrealized_pnl.toLocaleString()],
+          ["최대낙폭", `${metrics.max_drawdown_pct}%`],
+          ["승률", `${metrics.win_rate_pct}%`],
+          ["손익비", `${metrics.payoff_ratio}`],
+        ];
+        kpiCards.innerHTML = "";
+        kpis.forEach(([k, v]) => {
+          const div = document.createElement("div");
+          div.className = "card";
+          div.innerHTML = `<b>${k}</b><div>${v}</div>`;
+          kpiCards.appendChild(div);
+        });
+
+        chartLine.innerText = (pnl.items || [])
+          .map((p) => `${p.date} ${p.daily_return_pct >= 0 ? "+" : ""}${p.daily_return_pct}% ${"▇".repeat(Math.max(1, Math.round(Math.abs(p.daily_return_pct) * 10)))}`)
+          .join("\n");
+
+        addRows("symbolBody", sym.items || [], (x) => `<td>${x.symbol}</td><td>${x.pnl}</td><td>${x.return_pct}</td><td>${x.win_rate_pct}</td>`);
+        addRows("strategyBody", strat.items || [], (x) => `<td>${x.strategy_id}</td><td>${x.pnl}</td><td>${x.return_pct}</td><td>${x.win_rate_pct}</td>`);
+        addRows("regimeBody", reg.items || [], (x) => `<td>${x.regime}</td><td>${x.pnl}</td><td>${x.return_pct}</td><td>${x.win_rate_pct}</td>`);
+        addRows("tradeBody", trade.items || [], (x) => `<td>${x.trade_id}</td><td>${x.symbol}</td><td>${x.strategy_id}</td><td>${x.pnl}</td><td>${x.result}</td>`);
+      }
+
+      document.getElementById("applyFilterBtn").addEventListener("click", loadData);
+      document.getElementById("dashboardBtn").addEventListener("click", () => (window.location.href = "./dashboard.html"));
+      document.getElementById("performanceBtn").addEventListener("click", () => (window.location.href = "./performance.html"));
+      document.getElementById("paperTradingBtn").addEventListener("click", () => (window.location.href = "./paper-trading.html"));
+      document.getElementById("liveSettingsBtn").addEventListener("click", () => (window.location.href = "./live-settings.html"));
+      document.getElementById("brokerSettingsBtn").addEventListener("click", () => (window.location.href = "./broker-settings.html"));
+
+      // TODO: currently APIs return mock data; replace backend responses with DB/engine aggregations.
+      loadData();
+    </script>
+  </body>
+</html>
