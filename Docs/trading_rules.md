@@ -1,111 +1,93 @@
-# 트레이딩 규칙 (Trading Rules)
+# Trading Rules
 
 ## 문서 목적
 
-전략 규칙과 리스크 규칙을 명확하게 정의하여,  
-"감정"이 아니라 "규칙"으로 거래하도록 합니다.
+자동매매 의사결정을 "수익 최대화"보다 "손실 최소화"에 우선순위를 두고 일관되게 수행하기 위한 규칙을 정의합니다.
 
-## 전략 요약
-
-- 전략: **우량주 스윙 + 추세 필터 + 분할매매**
-- 대상: 유동성과 재무 안정성이 있는 종목
-- 기본 모드: 모의투자
-
-## 시장 국면 분류 규칙 (Regime)
-
-시장 국면은 코스피, S&P500, 변동성 지표를 함께 보고 분류합니다.
+## 시장 국면별 운영 원칙
 
 - `bullish_trend`
-  - 두 지수의 최근 수익률이 양호하고 이동평균 기울기가 상승
+  - 추세추종 중심으로 진입 기회를 확대
+  - 손절 규칙은 유지하되 목표 수익 구간은 상대적으로 넓게 운용
 - `bearish_trend`
-  - 두 지수의 최근 수익률이 약세이고 이동평균 기울기가 하락
+  - 계좌 방어 최우선
+  - 신규 진입 종목 수/종목 비중/손절폭/보유기간을 모두 보수적으로 축소
+  - 반등 매매는 짧고 작게만 허용
 - `sideways`
-  - 최근 수익률과 이동평균 기울기가 모두 중립 구간
+  - 평균회귀형 대응만 제한적으로 허용
+  - 과매매 방지를 위해 신규 진입 빈도와 크기 축소
 - `high_volatility_risk`
-  - 변동성 지표가 임계값 이상이거나 급상승
-  - 다른 신호보다 우선 적용
+  - 신규 진입 원칙적 차단
+  - 기존 포지션 리스크 축소/정리 주문만 허용
 
-국면 판별 임계값은 코드 상수 하드코딩이 아니라 `MarketRegimeConfig`로 분리합니다.
+## 하락장 강화 리스크 규칙
 
-## 국면별 허용 행동
+`app/risk/rules.py` 기준:
 
-- `bullish_trend`
-  - 추세추종 스윙 진입 허용
-  - 리스크 한도 내에서 포지션 확장 가능
-- `bearish_trend`
-  - 손절 우선 유지
-  - 소규모 역추세(평균회귀)만 제한 허용
-  - 진입 수량 축소, 손절 기준 강화
-  - 신규 진입 종목 수 축소, 종목당 최대 비중 축소
-  - 보유기간 단축, 진입 임계값 강화
-- `sideways`
-  - 무리한 신규 진입 축소
-  - 짧은 구간 대응 위주
+- 일일 신규 진입 제한
+  - `bearish_max_new_entries_per_day` 초과 시 신규 매수 차단
+  - reason code: `BLOCK_REGIME_BEARISH_NEW_ENTRY_LIMIT`
+- 보유 종목 수 상한 축소
+  - `bearish_max_positions` 적용
+  - reason code: `BLOCK_REGIME_BEARISH_MAX_POSITIONS`
+- 종목당 최대 비중 상한 축소
+  - `bearish_max_position_weight` 적용
+  - reason code: `BLOCK_REGIME_BEARISH_POSITION_WEIGHT`
+- 손절폭 상한 강화
+  - `bearish_max_stop_loss_pct` 초과 주문 차단
+  - reason code: `BLOCK_REGIME_BEARISH_STOP_LOSS_TOO_WIDE`
+- 하락장 승인 주문 추적
+  - 보수 규칙 통과 시 reason code: `OK_REGIME_BEARISH_BUY_CONSERVATIVE`
+
+## 고변동성 위험장 규칙
+
+- 신규 매수 차단
+  - reason code: `BLOCK_REGIME_HIGH_VOLATILITY_NEW_ENTRY`
+- 기존 포지션 리스크 축소용 매도는 허용
+  - reason code: `OK_SELL`
+
+## 국면별 포지션 사이징 설정
+
+`app/risk/position_sizing.py` 기준:
+
+- 국면별 설정 객체: `RegimeSizingConfig`
+- `bearish_trend` 기본값
+  - `max_weight=0.06`, `prefer_weight=0.04`
+  - `max_new_entries=1`
+  - `max_hold_days=2`
 - `high_volatility_risk`
-  - 신규 매수 차단
-  - 기존 포지션 리스크 축소/정리 우선
+  - `max_weight=0.0`
+  - `max_new_entries=0`
+  - 신규 진입 수량 0
 
-## 국면별 전략 매핑표
+## 전략 엔진 하락장 강화
 
-| 시장 국면 | 기본 전략 | 신규 진입 강도 | 기대수익 성향 | 손절 폭 | 비고 |
-|---|---|---|---|---|---|
-| bullish_trend | `bull_strategy` | 높음(추세추종 + 눌림목) | 상대적 고수익 추구 | 보통 | 분할 진입/분할 익절 강화 |
-| bearish_trend | `bear_strategy` | 매우 낮음(선별적 반등만) | 소폭 플러스 기대수익 | 타이트 | 현금 비중 유지, 거래 빈도 축소 |
-| sideways | `sideways_strategy` | 낮음(평균회귀 제한 진입) | 소규모 수익 반복 | 보수적 | 과매매 방지 우선 |
-| high_volatility_risk | 방어 모드(신규 진입 차단) | 0 (신규 진입 금지) | 손실 최소화 | 가장 타이트 | 기존 포지션 정리/축소 중심 |
+`app/strategy/bear_strategy.py` 기준:
 
-## 1) 종목 선정 규칙(우량주)
+- 신규 진입 임계값 강화
+  - `rebound_entry_drop_3d_pct=-6.0`
+  - `rebound_entry_rsi_max=28.0`
+- 보유기간 단축
+  - `time_exit_days=1`
+- 손절/익절을 짧고 빠르게 운용
+  - `stop_loss_pct=1.8`
+  - `first_take_profit_pct=2.0`
+  - `second_take_profit_pct=3.2`
 
-- 거래대금/유동성 최소 기준 통과
-- 재무 안정성(예: 적자 지속 기업 제외)
-- 이벤트 리스크가 큰 종목은 제외
+## 상승장 Trailing Exit 규칙
 
-## 2) 진입 규칙(추세 필터)
+`app/strategy/bull_strategy.py` 기준:
 
-- 상위 추세가 상승일 때만 매수 후보 허용
-- 급등 직후 과열 구간은 진입 보류
-- 신호 강도가 약하면 진입 수량 축소
-- 국면이 `high_volatility_risk`이면 신규 매수 금지
-
-## 3) 분할매매 규칙
-
-- 1차 진입: 계획 수량의 일부만 진입
-- 2차/3차 진입: 추세 확인 시 추가 진입
-- 한 번의 판단 실수로 큰 손실이 나지 않도록 분산
-
-## 4) 청산 규칙
-
-- 손절: 진입 시점에 손절가를 반드시 설정
-- 목표가: 분할 익절로 수익 일부를 확정
-- 추세 훼손 시 잔량 정리
-
-### 상승장 추적 청산(Trailing Exit)
-
-- 고정 익절과 추적 청산을 병행합니다.
-  - 1차 고정 익절: +6% 부근에서 부분익절
-  - 잔여 물량: 추세를 따라가되, 트레일링 스탑으로 이익 보호
-- 트레일링 방식은 선택 가능:
-  - `ATR` 기반: `최고가 - (ATR x 배수)` 이탈 시 청산
-  - `최근 N일 저점` 이탈 기반: 최근 저점 하향 이탈 시 청산
-- 의도:
-  - 강한 추세 구간은 더 길게 보유
-  - 조기 전량 익절로 큰 파동을 놓치지 않음
-  - 급락 전환 시 확보한 이익 보호
-
-## 5) 리스크 엔진 강제 규칙(최우선)
-
-- 종목별 손절 미설정 주문은 거부
-- 일일 손실 제한 초과 시 당일 신규 주문 금지
-- 총 손실 제한 초과 시 시스템 거래 중단
-- `bearish_trend`에서는 국면 전용 보수 규칙 적용
-  - 최대 보유 종목 수 추가 축소
-  - 종목당 최대 비중 추가 축소
-  - 손절 허용폭 상한 축소(더 타이트)
-- `high_volatility_risk`에서는 신규 매수 차단
-  - 기존 포지션 축소/정리 목적 주문만 허용
-
-## 6) 예외 처리
-
-- 데이터 지연/오류 시 신규 진입 중단
-- API 장애 시 복구 전까지 주문 금지
-- 규칙 충돌 시 더 보수적인 규칙을 선택
+- 고정 익절 규칙 개선
+  - +6% 구간에서 1차 부분익절(잔여 물량 유지)
+  - 기존 +10% 도달 즉시 전량 익절 대신, 추세가 유지되면 보유 연장
+- 잔여 물량 트레일링 청산
+  - 1차 부분익절 완료(`first_take_profit_done`) 이후에만 트레일링 활성화
+  - `trailing_mode` 선택 가능
+    - `atr`: `highest_price_since_entry - ATR * trailing_atr_multiplier` 하향 이탈 시 청산
+    - `n_day_low`: 최근 `trailing_n_day_low_window` 저점 하향 이탈 시 청산
+- 추세 약화 시 추가 청산
+  - +10% 이상 수익 구간에서 종가가 MA20 아래로 내려오면 전량 청산
+- 목적
+  - 강한 상승 추세 구간에서 러너 물량을 길게 가져가 수익 확장
+  - 급락 전환 시 확보한 이익을 트레일링 스탑으로 보호

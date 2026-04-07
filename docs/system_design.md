@@ -52,6 +52,8 @@
 2. 앱이 백엔드에 전략 실행/조회 요청
 3. 백엔드가 시장 데이터 수집
 4. 시장 국면 인식 엔진 실행
+   - 입력: 코스피, S&P500, MA20/60/120 방향, 최근 수익률, ATR/변동성 지표
+   - 출력: `bullish_trend` | `bearish_trend` | `sideways` | `high_volatility_risk`
 5. 후보 필터 + ranking engine으로 상위 종목 선정
 6. 전략 신호 생성
 7. 리스크 엔진 승인(손절/손실제한/cooldown/rolling loss)
@@ -79,6 +81,54 @@
 - rolling loss limit 초과 -> cooldown 전환
 - API 장애/응답 이상 -> 신규 주문 차단
 - high volatility risk -> 신규 진입 차단, 포지션 관리만 허용
+
+## 5-1) 시장 국면별 전략 라우팅
+
+- `bullish_trend`
+  - 공격적 추세 전략 허용
+  - 분할 진입 허용(리스크 한도 내)
+- `bearish_trend`
+  - 손실 최소화 우선
+  - 소규모 평균회귀형 대응만 제한 허용
+  - 신규 진입 종목 수 축소, 종목당 최대 비중 축소
+  - 손절폭 상한 축소, 보유기간 단축, 진입 신호 임계값 강화
+- `sideways`
+  - 평균회귀형 대응만 제한 허용
+  - 신규 진입 규모/빈도 축소
+- `high_volatility_risk`
+  - 신규 진입 차단
+  - 기존 포지션 축소/정리 목적 주문만 허용
+
+## 5-2) 리스크 엔진 국면별 승인 코드
+
+- `bearish_trend` 신규 매수 차단 사유
+  - `BLOCK_REGIME_BEARISH_NEW_ENTRY_LIMIT`
+  - `BLOCK_REGIME_BEARISH_MAX_POSITIONS`
+  - `BLOCK_REGIME_BEARISH_POSITION_WEIGHT`
+  - `BLOCK_REGIME_BEARISH_STOP_LOSS_TOO_WIDE`
+- `bearish_trend` 제한 승인
+  - `OK_REGIME_BEARISH_BUY_CONSERVATIVE`
+- `high_volatility_risk`
+  - 신규 매수 차단: `BLOCK_REGIME_HIGH_VOLATILITY_NEW_ENTRY`
+  - 포지션 축소 매도 허용: `OK_SELL`
+
+## 5-3) 손실 적응 방어 로직
+
+- 최근 N회 거래 손익(`recent_trade_pnls`)과 연속 손실(`consecutive_losses`)을 지속 추적
+- rolling loss limit 도입
+  - 최근 `rolling_loss_window_trades` 기준 손익률이 `rolling_loss_limit_pct` 이하이면 신규 진입 중단
+- adaptive defense 트리거
+  - 연속 손실이 `adaptive_loss_streak_threshold` 이상이거나
+  - rolling 손익이 `adaptive_performance_floor_pct` 이하
+- adaptive defense 동작
+  - 신규 진입 수 축소(`adaptive_new_entries_limit`)
+  - 포지션 허용 비중 축소(`adaptive_position_weight_multiplier`)
+  - 손절 허용폭 축소(`adaptive_stop_loss_tighten_multiplier`)
+  - 진입 조건 강화(`adaptive_min_entry_score`)
+  - 조건 악화 지속 시 거래 쿨다운(`adaptive_trading_cooldown_minutes`)
+- kill switch 연동
+  - global hard-stop(일일/총손실) 우선
+  - adaptive 상태가 악화되면 `COOLDOWN` 전환 추천
 
 ## 6) 데이터 조회 기능(플랫폼 제공)
 

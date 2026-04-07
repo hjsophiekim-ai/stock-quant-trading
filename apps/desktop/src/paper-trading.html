@@ -73,27 +73,39 @@
       const logsList = document.getElementById("logsList");
       const chart = document.getElementById("chart");
 
-      const mockPositions = [
-        { symbol: "005930", quantity: 2, average_price: 77000 },
-        { symbol: "000660", quantity: 1, average_price: 168000 },
-      ];
-      const mockChart = [0.1, 0.12, 0.18, 0.15, 0.23, 0.31, 0.29];
-      const mockLogs = [
-        "Paper trading started with strategy=swing_v1",
-        "Risk engine approved buy signal for 005930",
-        "Filled BUY 2 @ 77000",
-      ];
-      mockPositions.forEach((p) => {
-        const li = document.createElement("li");
-        li.innerText = `${p.symbol} / qty=${p.quantity} / avg=${p.average_price}`;
-        positionsList.appendChild(li);
-      });
-      chart.innerText = mockChart.map((v) => "▇".repeat(Math.max(1, Math.round(v * 10)))).join("\n");
-      mockLogs.forEach((l) => {
-        const li = document.createElement("li");
-        li.innerText = l;
-        logsList.appendChild(li);
-      });
+      async function refreshPaper() {
+        try {
+          const [statusRes, posRes, pnlRes, logsRes] = await Promise.all([
+            fetch(`${backendUrl}/api/paper-trading/status`),
+            fetch(`${backendUrl}/api/paper-trading/positions`),
+            fetch(`${backendUrl}/api/paper-trading/pnl`),
+            fetch(`${backendUrl}/api/paper-trading/logs`),
+          ]);
+          const statusData = await statusRes.json();
+          const posData = await posRes.json();
+          const pnlData = await pnlRes.json();
+          const logsData = await logsRes.json();
+          if (statusRes.ok) statusText.innerText = statusData.status || "stopped";
+          positionsList.innerHTML = "";
+          (posData.items || []).forEach((p) => {
+            const li = document.createElement("li");
+            li.innerText = `${p.symbol} / qty=${p.quantity} / avg=${p.average_price}`;
+            positionsList.appendChild(li);
+          });
+          chart.innerText = (pnlData.chart || [])
+            .map((x) => "▇".repeat(Math.max(1, Math.round(Number(x.return_pct || 0) * 10))))
+            .join("\n");
+          logsList.innerHTML = "";
+          (logsData.items || []).forEach((l) => {
+            const li = document.createElement("li");
+            li.innerText = l.message;
+            logsList.appendChild(li);
+          });
+        } catch {
+          message.innerText = "network error";
+        }
+      }
+      refreshPaper();
 
       document.getElementById("startBtn").addEventListener("click", async () => {
         const strategyId = document.getElementById("strategyId").value;
@@ -109,6 +121,7 @@
         }
         statusText.innerText = data.status;
         message.innerText = "started";
+        refreshPaper();
       });
 
       document.getElementById("stopBtn").addEventListener("click", async () => {
@@ -120,8 +133,8 @@
         }
         statusText.innerText = data.status;
         message.innerText = "stopped";
+        refreshPaper();
       });
-
       document.getElementById("dashboardBtn").addEventListener("click", () => (window.location.href = "./dashboard.html"));
       document.getElementById("performanceBtn").addEventListener("click", () => (window.location.href = "./performance.html"));
       document.getElementById("brokerSettingsBtn").addEventListener("click", () => (window.location.href = "./broker-settings.html"));

@@ -1,4 +1,4 @@
-﻿from dataclasses import dataclass
+from dataclasses import dataclass
 
 from app.brokers.base_broker import BaseBroker
 from app.orders.models import OrderIntent, OrderRequest, OrderResult, OrderSignal, OrderStatus
@@ -78,6 +78,7 @@ class OrderManager:
         order: OrderRequest,
         fill_price: float,
         filled_quantity: int | None = None,
+        mark_first_take_profit: bool = False,
     ) -> Position | None:
         qty = filled_quantity if filled_quantity is not None and filled_quantity > 0 else order.quantity
         if qty <= 0:
@@ -87,4 +88,4 @@ class OrderManager:
             return update_high_watermark(updated, fill_price)
         if position is None:
             return None
-        return apply_sell_fill(position=position, quantity=qty)
+        return apply_sell_fill(position=position, quantity=qty, mark_first_take_profit=mark_first_take_profit)

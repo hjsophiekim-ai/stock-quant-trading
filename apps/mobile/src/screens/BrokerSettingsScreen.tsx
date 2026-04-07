@@ -82,9 +82,28 @@ export default function BrokerSettingsScreen({ backendUrl, onBack }: Props) {
     }
   };
 
+  const refreshStatus = async () => {
+    try {
+      const res = await fetch(`${backendUrl}/api/broker-accounts/me/status`, {
+        method: "GET",
+        headers: authHeader,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMessage(data?.detail ?? "상태 조회 실패");
+        return;
+      }
+      setStatusText(data.connection_status ?? "unknown");
+      setMessage(data.connection_message ?? "상태 조회 완료");
+    } catch {
+      setMessage("네트워크 오류");
+    }
+  };
+
   return (
     <SafeAreaView>
       <Text>Broker Settings</Text>
+      <Text>첫 실행 권장: 저장 -> 연결 테스트 -> 상태 확인 -> Paper 화면 이동</Text>
       <Text>Status: {statusText}</Text>
       <TextInput placeholder="KIS_APP_KEY" value={form.kis_app_key} onChangeText={(v) => setForm({ ...form, kis_app_key: v })} />
       <TextInput
@@ -110,6 +129,7 @@ export default function BrokerSettingsScreen({ backendUrl, onBack }: Props) {
       />
       <Button title="Save" onPress={save} />
       <Button title="Test Token Issuance" onPress={testConnection} />
+      <Button title="Refresh Broker Status" onPress={refreshStatus} />
       <Button title="Back to Dashboard" onPress={onBack} />
       <Text>{message}</Text>
     </SafeAreaView>

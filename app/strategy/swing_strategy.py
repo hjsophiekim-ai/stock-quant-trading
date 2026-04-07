@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 
@@ -15,7 +15,7 @@ from app.strategy.market_regime import (
     MarketRegimeInputs,
     classify_market_regime,
 )
-from app.strategy.ranking import RankedCandidate, rank_candidates
+from app.strategy.ranking import RankedCandidate, RankingReportRow, build_ranking_report_rows, rank_candidates
 from app.strategy.sideways_strategy import SidewaysStrategy
 
 
@@ -39,6 +39,7 @@ class SwingStrategy(BaseStrategy):
     bear_strategy: BearStrategy = field(default_factory=BearStrategy)
     sideways_strategy: SidewaysStrategy = field(default_factory=SidewaysStrategy)
     last_ranking: list[RankedCandidate] = field(default_factory=list)
+    last_ranking_report: list[RankingReportRow] = field(default_factory=list)
 
     def generate_signals(self, context: StrategyContext) -> list[StrategySignal]:
         regime = classify_market_regime(
@@ -57,6 +58,7 @@ class SwingStrategy(BaseStrategy):
             top_n=self.config.ranking_top_n,
         )
         self.last_ranking = ranked
+        self.last_ranking_report = build_ranking_report_rows(ranked)
         top_symbols = {r.symbol for r in ranked}
         reduced_context = _filter_context_by_candidates(context, top_symbols)
 

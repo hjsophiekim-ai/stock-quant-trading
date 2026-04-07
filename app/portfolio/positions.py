@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 
@@ -60,7 +60,7 @@ def apply_buy_fill(position: Position | None, quantity: int, fill_price: float, 
     )
 
 
-def apply_sell_fill(position: Position, quantity: int) -> Position | None:
+def apply_sell_fill(position: Position, quantity: int, *, mark_first_take_profit: bool = False) -> Position | None:
     if quantity <= 0:
         raise ValueError("Sell fill must have positive quantity")
     if quantity > position.quantity:
@@ -70,7 +70,7 @@ def apply_sell_fill(position: Position, quantity: int) -> Position | None:
         return None
     init_qty = position.initial_quantity if position.initial_quantity is not None else position.quantity
     realized = position.realized_sell_quantity + quantity
-    first_tp_done = position.first_take_profit_done or (realized >= max(int(init_qty * 0.5), 1))
+    first_tp_done = position.first_take_profit_done or mark_first_take_profit or (realized >= max(int(init_qty * 0.5), 1))
     return Position(
         symbol=position.symbol,
         quantity=remain,

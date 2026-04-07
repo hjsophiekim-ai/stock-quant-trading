@@ -8,9 +8,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-import requests
 from cryptography.fernet import Fernet
 
+from ..auth.kis_auth import issue_access_token, validate_kis_inputs
 from ..models.broker_account import (
     BrokerAccountResponse,
     BrokerAccountUpsertRequest,
@@ -168,29 +168,34 @@ class BrokerSecretService:
 
         app_key = self._decrypt(row["kis_app_key_enc"])
         app_secret = self._decrypt(row["kis_app_secret_enc"])
+        account_no = self._decrypt(row["kis_account_no_enc"])
+        account_product_code = self._decrypt(row["kis_account_product_code_enc"])
 
         status = "failed"
-        message = "Token request failed"
+        message = "토큰 발급 실패"
         ok = False
-        try:
-            res = requests.post(
-                f"{self.kis_base_url.rstrip('/')}/oauth2/tokenP",
-                json={
-                    "grant_type": "client_credentials",
-                    "appkey": app_key,
-                    "appsecret": app_secret,
-                },
-                headers={"Content-Type": "application/json"},
-                timeout=self.timeout_sec,
+        validation_issues = validate_kis_inputs(
+            app_key=app_key,
+            app_secret=app_secret,
+            account_no=account_no,
+            account_product_code=account_product_code,
+            base_url=self.kis_base_url,
+        )
+        if validation_issues:
+            message = " / ".join(validation_issues)
+        else:
+            token_result = issue_access_token(
+                app_key=app_key,
+                app_secret=app_secret,
+                base_url=self.kis_base_url,
+                timeout_sec=self.timeout_sec,
             )
-            if res.ok and res.json().get("access_token"):
+            if token_result.ok:
                 ok = True
                 status = "success"
-                message = "Token issued successfully"
+                message = "토큰 발급 성공 및 연결 확인 완료"
             else:
-                message = f"KIS token issuance failed (status={res.status_code})"
-        except requests.RequestException:
-            message = "Network error while testing KIS connection"
+                message = token_result.message
 
         now = _utc_now_iso()
         with self._connect() as conn:

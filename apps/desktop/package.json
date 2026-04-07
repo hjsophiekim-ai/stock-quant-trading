@@ -6,8 +6,10 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
+    "run": "electron .",
     "pack": "npx electron-builder --dir",
-    "build:win": "node scripts/build-win.js"
+    "build:win": "node scripts/build-win.js",
+    "build:win:local": "set APP_ENV=production&& set BACKEND_URL=http://127.0.0.1:8000&& node scripts/build-win.js"
   },
   "dependencies": {
     "electron": "^31.0.0"
@@ -25,6 +27,9 @@
     "directories": {
       "output": "dist",
       "buildResources": "build"
+    },
+    "extraMetadata": {
+      "backendConfigSource": "src/runtime-config.js"
     },
     "win": {
       "target": [

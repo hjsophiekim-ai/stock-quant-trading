@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Button, SafeAreaView, ScrollView, Text, TextInput, View } from "react-native";
 
 type Props = {
@@ -7,23 +7,40 @@ type Props = {
 
 type StrategyOption = "swing_v1" | "bull_focus_v1" | "defensive_v1";
 
-const mockPositions = [
-  { symbol: "005930", quantity: 2, average_price: 77000 },
-  { symbol: "000660", quantity: 1, average_price: 168000 },
-];
-const mockChart = [0.1, 0.12, 0.18, 0.15, 0.23, 0.31, 0.29];
-const mockLogs = [
-  "Paper trading started with strategy=swing_v1",
-  "Risk engine approved buy signal for 005930",
-  "Filled BUY 2 @ 77000",
-];
-
 export default function PaperTradingScreen({ backendUrl }: Props) {
   const [strategyId, setStrategyId] = useState<StrategyOption>("swing_v1");
   const [status, setStatus] = useState("stopped");
   const [message, setMessage] = useState("");
+  const [positions, setPositions] = useState<Array<{ symbol: string; quantity: number; average_price: number }>>([]);
+  const [chartValues, setChartValues] = useState<number[]>([]);
+  const [logs, setLogs] = useState<string[]>([]);
 
-  const chartBars = useMemo(() => mockChart.map((v) => "▇".repeat(Math.max(1, Math.round(v * 10)))), []);
+  const chartBars = useMemo(() => chartValues.map((v) => "▇".repeat(Math.max(1, Math.round(v * 10)))), [chartValues]);
+
+  const refresh = async () => {
+    try {
+      const [statusRes, posRes, pnlRes, logsRes] = await Promise.all([
+        fetch(`${backendUrl}/api/paper-trading/status`),
+        fetch(`${backendUrl}/api/paper-trading/positions`),
+        fetch(`${backendUrl}/api/paper-trading/pnl`),
+        fetch(`${backendUrl}/api/paper-trading/logs`),
+      ]);
+      const statusData = await statusRes.json();
+      const posData = await posRes.json();
+      const pnlData = await pnlRes.json();
+      const logsData = await logsRes.json();
+      if (statusRes.ok) setStatus(statusData.status ?? "stopped");
+      if (posRes.ok) setPositions(posData.items ?? []);
+      if (pnlRes.ok) setChartValues((pnlData.chart ?? []).map((x: any) => Number(x.return_pct ?? 0)));
+      if (logsRes.ok) setLogs((logsData.items ?? []).map((x: any) => String(x.message)));
+    } catch {
+      setMessage("network error");
+    }
+  };
+
+  useEffect(() => {
+    refresh();
+  }, []);
 
   const start = async () => {
     try {
@@ -39,6 +56,7 @@ export default function PaperTradingScreen({ backendUrl }: Props) {
       }
       setStatus(data.status ?? "running");
       setMessage("paper trading started");
+      await refresh();
     } catch {
       setMessage("network error");
     }
@@ -54,6 +72,7 @@ export default function PaperTradingScreen({ backendUrl }: Props) {
       }
       setStatus(data.status ?? "stopped");
       setMessage("paper trading stopped");
+      await refresh();
     } catch {
       setMessage("network error");
     }
@@ -74,10 +93,12 @@ export default function PaperTradingScreen({ backendUrl }: Props) {
         <Button title="Start Paper Trading" onPress={start} />
         <View style={{ height: 8 }} />
         <Button title="Stop Paper Trading" onPress={stop} />
+        <View style={{ height: 8 }} />
+        <Button title="Refresh" onPress={refresh} />
         <Text style={{ marginTop: 8 }}>{message}</Text>
 
         <Text style={{ marginTop: 14, fontWeight: "bold" }}>Current Positions</Text>
-        {mockPositions.map((p) => (
+        {positions.map((p) => (
           <Text key={p.symbol}>
             {p.symbol} / qty={p.quantity} / avg={p.average_price}
           </Text>
@@ -89,16 +110,9 @@ export default function PaperTradingScreen({ backendUrl }: Props) {
         ))}
 
         <Text style={{ marginTop: 14, fontWeight: "bold" }}>Recent Logs</Text>
-        {mockLogs.map((line, idx) => (
+        {logs.map((line, idx) => (
           <Text key={idx}>- {line}</Text>
         ))}
-
-        {/* TODO: replace mock sections with real API
-            GET /api/paper-trading/status
-            GET /api/paper-trading/positions
-            GET /api/paper-trading/pnl
-            GET /api/paper-trading/logs
-        */}
       </ScrollView>
     </SafeAreaView>
   );

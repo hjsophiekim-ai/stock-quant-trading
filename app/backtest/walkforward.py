@@ -113,8 +113,16 @@ def walk_forward_validate(
 
 
 def default_objective(result: BacktestResult) -> float:
-    # Prefer robust profiles: return - drawdown penalty.
-    return result.metrics.total_return_pct + (result.metrics.max_drawdown_pct * 0.5)
+    # Prefer robustness over raw return: drawdown/stability/profit quality first.
+    metrics = result.metrics
+    drawdown_penalty = abs(metrics.max_drawdown_pct) * 1.2
+    quality_bonus = (
+        (metrics.profit_factor * 2.0)
+        + (metrics.payoff_ratio * 1.5)
+        + (metrics.win_rate * 100.0 * 0.03)
+        + (metrics.monthly_return_stability * 100.0 * 0.05)
+    )
+    return (metrics.total_return_pct * 0.5) + quality_bonus - drawdown_penalty
 
 
 def summarize_walkforward(folds: list[WalkForwardFold]) -> dict[str, float]:

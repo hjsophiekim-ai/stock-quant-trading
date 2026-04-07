@@ -1,4 +1,4 @@
-﻿from dataclasses import dataclass
+from dataclasses import dataclass
 from typing import Literal
 
 MarketRegime = Literal["bullish_trend", "bearish_trend", "sideways", "high_volatility_risk"]
@@ -37,6 +37,34 @@ class DynamicSizingConfig:
     max_deleverage_multiplier: float = 0.50
     bearish_max_additional_entries: int = 0
     default_max_additional_entries: int = 1
+    target_account_volatility_min_pct: float = 0.8
+    target_account_volatility_max_pct: float = 2.5
+    over_target_volatility_cut_multiplier: float = 0.75
+    under_target_volatility_boost_multiplier: float = 1.05
+
+
+@dataclass(frozen=True)
+class RegimeSizingConfig:
+    bullish_min_weight: float = 0.10
+    bullish_max_weight: float = 0.15
+    bullish_prefer_weight: float = 0.13
+    bullish_max_new_entries: int = 3
+    bullish_max_hold_days: int = 10
+    sideways_min_weight: float = 0.07
+    sideways_max_weight: float = 0.10
+    sideways_prefer_weight: float = 0.08
+    sideways_max_new_entries: int = 1
+    sideways_max_hold_days: int = 5
+    bearish_min_weight: float = 0.03
+    bearish_max_weight: float = 0.06
+    bearish_prefer_weight: float = 0.04
+    bearish_max_new_entries: int = 1
+    bearish_max_hold_days: int = 2
+    high_vol_min_weight: float = 0.00
+    high_vol_max_weight: float = 0.00
+    high_vol_prefer_weight: float = 0.00
+    high_vol_max_new_entries: int = 0
+    high_vol_max_hold_days: int = 1
 
 
 @dataclass(frozen=True)
@@ -50,6 +78,7 @@ class DynamicSizingInput:
     daily_pnl_pct: float
     total_pnl_pct: float
     total_loss_limit_pct: float
+    account_volatility_pct: float = 1.5
     consecutive_losses: int = 0
     current_symbol_weight: float = 0.0
     recent_entries_on_symbol: int = 0
@@ -64,12 +93,40 @@ class DynamicSizingOutput:
     reason: str
 
 
-REGIME_SIZING_PROFILES: dict[MarketRegime, RegimeSizingProfile] = {
-    "bullish_trend": RegimeSizingProfile(min_weight=0.10, max_weight=0.15, prefer_weight=0.13, max_new_entries=3, max_hold_days=10),
-    "sideways": RegimeSizingProfile(min_weight=0.07, max_weight=0.10, prefer_weight=0.08, max_new_entries=1, max_hold_days=5),
-    "bearish_trend": RegimeSizingProfile(min_weight=0.04, max_weight=0.08, prefer_weight=0.06, max_new_entries=1, max_hold_days=3),
-    "high_volatility_risk": RegimeSizingProfile(min_weight=0.00, max_weight=0.00, prefer_weight=0.00, max_new_entries=0, max_hold_days=2),
-}
+DEFAULT_REGIME_SIZING_CONFIG = RegimeSizingConfig()
+
+
+def build_regime_sizing_profiles(cfg: RegimeSizingConfig = DEFAULT_REGIME_SIZING_CONFIG) -> dict[MarketRegime, RegimeSizingProfile]:
+    return {
+        "bullish_trend": RegimeSizingProfile(
+            min_weight=cfg.bullish_min_weight,
+            max_weight=cfg.bullish_max_weight,
+            prefer_weight=cfg.bullish_prefer_weight,
+            max_new_entries=cfg.bullish_max_new_entries,
+            max_hold_days=cfg.bullish_max_hold_days,
+        ),
+        "sideways": RegimeSizingProfile(
+            min_weight=cfg.sideways_min_weight,
+            max_weight=cfg.sideways_max_weight,
+            prefer_weight=cfg.sideways_prefer_weight,
+            max_new_entries=cfg.sideways_max_new_entries,
+            max_hold_days=cfg.sideways_max_hold_days,
+        ),
+        "bearish_trend": RegimeSizingProfile(
+            min_weight=cfg.bearish_min_weight,
+            max_weight=cfg.bearish_max_weight,
+            prefer_weight=cfg.bearish_prefer_weight,
+            max_new_entries=cfg.bearish_max_new_entries,
+            max_hold_days=cfg.bearish_max_hold_days,
+        ),
+        "high_volatility_risk": RegimeSizingProfile(
+            min_weight=cfg.high_vol_min_weight,
+            max_weight=cfg.high_vol_max_weight,
+            prefer_weight=cfg.high_vol_prefer_weight,
+            max_new_entries=cfg.high_vol_max_new_entries,
+            max_hold_days=cfg.high_vol_max_hold_days,
+        ),
+    }
 
 
 def fixed_fraction_size(cash: float, risk_fraction: float, entry_price: float) -> int:
@@ -125,8 +182,9 @@ def size_position_by_regime(
     regime: MarketRegime,
     equity: float,
     entry_price: float,
+    sizing_config: RegimeSizingConfig = DEFAULT_REGIME_SIZING_CONFIG,
 ) -> PositionSizingPlan:
-    profile = REGIME_SIZING_PROFILES[regime]
+    profile = build_regime_sizing_profiles(sizing_config)[regime]
     if profile.max_new_entries == 0:
         return PositionSizingPlan(
             quantity=0,
@@ -149,14 +207,15 @@ def size_position_by_regime(
     )
 
 
-def max_holding_days_for_regime(regime: MarketRegime) -> int:
-    return REGIME_SIZING_PROFILES[regime].max_hold_days
+def max_holding_days_for_regime(regime: MarketRegime, sizing_config: RegimeSizingConfig = DEFAULT_REGIME_SIZING_CONFIG) -> int:
+    return build_regime_sizing_profiles(sizing_config)[regime].max_hold_days
 
 
 def calculate_dynamic_position_sizing(
     *,
     data: DynamicSizingInput,
     config: DynamicSizingConfig = DynamicSizingConfig(),
+    regime_sizing_config: RegimeSizingConfig = DEFAULT_REGIME_SIZING_CONFIG,
 ) -> DynamicSizingOutput:
     if data.equity <= 0 or data.entry_price <= 0:
         return DynamicSizingOutput(
@@ -177,7 +236,7 @@ def calculate_dynamic_position_sizing(
             reason="Total loss limit reached; no new exposure allowed",
         )
 
-    regime_profile = REGIME_SIZING_PROFILES[data.regime]
+    regime_profile = build_regime_sizing_profiles(regime_sizing_config)[data.regime]
     base_weight = regime_profile.prefer_weight
     max_allowed_weight = regime_profile.max_weight
 
@@ -187,6 +246,7 @@ def calculate_dynamic_position_sizing(
     performance_multiplier = _performance_multiplier(data.recent_performance_pct, config)
     pnl_state_multiplier = _pnl_state_multiplier(data.daily_pnl_pct, data.total_pnl_pct, config)
     deleverage_multiplier = _losing_streak_multiplier(data.consecutive_losses, config)
+    account_volatility_multiplier = _account_volatility_multiplier(data.account_volatility_pct, config)
 
     leverage_multiplier = (
         regime_multiplier
@@ -195,6 +255,7 @@ def calculate_dynamic_position_sizing(
         * performance_multiplier
         * pnl_state_multiplier
         * deleverage_multiplier
+        * account_volatility_multiplier
     )
 
     target_weight = min(max(base_weight * leverage_multiplier, 0.0), max_allowed_weight)
@@ -231,7 +292,8 @@ def calculate_dynamic_position_sizing(
         leverage_multiplier=leverage_multiplier,
         reason=(
             f"Dynamic sizing applied: regime={data.regime}, atr={data.atr_pct:.2f}%, "
-            f"confidence={data.strategy_confidence:.2f}, recent_perf={data.recent_performance_pct:.2f}%"
+            f"confidence={data.strategy_confidence:.2f}, recent_perf={data.recent_performance_pct:.2f}%, "
+            f"account_vol={data.account_volatility_pct:.2f}%"
         ),
     )
 
@@ -283,3 +345,11 @@ def _allow_additional_entry(data: DynamicSizingInput, cfg: DynamicSizingConfig) 
     if data.regime == "bearish_trend":
         return data.recent_entries_on_symbol <= cfg.bearish_max_additional_entries
     return data.recent_entries_on_symbol <= cfg.default_max_additional_entries
+
+
+def _account_volatility_multiplier(account_volatility_pct: float, cfg: DynamicSizingConfig) -> float:
+    if account_volatility_pct >= cfg.target_account_volatility_max_pct:
+        return cfg.over_target_volatility_cut_multiplier
+    if account_volatility_pct <= cfg.target_account_volatility_min_pct:
+        return cfg.under_target_volatility_boost_multiplier
+    return 1.0

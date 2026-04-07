@@ -28,13 +28,13 @@ export default function App() {
     <SafeAreaView style={{ flex: 1 }}>
       <View style={{ flex: 1 }}>
         {tab === "dashboard" ? (
-          <DashboardScreen onOpenBrokerSettings={() => setTab("broker-settings")} />
+          <DashboardScreen backendUrl={BACKEND_URL} onOpenBrokerSettings={() => setTab("broker-settings")} />
         ) : tab === "paper-trading" ? (
           <PaperTradingScreen backendUrl={BACKEND_URL} />
         ) : tab === "live-settings" ? (
           <LiveTradingSettingsScreen backendUrl={BACKEND_URL} />
         ) : tab === "performance" ? (
-          <PerformanceScreen />
+          <PerformanceScreen backendUrl={BACKEND_URL} />
         ) : (
           <BrokerSettingsScreen backendUrl={BACKEND_URL} onBack={() => setTab("dashboard")} />
         )}

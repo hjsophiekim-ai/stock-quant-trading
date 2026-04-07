@@ -15,6 +15,8 @@ def main() -> None:
             issues.append("LIVE_TRADING is not true (live orders will be blocked)")
         if not cfg.live_trading_confirm:
             issues.append("LIVE_TRADING_CONFIRM is not true (dual confirmation missing)")
+        if not cfg.live_trading_extra_confirm:
+            issues.append("LIVE_TRADING_EXTRA_CONFIRM is not true (extra confirmation missing)")
         if not cfg.resolved_account_no:
             issues.append("KIS_ACCOUNT_NO is missing")
         if not cfg.resolved_account_product_code:
@@ -24,6 +26,7 @@ def main() -> None:
     print(f"mode={cfg.trading_mode}")
     print(f"live_enabled={cfg.resolved_live_trading_enabled}")
     print(f"live_confirm={cfg.live_trading_confirm}")
+    print(f"live_extra_confirm={cfg.live_trading_extra_confirm}")
     print(f"account_configured={bool(cfg.resolved_account_no and cfg.resolved_account_product_code)}")
     print(f"dry_run_log={cfg.live_order_dry_run_log}")
 

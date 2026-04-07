@@ -1,4 +1,4 @@
-﻿from dataclasses import dataclass
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
@@ -38,6 +38,9 @@ class KillSwitch:
         Returns a cooldown-until timestamp when adaptive drawdown controls suggest
         pausing new entries after repeated losses.
         """
-        if snapshot.consecutive_losses >= self.rules.limits.adaptive_loss_streak_threshold:
+        adaptive = self.rules.adaptive_guard(snapshot)
+        if adaptive.cooldown_required or adaptive.loss_streak_triggered:
+            return datetime.now(timezone.utc) + timedelta(minutes=self.rules.limits.adaptive_trading_cooldown_minutes)
+        if adaptive.performance_deteriorating:
             return datetime.now(timezone.utc) + timedelta(minutes=self.rules.limits.adaptive_trading_cooldown_minutes)
         return None

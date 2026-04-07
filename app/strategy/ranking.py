@@ -27,6 +27,18 @@ class RankedCandidate:
     reasons: list[str]
 
 
+@dataclass(frozen=True)
+class RankingReportRow:
+    symbol: str
+    total_score: float
+    relative_strength: float
+    ma_alignment: float
+    volume_growth: float
+    volatility_quality: float
+    regime_fit: float
+    reason_text: str
+
+
 def rank_candidates(
     *,
     prices_df: pd.DataFrame,
@@ -106,6 +118,24 @@ def rank_candidates(
             )
         )
     return results
+
+
+def build_ranking_report_rows(ranked: list[RankedCandidate]) -> list[RankingReportRow]:
+    rows: list[RankingReportRow] = []
+    for c in ranked:
+        rows.append(
+            RankingReportRow(
+                symbol=c.symbol,
+                total_score=c.total_score,
+                relative_strength=float(c.factor_scores.get("relative_strength", 0.0)),
+                ma_alignment=float(c.factor_scores.get("ma_alignment", 0.0)),
+                volume_growth=float(c.factor_scores.get("volume_growth", 0.0)),
+                volatility_quality=float(c.factor_scores.get("volatility_quality", 0.0)),
+                regime_fit=float(c.factor_scores.get("regime_fit", 0.0)),
+                reason_text=" | ".join(c.reasons),
+            )
+        )
+    return rows
 
 
 def _regime_fit_score(regime: MarketRegime, ret_60: float, ma_spread_pct: float, vol_std_pct: float) -> float:

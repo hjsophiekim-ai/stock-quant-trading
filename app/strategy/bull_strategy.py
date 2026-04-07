@@ -28,7 +28,7 @@ class BullStrategy(BaseStrategy):
     def generate_signals(self, context: StrategyContext) -> list[StrategySignal]:
         signals: list[StrategySignal] = []
         for symbol, symbol_df in context.prices.groupby("symbol", sort=False):
-            signal = _build_symbol_signal(symbol_df)
+            signal = _build_symbol_signal(symbol_df, self.config)
             position = _get_position_row(context.portfolio, symbol)
             if position is None:
                 if _should_enter_bull(signal):
@@ -61,10 +61,10 @@ class BullStrategy(BaseStrategy):
         return signals
 
 
-def _build_symbol_signal(symbol_df: pd.DataFrame) -> dict[str, float | bool]:
+def _build_symbol_signal(symbol_df: pd.DataFrame, config: BullStrategyConfig) -> dict[str, float | bool]:
     enriched = add_basic_indicators(symbol_df.sort_values("date"))
     enriched["atr14"] = _atr(enriched, period=14)
-    enriched["low_n"] = enriched["low"].rolling(5, min_periods=1).min()
+    enriched["low_n"] = enriched["low"].rolling(config.trailing_n_day_low_window, min_periods=1).min()
     latest = enriched.iloc[-1]
     return {
         "ma20_gt_ma60": bool(pd.notna(latest["ma20"]) and pd.notna(latest["ma60"]) and latest["ma20"] > latest["ma60"]),
@@ -107,15 +107,16 @@ def _build_exit_signals(
         return [StrategySignal(symbol, "sell", qty, None, None, "Stop-loss priority exit", strategy_name)]
     if not first_tp_done and pnl_pct >= config.first_take_profit_pct:
         return [StrategySignal(symbol, "sell", max(int(qty * 0.5), 1), None, None, "First TP partial exit", strategy_name)]
-    if _trailing_stop_triggered(
-        close=float(signal["close"]),
-        atr=float(signal["atr14"]),
-        low_n=float(signal["low_n"]),
-        highest_price=highest_price_since_entry,
-        mode=config.trailing_mode,
-        atr_multiplier=config.trailing_atr_multiplier,
-    ):
-        return [StrategySignal(symbol, "sell", qty, None, None, "Trailing exit on remaining position", strategy_name)]
+    if first_tp_done:
+        if _trailing_stop_triggered(
+            close=float(signal["close"]),
+            atr=float(signal["atr14"]),
+            low_n=float(signal["low_n"]),
+            highest_price=highest_price_since_entry,
+            mode=config.trailing_mode,
+            atr_multiplier=config.trailing_atr_multiplier,
+        ):
+            return [StrategySignal(symbol, "sell", qty, None, None, "Trailing exit on remaining position", strategy_name)]
     if pnl_pct >= config.second_take_profit_pct and float(signal["close"]) < float(signal["ma20"]):
         return [StrategySignal(symbol, "sell", qty, None, None, "Second TP + trend weakness full exit", strategy_name)]
     if hold_days >= config.time_exit_days and pnl_pct <= 0.0:

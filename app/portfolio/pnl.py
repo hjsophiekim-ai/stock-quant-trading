@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import pandas as pd
 from dataclasses import dataclass
@@ -54,6 +54,16 @@ class TradePerformanceSummary:
     rolling_pnl_pct: float
 
 
+@dataclass(frozen=True)
+class AdaptiveDefenseSnapshot:
+    recent_window: int
+    rolling_pnl_pct: float
+    consecutive_losses: int
+    performance_deteriorating: bool
+    loss_streak_triggered: bool
+    defense_mode: bool
+
+
 def summarize_recent_trade_performance(
     trade_pnls: list[float],
     *,
@@ -96,3 +106,25 @@ def consecutive_loss_streak(trade_pnls: list[float]) -> int:
             continue
         break
     return streak
+
+
+def build_adaptive_defense_snapshot(
+    trade_pnls: list[float],
+    *,
+    equity: float,
+    window: int = 10,
+    loss_streak_threshold: int = 3,
+    performance_floor_pct: float = -1.0,
+) -> AdaptiveDefenseSnapshot:
+    summary = summarize_recent_trade_performance(trade_pnls, equity=equity, window=window)
+    loss_streak_triggered = summary.consecutive_losses >= loss_streak_threshold
+    performance_deteriorating = summary.rolling_pnl_pct < performance_floor_pct
+    defense_mode = loss_streak_triggered or performance_deteriorating
+    return AdaptiveDefenseSnapshot(
+        recent_window=summary.window,
+        rolling_pnl_pct=summary.rolling_pnl_pct,
+        consecutive_losses=summary.consecutive_losses,
+        performance_deteriorating=performance_deteriorating,
+        loss_streak_triggered=loss_streak_triggered,
+        defense_mode=defense_mode,
+    )

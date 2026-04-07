@@ -1,4 +1,4 @@
-﻿from functools import lru_cache
+from functools import lru_cache
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     live_trading: bool = Field(default=False, alias="LIVE_TRADING")
     live_trading_enabled: bool = Field(default=False, alias="LIVE_TRADING_ENABLED")
     live_trading_confirm: bool = Field(default=False, alias="LIVE_TRADING_CONFIRM")
+    live_trading_extra_confirm: bool = Field(default=False, alias="LIVE_TRADING_EXTRA_CONFIRM")
     live_order_dry_run_log: bool = Field(default=True, alias="LIVE_ORDER_DRY_RUN_LOG")
 
     daily_loss_limit_pct: float = Field(default=2.0, alias="DAILY_LOSS_LIMIT_PCT")
@@ -54,7 +55,12 @@ class Settings(BaseSettings):
     @property
     def is_live_order_allowed(self) -> bool:
         # Require explicit dual-confirmation to reduce accidental live order risk.
-        return self.resolved_live_trading_enabled and self.live_trading_confirm and self.trading_mode == "live"
+        return (
+            self.resolved_live_trading_enabled
+            and self.live_trading_confirm
+            and self.live_trading_extra_confirm
+            and self.trading_mode == "live"
+        )
 
 
 @lru_cache(maxsize=1)

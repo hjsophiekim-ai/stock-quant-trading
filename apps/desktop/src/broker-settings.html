@@ -2,6 +2,7 @@
 <html>
   <body>
     <h2>Broker Settings</h2>
+    <p>첫 실행 권장: Save -> Test Token Issuance -> 상태 확인 -> Paper Trading Start</p>
     <p>Status: <span id="statusBadge">unknown</span></p>
     <input id="kis_app_key" placeholder="KIS_APP_KEY" />
     <input id="kis_app_secret" type="password" placeholder="KIS_APP_SECRET" />
@@ -55,13 +56,14 @@
 
       async function loadCurrentStatus() {
         try {
-          const res = await fetch(`${backendUrl}/api/broker-accounts/me`, {
+          const res = await fetch(`${backendUrl}/api/broker-accounts/me/status`, {
             method: "GET",
             headers: authHeaders(),
           });
           if (!res.ok) return;
           const data = await res.json();
           badge.innerText = data.connection_status || "unknown";
+          if (data.connection_message) msg.innerText = data.connection_message;
         } catch {}
       }
 

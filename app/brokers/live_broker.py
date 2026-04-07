@@ -1,4 +1,4 @@
-﻿from dataclasses import dataclass
+from dataclasses import dataclass
 import logging
 from typing import Any
 
@@ -15,9 +15,12 @@ class LiveBroker(BaseBroker):
     account_product_code: str
     live_trading_enabled: bool = False
     live_trading_confirm: bool = False
+    live_trading_extra_confirm: bool = False
     trading_mode: str = "paper"
     dry_run_log_enabled: bool = True
     logger: logging.Logger = logging.getLogger("app.brokers.live_broker")
+    startup_safety_passed: bool = False
+    startup_safety_reason: str = "Startup safety validation not executed"
 
     @classmethod
     def from_env(cls, kis_client: KISClient, account_no: str, account_product_code: str, settings: Settings | None = None) -> "LiveBroker":
@@ -28,9 +31,17 @@ class LiveBroker(BaseBroker):
             account_product_code=account_product_code,
             live_trading_enabled=cfg.resolved_live_trading_enabled,
             live_trading_confirm=cfg.live_trading_confirm,
+            live_trading_extra_confirm=cfg.live_trading_extra_confirm,
             trading_mode=cfg.trading_mode,
             dry_run_log_enabled=cfg.live_order_dry_run_log,
         )
+
+    def __post_init__(self) -> None:
+        ok, reason = self.validate_startup_safety()
+        self.startup_safety_passed = ok
+        self.startup_safety_reason = reason
+        level = logging.INFO if ok else logging.ERROR
+        self.logger.log(level, "[LIVE STARTUP SAFETY] passed=%s reason=%s", ok, reason)
 
     def get_cash(self) -> float:
         payload = self.kis_client.get_balance(self.account_no, self.account_product_code)
@@ -131,12 +142,20 @@ class LiveBroker(BaseBroker):
         return fallback
 
     def _validate_live_order_guard(self) -> OrderResult | None:
+        if not self.startup_safety_passed:
+            return OrderResult(
+                order_id="",
+                accepted=False,
+                message=f"Live order blocked: startup safety validation failed ({self.startup_safety_reason})",
+            )
         if self.trading_mode != "live":
             return OrderResult(order_id="", accepted=False, message="Live order blocked: TRADING_MODE is not live")
         if not self.live_trading_enabled:
             return OrderResult(order_id="", accepted=False, message="Live order blocked: LIVE_TRADING is not true")
         if not self.live_trading_confirm:
             return OrderResult(order_id="", accepted=False, message="Live order blocked: LIVE_TRADING_CONFIRM is not true")
+        if not self.live_trading_extra_confirm:
+            return OrderResult(order_id="", accepted=False, message="Live order blocked: LIVE_TRADING_EXTRA_CONFIRM is not true")
         if not self.account_no or not self.account_product_code:
             return OrderResult(order_id="", accepted=False, message="Live order blocked: account info is missing")
         return None
@@ -145,7 +164,7 @@ class LiveBroker(BaseBroker):
         # Do not log secrets or full account number.
         masked_account = f"***{self.account_no[-4:]}" if len(self.account_no) >= 4 else "***"
         self.logger.warning(
-            "[DRY-RUN BEFORE LIVE ORDER] mode=%s account=%s side=%s symbol=%s qty=%s price=%s strategy=%s",
+            "[DRY-RUN BEFORE LIVE ORDER] mode=%s account=%s side=%s symbol=%s qty=%s price=%s strategy=%s startup_ok=%s",
             self.trading_mode,
             masked_account,
             order.side,
@@ -153,4 +172,20 @@ class LiveBroker(BaseBroker):
             order.quantity,
             order.price,
             order.strategy_id,
+            self.startup_safety_passed,
         )
+
+    def validate_startup_safety(self) -> tuple[bool, str]:
+        if self.trading_mode not in {"paper", "live"}:
+            return False, "TRADING_MODE must be 'paper' or 'live'"
+        if self.trading_mode != "live":
+            return False, "TRADING_MODE is not live"
+        if not self.live_trading_enabled:
+            return False, "LIVE_TRADING is not true"
+        if not self.live_trading_confirm:
+            return False, "LIVE_TRADING_CONFIRM is not true"
+        if not self.live_trading_extra_confirm:
+            return False, "LIVE_TRADING_EXTRA_CONFIRM is not true"
+        if not self.account_no or not self.account_product_code:
+            return False, "KIS account fields are missing"
+        return True, "Startup live safety validation passed"

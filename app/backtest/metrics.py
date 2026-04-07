@@ -9,6 +9,7 @@ import pandas as pd
 class BacktestMetrics:
     total_return_pct: float
     monthly_returns: dict[str, float]
+    monthly_return_stability: float
     max_drawdown_pct: float
     win_rate: float
     payoff_ratio: float
@@ -19,6 +20,7 @@ class BacktestMetrics:
 def calculate_metrics(*, equity_curve: pd.Series, trades: list[object]) -> BacktestMetrics:
     total_return = _total_return_pct(equity_curve)
     monthly = _monthly_return_pct(equity_curve)
+    stability = _monthly_return_stability(monthly)
     max_dd = _max_drawdown_pct(equity_curve)
     win_rate = _win_rate(trades)
     payoff = _payoff_ratio(trades)
@@ -27,6 +29,7 @@ def calculate_metrics(*, equity_curve: pd.Series, trades: list[object]) -> Backt
     return BacktestMetrics(
         total_return_pct=total_return,
         monthly_returns=monthly,
+        monthly_return_stability=stability,
         max_drawdown_pct=max_dd,
         win_rate=win_rate,
         payoff_ratio=payoff,
@@ -61,6 +64,15 @@ def _max_drawdown_pct(equity_curve: pd.Series) -> float:
     running_max = equity_curve.cummax()
     dd = (equity_curve / running_max) - 1.0
     return float(dd.min() * 100.0)
+
+
+def _monthly_return_stability(monthly_returns: dict[str, float]) -> float:
+    if not monthly_returns:
+        return 0.0
+    values = pd.Series(list(monthly_returns.values()), dtype="float64")
+    std = float(values.std(ddof=0))
+    # Higher is better: 1/(1+std) in 0~1 range.
+    return 1.0 / (1.0 + max(std, 0.0))
 
 
 def _win_rate(trades: list[object]) -> float:

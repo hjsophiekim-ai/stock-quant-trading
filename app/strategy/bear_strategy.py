@@ -11,12 +11,14 @@ from app.strategy.indicators import add_basic_indicators
 @dataclass(frozen=True)
 class BearStrategyConfig:
     order_quantity: int = 3
-    stop_loss_pct: float = 2.0
-    first_take_profit_pct: float = 2.5
-    second_take_profit_pct: float = 4.0
-    time_exit_days: int = 2
+    stop_loss_pct: float = 1.8
+    first_take_profit_pct: float = 2.0
+    second_take_profit_pct: float = 3.2
+    time_exit_days: int = 1
     max_new_entries_per_cycle: int = 1
     allow_new_entries: bool = True
+    rebound_entry_drop_3d_pct: float = -6.0
+    rebound_entry_rsi_max: float = 28.0
 
 
 @dataclass
@@ -30,7 +32,11 @@ class BearStrategy(BaseStrategy):
             signal = _build_symbol_signal(symbol_df)
             position = _get_position_row(context.portfolio, symbol)
             if position is None:
-                if self.config.allow_new_entries and new_entry_count < self.config.max_new_entries_per_cycle and _should_enter_defensive_rebound(signal):
+                if (
+                    self.config.allow_new_entries
+                    and new_entry_count < self.config.max_new_entries_per_cycle
+                    and _should_enter_defensive_rebound(signal, self.config)
+                ):
                     signals.append(
                         StrategySignal(
                             symbol=symbol,
@@ -59,9 +65,13 @@ def _build_symbol_signal(symbol_df: pd.DataFrame) -> dict[str, float | bool]:
     }
 
 
-def _should_enter_defensive_rebound(signal: dict[str, float | bool]) -> bool:
+def _should_enter_defensive_rebound(signal: dict[str, float | bool], cfg: BearStrategyConfig) -> bool:
     # Bear regime entry threshold is intentionally strict to reduce drawdown risk.
-    return bool(float(signal["ret_3d"]) <= -5.0 and float(signal["rsi"]) < 30.0 and signal["bullish"])
+    return bool(
+        float(signal["ret_3d"]) <= cfg.rebound_entry_drop_3d_pct
+        and float(signal["rsi"]) < cfg.rebound_entry_rsi_max
+        and signal["bullish"]
+    )
 
 
 def _build_exit_signals(symbol: str, signal: dict[str, float | bool], position: pd.Series, cfg: BearStrategyConfig) -> list[StrategySignal]:

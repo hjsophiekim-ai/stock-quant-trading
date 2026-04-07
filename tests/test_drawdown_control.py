@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from app.orders.models import OrderRequest
-from app.portfolio.pnl import summarize_recent_trade_performance
+from app.portfolio.pnl import build_adaptive_defense_snapshot, summarize_recent_trade_performance
 from app.risk.kill_switch import KillSwitch
 from app.risk.rules import RiskLimits, RiskRules, RiskSnapshot
 
@@ -80,3 +80,39 @@ def test_recent_trade_performance_summary() -> None:
     assert summary.total_pnl == -1200.0
     assert summary.consecutive_losses == 1
     assert summary.rolling_pnl_pct < 0
+
+
+def test_adaptive_entry_filter_blocks_low_score_in_defense_mode() -> None:
+    rules = RiskRules(
+        limits=RiskLimits(
+            adaptive_loss_streak_threshold=3,
+            adaptive_min_entry_score=0.7,
+            adaptive_enable_entry_filter=True,
+        )
+    )
+    snapshot = RiskSnapshot(
+        daily_pnl_pct=-0.2,
+        total_pnl_pct=-1.0,
+        equity=1_000_000.0,
+        market_filter_ok=True,
+        position_values={},
+        consecutive_losses=3,
+        recent_trade_pnls=(-5000.0, -4000.0, -2500.0),
+        latest_entry_score=0.55,
+    )
+    order = OrderRequest(symbol="005930", side="buy", quantity=10, price=10_000.0, stop_loss_pct=2.5)
+    decision = rules.approve_order(order=order, snapshot=snapshot)
+    assert decision.approved is False
+    assert decision.reason_code == "ADAPTIVE_ENTRY_FILTER_BLOCK"
+
+
+def test_adaptive_defense_snapshot_detects_deterioration() -> None:
+    snap = build_adaptive_defense_snapshot(
+        trade_pnls=[-3000.0, -3500.0, -2000.0, -1500.0],
+        equity=1_000_000.0,
+        window=4,
+        loss_streak_threshold=3,
+        performance_floor_pct=-0.5,
+    )
+    assert snap.performance_deteriorating is True
+    assert snap.defense_mode is True

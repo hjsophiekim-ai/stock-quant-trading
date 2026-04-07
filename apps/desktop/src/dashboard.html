@@ -118,46 +118,40 @@
       } else {
         userText.innerText = `User: ${email || "-"}`;
       }
-      const summaryMock = {
-        mode: "paper",
-        account_status: "connected",
-        today_return_pct: 0.41,
-        monthly_return_pct: 4.2,
-        cumulative_return_pct: 12.8,
-        position_count: 4,
-        realized_pnl: 1840000,
-        unrealized_pnl: 260000,
-        system_status: "running",
-        risk_banner: { level: "warning", message: "연속 손실 2회 감지: 신규 진입 크기 자동 축소 중" },
-      };
-      const tradesMock = [
-        { trade_id: "T-20260406-0005", symbol: "005930", side: "sell", quantity: 5, price: 78400 },
-        { trade_id: "T-20260406-0004", symbol: "000660", side: "buy", quantity: 2, price: 170500 },
-        { trade_id: "T-20260405-0011", symbol: "035420", side: "sell", quantity: 4, price: 188500 },
-        { trade_id: "T-20260405-0009", symbol: "207940", side: "buy", quantity: 1, price: 790000 },
-        { trade_id: "T-20260404-0002", symbol: "051910", side: "buy", quantity: 3, price: 394000 },
-      ];
-
-      document.getElementById("mode").innerText = summaryMock.mode;
-      document.getElementById("accountStatus").innerText = summaryMock.account_status;
-      document.getElementById("systemStatus").innerText = summaryMock.system_status;
-      document.getElementById("todayReturn").innerText = `${summaryMock.today_return_pct}%`;
-      document.getElementById("monthlyReturn").innerText = `${summaryMock.monthly_return_pct}%`;
-      document.getElementById("cumulativeReturn").innerText = `${summaryMock.cumulative_return_pct}%`;
-      document.getElementById("positionCount").innerText = String(summaryMock.position_count);
-      document.getElementById("realizedPnl").innerText = summaryMock.realized_pnl.toLocaleString();
-      document.getElementById("unrealizedPnl").innerText = summaryMock.unrealized_pnl.toLocaleString();
-      document.getElementById("riskBanner").innerText = `Risk Warning: ${summaryMock.risk_banner.message}`;
-      const tbody = document.getElementById("recentTradesBody");
-      tradesMock.forEach((trade) => {
-        const tr = document.createElement("tr");
-        tr.innerHTML = `<td>${trade.trade_id}</td><td>${trade.symbol}</td><td>${trade.side}</td><td>${trade.quantity}</td><td>${trade.price}</td>`;
-        tbody.appendChild(tr);
-      });
-      // TODO: Replace mock bindings with backend API calls:
-      // - GET `${backendUrl}/api/dashboard/summary`
-      // - GET `${backendUrl}/api/portfolio/summary`
-      // - GET `${backendUrl}/api/trading/recent-trades`
+      async function loadDashboard() {
+        try {
+          const [summaryRes, tradesRes] = await Promise.all([
+            fetch(`${backendUrl}/api/dashboard/summary`),
+            fetch(`${backendUrl}/api/trading/recent-trades`),
+          ]);
+          const summary = await summaryRes.json();
+          const trades = await tradesRes.json();
+          if (!summaryRes.ok) {
+            document.getElementById("riskBanner").innerText = summary?.detail || "dashboard load failed";
+            return;
+          }
+          document.getElementById("mode").innerText = summary.mode;
+          document.getElementById("accountStatus").innerText = summary.account_status;
+          document.getElementById("systemStatus").innerText = summary.system_status;
+          document.getElementById("todayReturn").innerText = `${summary.today_return_pct}%`;
+          document.getElementById("monthlyReturn").innerText = `${summary.monthly_return_pct}%`;
+          document.getElementById("cumulativeReturn").innerText = `${summary.cumulative_return_pct}%`;
+          document.getElementById("positionCount").innerText = String(summary.position_count);
+          document.getElementById("realizedPnl").innerText = Number(summary.realized_pnl).toLocaleString();
+          document.getElementById("unrealizedPnl").innerText = Number(summary.unrealized_pnl).toLocaleString();
+          document.getElementById("riskBanner").innerText = `Risk Warning: ${summary.risk_banner.message}`;
+          const tbody = document.getElementById("recentTradesBody");
+          tbody.innerHTML = "";
+          (trades.items || []).forEach((trade) => {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `<td>${trade.trade_id}</td><td>${trade.symbol}</td><td>${trade.side}</td><td>${trade.quantity}</td><td>${trade.price}</td>`;
+            tbody.appendChild(tr);
+          });
+        } catch {
+          document.getElementById("riskBanner").innerText = "network error";
+        }
+      }
+      loadDashboard();
 
       document.getElementById("logoutBtn").addEventListener("click", () => {
         localStorage.removeItem("accessToken");

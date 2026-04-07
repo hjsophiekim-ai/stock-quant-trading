@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-from app.strategy.ranking import rank_candidates
+from app.strategy.ranking import build_ranking_report_rows, rank_candidates
 
 
 def _build_prices() -> pd.DataFrame:
@@ -75,3 +75,29 @@ def test_bearish_filters_to_more_defensive_profiles() -> None:
     assert len(ranked) == 2
     for r in ranked:
         assert "regime_fit" in r.factor_scores
+
+
+def test_ranking_report_rows_include_reason_text() -> None:
+    prices = _build_prices()
+    ranked = rank_candidates(
+        prices_df=prices,
+        candidate_symbols=["A", "B", "C", "D"],
+        regime="bullish_trend",
+        top_n=2,
+    )
+    report_rows = build_ranking_report_rows(ranked)
+    assert len(report_rows) == 2
+    assert report_rows[0].reason_text != ""
+
+
+def test_bearish_prefers_defensive_over_high_beta() -> None:
+    prices = _build_prices()
+    ranked = rank_candidates(
+        prices_df=prices,
+        candidate_symbols=["A", "D"],
+        regime="bearish_trend",
+        top_n=1,
+    )
+    assert len(ranked) == 1
+    # In bearish regime, defensive profile should be preferred.
+    assert ranked[0].symbol == "D"

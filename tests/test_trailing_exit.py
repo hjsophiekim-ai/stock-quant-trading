@@ -1,5 +1,6 @@
 import pandas as pd
 
+from app.portfolio.positions import Position, apply_sell_fill
 from app.strategy.bull_strategy import (
     BullStrategyConfig,
     _build_exit_signals,
@@ -44,6 +45,22 @@ def test_trailing_exit_triggers_after_partial_take_profit_atr_mode() -> None:
     assert "trailing" in exits[0].reason.lower()
 
 
+def test_trailing_not_applied_before_first_take_profit_done() -> None:
+    cfg = BullStrategyConfig(trailing_mode="atr", trailing_atr_multiplier=2.0)
+    position = pd.Series(
+        {
+            "average_price": 100.0,
+            "quantity": 10,
+            "hold_days": 2,
+            "first_take_profit_done": False,
+            "highest_price_since_entry": 112.0,
+        }
+    )
+    signal = {"close": 107.0, "atr14": 2.0, "low_n": 106.0, "ma20": 105.0}
+    exits = _build_exit_signals("005930", signal, position, cfg, "bull_strategy")
+    assert exits == []
+
+
 def test_trailing_exit_triggers_on_n_day_low_break() -> None:
     cfg = BullStrategyConfig(trailing_mode="n_day_low")
     position = pd.Series(
@@ -71,3 +88,21 @@ def test_trailing_trigger_helper_returns_false_when_not_breached() -> None:
         atr_multiplier=2.0,
     )
     assert hit is False
+
+
+def test_partial_sell_marks_trailing_state_for_remaining_position() -> None:
+    position = Position(
+        symbol="005930",
+        quantity=10,
+        average_price=100.0,
+        initial_quantity=10,
+        realized_sell_quantity=0,
+        first_take_profit_done=False,
+        trailing_active=False,
+        highest_price_since_entry=110.0,
+    )
+    updated = apply_sell_fill(position, quantity=5, mark_first_take_profit=True)
+    assert updated is not None
+    assert updated.quantity == 5
+    assert updated.first_take_profit_done is True
+    assert updated.trailing_active is True

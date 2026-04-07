@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -19,6 +19,7 @@ class RiskSnapshot:
     market_regime: MarketRegime = "sideways"
     recent_trade_pnls: tuple[float, ...] = ()
     consecutive_losses: int = 0
+    latest_entry_score: float | None = None
     todays_new_entries: int = 0
     trading_cooldown_until: datetime | None = None
     cooldown_until: dict[str, datetime] = field(default_factory=dict)
@@ -36,6 +37,7 @@ class RiskLimits:
     bearish_max_positions: int = 2
     bearish_max_position_weight: float = 0.08
     bearish_max_stop_loss_pct: float = 2.5
+    bearish_max_new_entries_per_day: int = 1
     bearish_min_entry_price: float = 0.0
     high_vol_new_entry_blocked: bool = True
     rolling_loss_window_trades: int = 10
@@ -45,6 +47,9 @@ class RiskLimits:
     adaptive_position_weight_multiplier: float = 0.7
     adaptive_stop_loss_tighten_multiplier: float = 0.8
     adaptive_trading_cooldown_minutes: int = 120
+    adaptive_performance_floor_pct: float = -1.0
+    adaptive_min_entry_score: float = 0.65
+    adaptive_enable_entry_filter: bool = True
 
 
 @dataclass(frozen=True)
@@ -53,6 +58,18 @@ class RiskDecision:
     reason_code: str
     reason: str
     is_hard_stop: bool = False
+
+
+@dataclass(frozen=True)
+class AdaptiveGuard:
+    max_new_entries: int
+    position_weight_multiplier: float
+    stop_loss_tighten_multiplier: float
+    cooldown_required: bool
+    loss_streak_triggered: bool
+    performance_deteriorating: bool
+    require_stronger_entry: bool
+    min_entry_score: float
 
 
 class RiskRules:
@@ -117,17 +134,30 @@ class RiskRules:
             return RiskDecision(approved=True, reason_code="OK_SELL", reason="Sell order allowed for risk reduction")
 
         adaptive = self._build_adaptive_guard(snapshot)
-        if adaptive["cooldown_required"]:
+        if adaptive.cooldown_required:
             return RiskDecision(
                 approved=False,
                 reason_code="TRADING_COOLDOWN_REQUIRED_ADAPTIVE",
                 reason="Loss adaptation triggered cooldown due to deteriorating recent performance",
             )
-        if snapshot.todays_new_entries >= adaptive["max_new_entries"]:
+        if snapshot.todays_new_entries >= adaptive.max_new_entries:
             return RiskDecision(
                 approved=False,
                 reason_code="ADAPTIVE_NEW_ENTRY_LIMIT",
-                reason=f"Adaptive defense: max new entries reached ({adaptive['max_new_entries']})",
+                reason=f"Adaptive defense: max new entries reached ({adaptive.max_new_entries})",
+            )
+        if (
+            adaptive.require_stronger_entry
+            and snapshot.latest_entry_score is not None
+            and snapshot.latest_entry_score < adaptive.min_entry_score
+        ):
+            return RiskDecision(
+                approved=False,
+                reason_code="ADAPTIVE_ENTRY_FILTER_BLOCK",
+                reason=(
+                    f"Adaptive defense: entry score {snapshot.latest_entry_score:.2f} "
+                    f"below required {adaptive.min_entry_score:.2f}"
+                ),
             )
 
         if snapshot.market_regime == "high_volatility_risk" and self.limits.high_vol_new_entry_blocked:
@@ -135,6 +165,15 @@ class RiskRules:
                 approved=False,
                 reason_code="BLOCK_REGIME_HIGH_VOLATILITY_NEW_ENTRY",
                 reason="High volatility regime: new entries are blocked, only position management allowed",
+            )
+        if snapshot.market_regime == "bearish_trend" and snapshot.todays_new_entries >= self.limits.bearish_max_new_entries_per_day:
+            return RiskDecision(
+                approved=False,
+                reason_code="BLOCK_REGIME_BEARISH_NEW_ENTRY_LIMIT",
+                reason=(
+                    f"Bearish regime daily new entry limit reached "
+                    f"({self.limits.bearish_max_new_entries_per_day})"
+                ),
             )
 
         if not snapshot.market_filter_ok:
@@ -152,11 +191,11 @@ class RiskRules:
             )
 
         if snapshot.market_regime == "bearish_trend" and order.stop_loss_pct is not None:
-            max_stop_loss = self.limits.bearish_max_stop_loss_pct * adaptive["stop_loss_tighten_multiplier"]
+            max_stop_loss = self.limits.bearish_max_stop_loss_pct * adaptive.stop_loss_tighten_multiplier
             if order.stop_loss_pct > max_stop_loss:
                 return RiskDecision(
                     approved=False,
-                    reason_code="STOP_LOSS_TOO_WIDE_BEARISH",
+                    reason_code="BLOCK_REGIME_BEARISH_STOP_LOSS_TOO_WIDE",
                     reason=f"Bearish regime requires tighter stop-loss <= {max_stop_loss:.2f}%",
                 )
 
@@ -175,12 +214,16 @@ class RiskRules:
                 reason="Buy order requires positive price for risk sizing checks",
             )
 
-        weight_decision = self._validate_buy_weight(order, snapshot, adaptive_weight_multiplier=adaptive["position_weight_multiplier"])
+        weight_decision = self._validate_buy_weight(order, snapshot, adaptive_weight_multiplier=adaptive.position_weight_multiplier)
         if not weight_decision.approved:
             return weight_decision
 
         if snapshot.market_regime == "bearish_trend":
-            return RiskDecision(approved=True, reason_code="OK_BUY_BEARISH_CONSERVATIVE", reason="Bearish regime buy approved with conservative limits")
+            return RiskDecision(
+                approved=True,
+                reason_code="OK_REGIME_BEARISH_BUY_CONSERVATIVE",
+                reason="Bearish regime buy approved with conservative limits",
+            )
         return RiskDecision(approved=True, reason_code="OK_BUY", reason="Buy order approved by risk engine")
 
     def mark_symbol_exit(self, snapshot: RiskSnapshot, symbol: str, now: datetime | None = None) -> RiskSnapshot:
@@ -217,7 +260,7 @@ class RiskRules:
             code = "MAX_POSITIONS_EXCEEDED"
             msg = f"Maximum {max_positions} holdings exceeded"
             if snapshot.market_regime == "bearish_trend":
-                code = "MAX_POSITIONS_EXCEEDED_BEARISH"
+                code = "BLOCK_REGIME_BEARISH_MAX_POSITIONS"
                 msg = f"Bearish regime max holdings exceeded ({max_positions})"
             return RiskDecision(
                 approved=False,
@@ -239,7 +282,7 @@ class RiskRules:
             code = "POSITION_WEIGHT_TOO_HIGH"
             msg = f"Position weight exceeds {max_weight*100:.1f}% limit"
             if snapshot.market_regime == "bearish_trend":
-                code = "POSITION_WEIGHT_TOO_HIGH_BEARISH"
+                code = "BLOCK_REGIME_BEARISH_POSITION_WEIGHT"
                 msg = f"Bearish regime position weight exceeds {max_weight*100:.1f}% limit"
             return RiskDecision(
                 approved=False,
@@ -256,25 +299,36 @@ class RiskRules:
 
         return RiskDecision(approved=True, reason_code="OK_WEIGHT", reason="Position sizing check passed")
 
-    def _build_adaptive_guard(self, snapshot: RiskSnapshot) -> dict[str, float | int | bool]:
+    def _build_adaptive_guard(self, snapshot: RiskSnapshot) -> AdaptiveGuard:
         loss_streak_triggered = snapshot.consecutive_losses >= self.limits.adaptive_loss_streak_threshold
         rolling = rolling_trade_pnl_pct(snapshot.recent_trade_pnls, self.limits.rolling_loss_window_trades, snapshot.equity)
-        performance_deteriorating = rolling < -1.0
+        performance_deteriorating = rolling < self.limits.adaptive_performance_floor_pct
         cooldown_required = loss_streak_triggered and performance_deteriorating
 
         if loss_streak_triggered or performance_deteriorating:
-            return {
-                "max_new_entries": self.limits.adaptive_new_entries_limit,
-                "position_weight_multiplier": self.limits.adaptive_position_weight_multiplier,
-                "stop_loss_tighten_multiplier": self.limits.adaptive_stop_loss_tighten_multiplier,
-                "cooldown_required": cooldown_required,
-            }
-        return {
-            "max_new_entries": self.limits.max_positions,
-            "position_weight_multiplier": 1.0,
-            "stop_loss_tighten_multiplier": 1.0,
-            "cooldown_required": False,
-        }
+            return AdaptiveGuard(
+                max_new_entries=self.limits.adaptive_new_entries_limit,
+                position_weight_multiplier=self.limits.adaptive_position_weight_multiplier,
+                stop_loss_tighten_multiplier=self.limits.adaptive_stop_loss_tighten_multiplier,
+                cooldown_required=cooldown_required,
+                loss_streak_triggered=loss_streak_triggered,
+                performance_deteriorating=performance_deteriorating,
+                require_stronger_entry=self.limits.adaptive_enable_entry_filter,
+                min_entry_score=self.limits.adaptive_min_entry_score,
+            )
+        return AdaptiveGuard(
+            max_new_entries=self.limits.max_positions,
+            position_weight_multiplier=1.0,
+            stop_loss_tighten_multiplier=1.0,
+            cooldown_required=False,
+            loss_streak_triggered=False,
+            performance_deteriorating=False,
+            require_stronger_entry=False,
+            min_entry_score=self.limits.adaptive_min_entry_score,
+        )
+
+    def adaptive_guard(self, snapshot: RiskSnapshot) -> AdaptiveGuard:
+        return self._build_adaptive_guard(snapshot)
 
 
 def rolling_trade_pnl_pct(recent_trade_pnls: tuple[float, ...], window: int, equity: float) -> float:
