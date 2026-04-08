@@ -9,15 +9,13 @@
     "start": "electron .",
     "dev": "electron .",
     "run": "electron .",
-    "pack": "npx electron-builder --dir",
+    "pack": "electron-builder --dir",
     "build:win": "node scripts/build-win.js",
     "build:win:local": "cross-env APP_ENV=production BACKEND_URL=http://127.0.0.1:8000 node scripts/build-win.js"
   },
-  "dependencies": {
-    "electron": "^31.0.0"
-  },
   "devDependencies": {
     "cross-env": "^7.0.3",
+    "electron": "^31.0.0",
     "electron-builder": "^24.13.3"
   },
   "build": {
