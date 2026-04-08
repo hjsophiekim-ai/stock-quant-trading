@@ -77,6 +77,30 @@ npx cross-env APP_ENV=production BACKEND_URL=https://api.yourcompany.com npm run
 ### 산출물
 
 - `apps/desktop/dist/Stock Quant Desktop-Setup-0.1.0.exe` (버전은 `package.json` 의 `version` 과 동일)
+- 일반식: `apps/desktop/dist/Stock Quant Desktop-Setup-<version>.exe`
+- 추가 파일(빌드 로그/블록맵 등)이 함께 생성될 수 있습니다.
+
+## 설치파일 생성 경로와 실행 방법 (초보자)
+
+1. 저장소 루트에서 `apps/desktop`으로 이동
+2. `npm install` 실행
+3. 아래 둘 중 하나로 설치파일 생성
+   - 로컬 백엔드 테스트용: `npm run build:win:local`
+   - 운영 URL 고정 배포용:
+     - PowerShell:
+       - `$env:APP_ENV="production"`
+       - `$env:BACKEND_URL="https://<your-render-domain>"`
+       - `npm run build:win`
+4. 생성된 설치파일 위치 확인:
+   - `apps/desktop/dist/Stock Quant Desktop-Setup-<version>.exe`
+5. 설치파일 실행:
+   - 파일 탐색기에서 `.exe` 더블클릭
+   - 또는 PowerShell에서:
+     - `Start-Process ".\dist\Stock Quant Desktop-Setup-<version>.exe"`
+
+설치 후 실행:
+- 시작 메뉴 또는 바탕화면의 `Stock Quant Desktop` 실행
+- 로그인 화면 상단 `서버 연결`이 정상인지 확인 (`/api/health` 기준)
 
 ## NSIS 설치 동작 요약
 

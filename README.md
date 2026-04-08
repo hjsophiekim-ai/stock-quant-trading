@@ -124,6 +124,27 @@ Mock/실제 연동 구분:
 - `docs/deployment_backend.md` : backend 클라우드 배포 가이드 (Docker/health/ready)
 - `docs/runtime_env.md` : 환경별 설정 주입/보안 원칙
 
+## Render 배포 (Backend)
+
+Render Web Service 기준으로 바로 배포할 수 있도록 루트에 `render.yaml`을 제공합니다.
+
+- root directory: `.`
+- build command: `pip install --upgrade pip && pip install -r requirements/backend.txt`
+- start command: `uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT`
+- health check path: `/api/health`
+- service URL 형식: `https://<service>.onrender.com`
+
+초보자용 빠른 절차:
+1. Render -> `New +` -> `Blueprint` -> 이 저장소 연결
+2. 생성된 서비스 `Environment`에 `APP_SECRET_KEY` 입력
+3. 브로커 연동까지 쓸 경우 `KIS_APP_KEY`, `KIS_APP_SECRET`도 입력
+4. 배포 후 `https://<service>.onrender.com/api/health` 확인
+5. 앱에는 공용 URL만 넣기:
+   - 모바일: `EXPO_PUBLIC_BACKEND_URL=https://<service>.onrender.com`
+   - 데스크톱: `BACKEND_URL=https://<service>.onrender.com`
+
+상세 절차/환경변수/검증은 `docs/deployment_backend.md`를 참고하세요.
+
 ## 한국투자 API 연동 순서
 
 1. 토큰 발급
