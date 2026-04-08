@@ -1,23 +1,43 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# Monorepo: 루트에 `app`(트레이딩 코어)과 `backend/app`(FastAPI)가 공존합니다.
+# 자동 discovery는 `scripts` 등 다른 폴더까지 잡거나 multiple top-level 오류를 유발하므로
+# `include` 로 `app*` · `backend*` 만 명시합니다.
+
 [project]
 name = "stock-quant-trading"
 version = "0.1.0"
-description = "Safety-first quant trading skeleton"
+description = "Safety-first quant trading platform (monorepo: app + backend)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115.0",
-  "uvicorn>=0.30.0",
-  "pytest>=8.0.0",
-  "httpx>=0.27.0",
-  "pydantic>=2.6.0",
+  "uvicorn[standard]>=0.30.0",
+  "python-jose[cryptography]>=3.3.0",
+  "passlib[bcrypt]>=1.7.4",
+  "bcrypt>=4.0.1,<5",
+  "pydantic[email]>=2.6.0",
   "pydantic-settings>=2.2.1",
   "python-dotenv>=1.0.0",
+  "httpx>=0.27.0",
   "requests>=2.31.0",
   "cryptography>=42.0.0",
-  "redis>=5.0.0",
   "sqlalchemy>=2.0.0",
   "pandas>=2.2.0",
+  "redis>=5.0.0",
 ]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*", "backend*"]
+namespaces = false
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

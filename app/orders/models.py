@@ -3,17 +3,19 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 
 class OrderStatus(StrEnum):
     CREATED = "created"
+    APPROVED = "approved"
     PENDING_RISK = "pending_risk"
     REJECTED_RISK = "rejected_risk"
+    REJECTED = "rejected"
     SUBMITTED = "submitted"
     PARTIALLY_FILLED = "partially_filled"
     FILLED = "filled"
-    CANCELED = "canceled"
+    CANCELLED = "cancelled"
     FAILED = "failed"
 
 
@@ -37,6 +39,7 @@ class OrderResult:
     status: OrderStatus = OrderStatus.SUBMITTED
     filled_quantity: int = 0
     avg_fill_price: float | None = None
+    metadata: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

@@ -2,13 +2,26 @@
 
 import json
 import logging
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from threading import Thread
 from typing import Any
 
+from app.auth.kis_auth import KISTokenService
+from app.brokers.kis_paper_broker import KisPaperBroker
+from app.clients.kis_client import KISClient
 from app.config import Settings, get_settings
 from app.logging import setup_logging
+from app.risk.kill_switch import KillSwitch
+from app.risk.rules import RiskLimits, RiskRules
+from app.scheduler.equity_tracker import EquityTracker
 from app.scheduler.jobs import SchedulerJobs
+from app.scheduler.kis_universe import (
+    build_kis_stock_universe,
+    build_kospi_index_series,
+    build_mock_sp500_proxy_from_kospi,
+)
 
 
 class _HealthHandler(BaseHTTPRequestHandler):
@@ -52,14 +65,140 @@ def run(settings: Settings | None = None) -> dict[str, object]:
     health_server = start_health_server(port=8000)
     logger.info("Health endpoint ready: GET http://localhost:8000/health")
 
-    jobs = SchedulerJobs()
-    report = jobs.run_daily_cycle()
-    logger.info("End-of-day report generated: %s", report)
-    _check_shutdown_on_loss_limit(report, cfg, logger)
-
-    health_server.shutdown()
+    report: dict[str, object] = {}
+    try:
+        if cfg.paper_use_kis_execution:
+            if cfg.paper_trading_loop:
+                report = _run_kis_paper_trading_loop(cfg, logger)
+            else:
+                report = _run_single_kis_paper_cycle(cfg, logger)
+        else:
+            jobs = SchedulerJobs(risk_rules=_risk_rules_from_config(cfg))
+            report = jobs.run_daily_cycle()
+            logger.info("End-of-day report generated: %s", report)
+            _check_shutdown_on_loss_limit(report, cfg, logger)
+    finally:
+        health_server.shutdown()
     logger.info("Paper trading app finished")
     return report
+
+
+def _risk_rules_from_config(cfg: Settings) -> RiskRules:
+    return RiskRules(
+        RiskLimits(
+            daily_loss_limit_pct=cfg.daily_loss_limit_pct,
+            total_loss_limit_pct=cfg.total_loss_limit_pct,
+            default_stop_loss_pct=cfg.default_stop_loss_pct,
+        )
+    )
+
+
+def _validate_kis_paper_prereqs(cfg: Settings) -> None:
+    if cfg.trading_mode != "paper":
+        raise RuntimeError("KIS 모의 연동 자동매매는 TRADING_MODE=paper 에서만 사용할 수 있습니다.")
+    if not cfg.kis_app_key or not cfg.kis_app_secret:
+        raise RuntimeError("KIS_APP_KEY 및 KIS_APP_SECRET 이 필요합니다.")
+    if not cfg.resolved_account_no or not cfg.resolved_account_product_code:
+        raise RuntimeError("KIS_ACCOUNT_NO 및 KIS_ACCOUNT_PRODUCT_CODE 가 필요합니다.")
+    base = (cfg.kis_mock_base_url or "").rstrip("/")
+    if not base.startswith("https://openapivts"):
+        raise RuntimeError("모의 주문은 KIS_MOCK_BASE_URL 이 https://openapivts... 인 경우만 허용됩니다.")
+
+
+def _make_kis_paper_jobs(cfg: Settings, logger: logging.Logger) -> tuple[SchedulerJobs, KISClient]:
+    _validate_kis_paper_prereqs(cfg)
+    token_service = KISTokenService.from_env(cfg)
+    client = KISClient(
+        base_url=cfg.kis_mock_base_url.rstrip("/"),
+        token_provider=lambda: token_service.get_valid_access_token(),
+        app_key=cfg.kis_app_key,
+        app_secret=cfg.kis_app_secret,
+    )
+    broker = KisPaperBroker(
+        kis_client=client,
+        account_no=cfg.resolved_account_no,
+        account_product_code=cfg.resolved_account_product_code,
+        logger=logging.getLogger("app.brokers.kis_paper"),
+    )
+    equity_path = Path(cfg.paper_session_state_path)
+    tracker = EquityTracker(equity_path, logger=logging.getLogger("app.scheduler.equity_tracker"))
+    kill = KillSwitch(rules=_risk_rules_from_config(cfg))
+    jobs = SchedulerJobs(
+        broker=broker,
+        risk_rules=kill.rules,
+        kill_switch=kill,
+        equity_tracker=tracker,
+    )
+    logger.info(
+        "KIS paper execution enabled (mock host only). symbols=%s interval=%ss",
+        cfg.paper_trading_symbols,
+        cfg.paper_trading_interval_sec if cfg.paper_trading_loop else "n/a",
+    )
+    return jobs, client
+
+
+def _run_single_kis_paper_cycle(cfg: Settings, logger: logging.Logger) -> dict[str, object]:
+    jobs, client = _make_kis_paper_jobs(cfg, logger)
+    symbols = [s.strip() for s in cfg.paper_trading_symbols.split(",") if s.strip()]
+    universe = build_kis_stock_universe(
+        client,
+        symbols,
+        lookback_calendar_days=max(cfg.paper_kis_chart_lookback_days, 60),
+        logger=logger,
+    )
+    kospi = build_kospi_index_series(
+        client,
+        lookback_calendar_days=max(cfg.paper_kis_chart_lookback_days, 60),
+        logger=logger,
+    )
+    sp500 = build_mock_sp500_proxy_from_kospi(kospi)
+    report = jobs.run_daily_cycle(universe=universe, kospi_index=kospi, sp500_index=sp500)
+    logger.info("KIS paper cycle report: %s", report)
+    if report.get("halted"):
+        logger.warning("Cycle halted: %s", report.get("reason"))
+    else:
+        _check_shutdown_on_loss_limit(report, cfg, logger)
+    return report
+
+
+def _run_kis_paper_trading_loop(cfg: Settings, logger: logging.Logger) -> dict[str, object]:
+    jobs, client = _make_kis_paper_jobs(cfg, logger)
+    symbols = [s.strip() for s in cfg.paper_trading_symbols.split(",") if s.strip()]
+    last_report: dict[str, object] = {}
+    while True:
+        try:
+            universe = build_kis_stock_universe(
+                client,
+                symbols,
+                lookback_calendar_days=max(cfg.paper_kis_chart_lookback_days, 60),
+                logger=logger,
+            )
+            kospi = build_kospi_index_series(
+                client,
+                lookback_calendar_days=max(cfg.paper_kis_chart_lookback_days, 60),
+                logger=logger,
+            )
+            sp500 = build_mock_sp500_proxy_from_kospi(kospi)
+            last_report = jobs.run_daily_cycle(universe=universe, kospi_index=kospi, sp500_index=sp500)
+            logger.info("[LOOP] KIS paper cycle report: %s", last_report)
+        except Exception:
+            logger.exception("[LOOP] Cycle failed; backing off and retrying")
+            time.sleep(min(60, cfg.paper_trading_interval_sec))
+            continue
+
+        if last_report.get("halted") and last_report.get("kill_state") == "SYSTEM_OFF":
+            logger.critical("SYSTEM_OFF: total loss guard — stopping loop")
+            raise SystemExit(3)
+
+        if not last_report.get("halted"):
+            try:
+                _check_shutdown_on_loss_limit(last_report, cfg, logger)
+            except SystemExit:
+                raise
+            except Exception:
+                logger.exception("Post-cycle check failed")
+
+        time.sleep(cfg.paper_trading_interval_sec)
 
 
 def _validate_startup_runtime_safety(cfg: Settings, logger: logging.Logger) -> None:

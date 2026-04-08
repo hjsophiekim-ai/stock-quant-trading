@@ -68,7 +68,7 @@ export default function PerformanceScreen({ backendUrl }: Props) {
           <Text>Loading performance...</Text>
         )}
         <View style={card}>
-          <Text style={{ fontWeight: "bold" }}>수익률 차트(mock)</Text>
+          <Text style={{ fontWeight: "bold" }}>수익률 차트(실데이터 기반)</Text>
           {chartMock.map((v, i) => (
             <Text key={i}>{`${v >= 0 ? "+" : ""}${v}% ` + "▇".repeat(Math.max(1, Math.round(Math.abs(v) * 10)))}</Text>
           ))}

@@ -1,6 +1,7 @@
 <!doctype html>
 <html>
   <head>
+    <meta charset="utf-8" />
     <style>
       body {
         margin: 0;
@@ -9,7 +10,7 @@
       }
       .layout {
         display: grid;
-        grid-template-columns: 220px 1fr 320px;
+        grid-template-columns: 220px 1fr 360px;
         min-height: 100vh;
       }
       .sidebar {
@@ -28,6 +29,8 @@
         border-left: 1px solid #cbd5e1;
         background: #ffffff;
         padding: 16px;
+        overflow-y: auto;
+        max-height: 100vh;
       }
       .cards {
         display: grid;
@@ -41,21 +44,83 @@
         padding: 10px;
       }
       .risk-banner {
-        background: #fff7ed;
-        border: 1px solid #fdba74;
         border-radius: 8px;
         padding: 10px;
         margin-bottom: 12px;
+        border: 1px solid #fdba74;
+      }
+      .risk-banner.critical {
+        background: #fee2e2;
+        border-color: #f87171;
+      }
+      .risk-banner.warning {
+        background: #fff7ed;
+      }
+      .risk-banner.info {
+        background: #ecfdf5;
+        border-color: #6ee7b7;
       }
       table {
         width: 100%;
         border-collapse: collapse;
+        font-size: 13px;
       }
       td,
       th {
         border-bottom: 1px solid #e2e8f0;
         padding: 6px;
         text-align: left;
+      }
+      .muted {
+        color: #64748b;
+        font-size: 12px;
+      }
+      .log-line {
+        font-size: 11px;
+        font-family: Consolas, monospace;
+        margin: 4px 0;
+        word-break: break-all;
+      }
+      h3 {
+        margin-top: 16px;
+      }
+      .toolbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-bottom: 10px;
+      }
+      .toolbar button {
+        padding: 8px 14px;
+        border-radius: 8px;
+        border: 1px solid #cbd5e1;
+        background: #fff;
+        cursor: pointer;
+        font-weight: 700;
+      }
+      .toolbar button:hover {
+        background: #f1f5f9;
+      }
+      .load-state {
+        color: #2563eb;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .empty-row td {
+        color: #94a3b8;
+        font-style: italic;
+        padding: 14px 6px;
+      }
+      .todo-box {
+        background: #fffbeb;
+        border: 1px solid #fcd34d;
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-bottom: 12px;
+        font-size: 12px;
+        line-height: 1.45;
+        color: #78350f;
       }
     </style>
   </head>
@@ -64,6 +129,7 @@
       <aside class="sidebar">
         <h3>Auto Trading</h3>
         <p id="user"></p>
+        <p class="muted" id="pollStatus"></p>
         <button id="dashboardBtn">Dashboard</button>
         <button id="performanceBtn">Performance</button>
         <button id="paperTradingBtn">Paper Trading</button>
@@ -72,20 +138,134 @@
         <button id="logoutBtn">Logout</button>
       </aside>
       <main class="main">
-        <h2>Main Dashboard</h2>
-        <div class="risk-banner" id="riskBanner">Risk alert loading...</div>
-        <div class="cards">
-          <div class="card"><b>현재 모드</b><div id="mode"></div></div>
-          <div class="card"><b>계좌 상태</b><div id="accountStatus"></div></div>
-          <div class="card"><b>시스템 상태</b><div id="systemStatus"></div></div>
-          <div class="card"><b>오늘 수익률</b><div id="todayReturn"></div></div>
-          <div class="card"><b>월간 수익률</b><div id="monthlyReturn"></div></div>
-          <div class="card"><b>누적 수익률</b><div id="cumulativeReturn"></div></div>
-          <div class="card"><b>보유 포지션 수</b><div id="positionCount"></div></div>
-          <div class="card"><b>실현 손익</b><div id="realizedPnl"></div></div>
-          <div class="card"><b>미실현 손익</b><div id="unrealizedPnl"></div></div>
+        <h2>운영 대시보드</h2>
+        <div class="toolbar">
+          <button type="button" id="refreshNowBtn">지금 새로고침</button>
+          <span class="load-state" id="loadState"></span>
         </div>
-        <h3>최근 거래 5건</h3>
+        <p class="muted" id="updatedAt"></p>
+        <div class="risk-banner" id="riskBanner">Risk alert loading...</div>
+        <div id="brokerGate" class="card" style="display: none; background: #fffbeb; border-color: #fbbf24; margin-bottom: 12px"></div>
+        <div class="cards">
+          <div class="card">
+            <b>현재 모드</b>
+            <div id="mode"></div>
+            <div class="muted" id="liveArmed"></div>
+          </div>
+          <div class="card">
+            <b>브로커 (서버 .env)</b>
+            <div id="brokerStatus"></div>
+            <div class="muted" id="brokerBase"></div>
+          </div>
+          <div class="card">
+            <b>브로커 (앱 계정)</b>
+            <div id="userBrokerStatus">—</div>
+            <div class="muted" id="userBrokerDetail"></div>
+          </div>
+          <div class="card">
+            <b>런타임 엔진</b>
+            <div id="runtimeStatus"></div>
+            <div class="muted" id="runtimePhase"></div>
+          </div>
+          <div class="card">
+            <b>오늘 수익률</b>
+            <div id="todayReturn"></div>
+          </div>
+          <div class="card">
+            <b>월간 수익률</b>
+            <div id="monthlyReturn"></div>
+          </div>
+          <div class="card">
+            <b>누적 수익률</b>
+            <div id="cumulativeReturn"></div>
+          </div>
+          <div class="card">
+            <b>실현 / 미실현</b>
+            <div id="pnlPair"></div>
+          </div>
+          <div class="card">
+            <b>포지션 수</b>
+            <div id="positionCount"></div>
+            <div class="muted" id="portfolioSync"></div>
+          </div>
+          <div class="card">
+            <b>마지막 하트비트</b>
+            <div id="heartbeat"></div>
+          </div>
+        </div>
+
+        <h3>시장 국면 · 전략</h3>
+        <div class="card" style="margin-bottom: 12px">
+          <div id="regimeLine"></div>
+          <div id="strategyLine" class="muted"></div>
+        </div>
+
+        <h3>보유 포지션</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Qty</th>
+              <th>평단(KIS)</th>
+              <th>현재가</th>
+              <th>평가손익</th>
+            </tr>
+          </thead>
+          <tbody id="positionsBody"></tbody>
+        </table>
+
+        <h3>미체결 주문</h3>
+        <div class="muted" id="openOrdersError"></div>
+        <table>
+          <thead>
+            <tr>
+              <th>Order</th>
+              <th>Symbol</th>
+              <th>Side</th>
+              <th>Rem</th>
+              <th>Price</th>
+            </tr>
+          </thead>
+          <tbody id="openOrdersBody"></tbody>
+        </table>
+
+        <h3>스크리너 후보</h3>
+        <div class="todo-box" id="todoPanel" style="display: none">
+          <b>데이터 한계 (TODO)</b>
+          <div id="todoList"></div>
+        </div>
+
+        <div class="card" id="screenerPanel" style="margin-bottom: 12px">
+          <div id="screenerStatus">로딩...</div>
+          <p class="muted" style="margin: 6px 0 4px">선정 후보 (selected_candidates / 스크리너)</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Score</th>
+                <th>선정 요약</th>
+              </tr>
+            </thead>
+            <tbody id="screenerBody"></tbody>
+          </table>
+        </div>
+
+        <h3>최근 체결</h3>
+        <div class="muted" id="fillsError"></div>
+        <table>
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Side</th>
+              <th>Qty</th>
+              <th>Price</th>
+              <th>전략</th>
+            </tr>
+          </thead>
+          <tbody id="fillsBody"></tbody>
+        </table>
+
+        <h3>최근 거래 API</h3>
         <table>
           <thead>
             <tr>
@@ -100,63 +280,363 @@
         </table>
       </main>
       <aside class="admin">
-        <h3>관리자 상세 패널</h3>
-        <p>Runtime Control: running</p>
-        <p>Risk Layer: adaptive_deleverage=ON</p>
-        <p>Live Trading Lock: enabled</p>
-        <p>TODO: 관리자 전용 API 연결 (권한 role=admin 필요)</p>
+        <h3>관리자 패널</h3>
+        <p class="muted">POST /api/portfolio/sync · /api/runtime-engine/start|stop · /api/screening/refresh</p>
+        <div id="alertBox" style="margin-bottom: 12px"></div>
+        <p><b>추적 주문(active submitted)</b>: <span id="trackedActive">-</span></p>
+        <p><b>데모 Paper</b>: <span id="paperDemo">-</span></p>
+        <h4>최근 로그</h4>
+        <div id="logPanel"></div>
       </aside>
     </div>
     <script src="./runtime-config.js"></script>
+    <script src="./auth-session.js"></script>
     <script>
-      const accessToken = localStorage.getItem("accessToken");
-      const email = localStorage.getItem("email");
-      const backendUrl = window.RUNTIME_CONFIG?.BACKEND_URL || "http://localhost:8000";
-      const userText = document.getElementById("user");
-      if (!accessToken) {
-        window.location.href = "./login.html";
-      } else {
-        userText.innerText = `User: ${email || "-"}`;
+      const POLL_MS = 12000;
+      let session = null;
+      let backendUrl = "";
+
+      (async function boot() {
+        session = await resolveDesktopSession();
+        if (!session || !session.accessToken) {
+          window.location.href = "./login.html";
+          return;
+        }
+        backendUrl = effectiveBackendUrl();
+        document.getElementById("user").innerText = "User: " + (session.email || "-");
+        await loadDashboard();
+        await checkBrokerGate();
+        setInterval(loadDashboard, POLL_MS);
+        setInterval(checkBrokerGate, 60000);
+      })();
+
+      async function checkBrokerGate() {
+        const gate = document.getElementById("brokerGate");
+        if (!session) return;
+        try {
+          const r = await fetch(backendUrl + "/api/broker-accounts/me", {
+            headers: { Authorization: "Bearer " + session.accessToken },
+          });
+          if (r.status === 404) {
+            gate.style.display = "block";
+            gate.innerHTML =
+              "<b>브로커 계정이 아직 없습니다.</b> 한국투자 모의 계좌를 연결하면 paper 성과·동기화를 확인할 수 있습니다. " +
+              '<button type="button" id="gateBrokerBtn">브로커 설정으로 이동</button>';
+            const b = document.getElementById("gateBrokerBtn");
+            if (b)
+              b.onclick = () => {
+                window.location.href = "./broker-settings.html";
+              };
+          } else {
+            gate.style.display = "none";
+            gate.innerHTML = "";
+          }
+        } catch {
+          /* ignore */
+        }
       }
+
+      function setRiskBanner(level, message) {
+        const el = document.getElementById("riskBanner");
+        el.className = "risk-banner " + (level === "critical" ? "critical" : level === "warning" ? "warning" : "info");
+        el.innerText = "[" + level + "] " + message;
+      }
+
       async function loadDashboard() {
+        if (!session) return;
+        const auth = { Authorization: "Bearer " + session.accessToken };
+        document.getElementById("loadState").innerText = "로딩 중…";
         try {
           const [summaryRes, tradesRes] = await Promise.all([
-            fetch(`${backendUrl}/api/dashboard/summary`),
-            fetch(`${backendUrl}/api/trading/recent-trades`),
+            fetch(`${backendUrl}/api/dashboard/summary`, { headers: auth }),
+            fetch(`${backendUrl}/api/trading/recent-trades?limit=15`, { headers: auth }),
           ]);
           const summary = await summaryRes.json();
           const trades = await tradesRes.json();
           if (!summaryRes.ok) {
-            document.getElementById("riskBanner").innerText = summary?.detail || "dashboard load failed";
+            setRiskBanner("warning", summary?.detail || "dashboard load failed");
             return;
           }
-          document.getElementById("mode").innerText = summary.mode;
-          document.getElementById("accountStatus").innerText = summary.account_status;
-          document.getElementById("systemStatus").innerText = summary.system_status;
-          document.getElementById("todayReturn").innerText = `${summary.today_return_pct}%`;
-          document.getElementById("monthlyReturn").innerText = `${summary.monthly_return_pct}%`;
-          document.getElementById("cumulativeReturn").innerText = `${summary.cumulative_return_pct}%`;
-          document.getElementById("positionCount").innerText = String(summary.position_count);
-          document.getElementById("realizedPnl").innerText = Number(summary.realized_pnl).toLocaleString();
-          document.getElementById("unrealizedPnl").innerText = Number(summary.unrealized_pnl).toLocaleString();
-          document.getElementById("riskBanner").innerText = `Risk Warning: ${summary.risk_banner.message}`;
+
+          document.getElementById("updatedAt").innerText = summary.updated_at_utc
+            ? "갱신(UTC): " + summary.updated_at_utc + " · polling " + POLL_MS / 1000 + "s"
+            : "";
+          document.getElementById("pollStatus").innerText = "Polling " + POLL_MS / 1000 + "s";
+
+          setRiskBanner(summary.risk_banner?.level || "info", summary.risk_banner?.message || "");
+
+          document.getElementById("mode").innerText = summary.mode || "-";
+          document.getElementById("liveArmed").innerText = summary.live_execution_armed
+            ? "⚠ live 실행 다중 확인 완료"
+            : "live 실행 잠금 (기본)";
+
+          const b = summary.broker || {};
+          document.getElementById("brokerStatus").innerText =
+            (b.token_ok ? "토큰 OK" : "토큰 실패") + " — " + (b.message || "");
+          document.getElementById("brokerBase").innerText = (b.kis_api_base || "") + " · 런타임 KIS";
+
+          const ub = summary.user_broker_account;
+          if (ub) {
+            document.getElementById("userBrokerStatus").innerText =
+              ub.connection_status === "success" ? "연결됨" : "미연결 — " + (ub.connection_message || "");
+            document.getElementById("userBrokerDetail").innerText =
+              (ub.kis_account_no_masked || "") + " · 상품 " + (ub.kis_account_product_code || "") + " · " + (ub.trading_mode || "");
+          } else {
+            document.getElementById("userBrokerStatus").innerText = "미등록";
+            document.getElementById("userBrokerDetail").innerText = "브로커 설정에서 저장하세요.";
+          }
+
+          const todos = summary.dashboard_todos || [];
+          const tp = document.getElementById("todoPanel");
+          const tl = document.getElementById("todoList");
+          if (todos.length) {
+            tp.style.display = "block";
+            tl.innerHTML = todos.map(function (t) {
+              return "<p style='margin:4px 0'>· " + String(t).replace(/</g, "&lt;") + "</p>";
+            }).join("");
+          } else {
+            tp.style.display = "none";
+            tl.innerHTML = "";
+          }
+
+          const rt = summary.runtime_engine || {};
+          document.getElementById("runtimeStatus").innerText =
+            (summary.system_status || "-") +
+            " · 엔진 " +
+            (rt.engine_state || "-") +
+            " · 스레드 " +
+            (rt.loop_thread_alive ? "alive" : "stopped");
+          document.getElementById("runtimePhase").innerText =
+            "장세: " +
+            (rt.market_phase_now || "-") +
+            " · 실패 " +
+            (rt.failure_streak ?? 0) +
+            "/" +
+            (rt.max_failures ?? 0) +
+            (rt.last_error ? " · " + rt.last_error : "");
+
+          document.getElementById("todayReturn").innerText = Number(summary.today_return_pct || 0).toFixed(2) + "%";
+          document.getElementById("monthlyReturn").innerText =
+            Number(summary.monthly_return_pct || 0).toFixed(2) + "%";
+          document.getElementById("cumulativeReturn").innerText =
+            Number(summary.cumulative_return_pct || 0).toFixed(2) + "%";
+          document.getElementById("pnlPair").innerText =
+            Number(summary.realized_pnl || 0).toLocaleString() + " / " + Number(summary.unrealized_pnl || 0).toLocaleString();
+          document.getElementById("positionCount").innerText = String(summary.position_count ?? 0);
+          const po = summary.portfolio || {};
+          document.getElementById("portfolioSync").innerText =
+            (po.synced ? "포트폴리오 스냅샷 있음" : "스냅샷 없음 — POST /api/portfolio/sync") +
+            (po.updated_at_utc ? " · " + po.updated_at_utc : "");
+          document.getElementById("heartbeat").innerText = summary.last_heartbeat_utc || "-";
+
+          const mr = summary.market_regime || {};
+          document.getElementById("regimeLine").innerText =
+            "스크리너 국면: " +
+            (mr.screener_regime || "-") +
+            (mr.screener_blocked ? " (차단)" : "") +
+            " · 신호엔진: " +
+            (mr.signal_engine_regime || "-");
+          const st = summary.strategy_signals || {};
+          document.getElementById("strategyLine").innerText =
+            st.status === "empty"
+              ? st.message || ""
+              : "신호 " +
+                (st.pending_signals_count ?? 0) +
+                "건 · 종목진단 " +
+                (st.symbols_diagnosed ?? 0) +
+                " · " +
+                (st.evaluated_at_utc || "");
+
+          const pb = document.getElementById("positionsBody");
+          pb.innerHTML = "";
+          const posList = summary.positions || [];
+          if (!posList.length) {
+            const tr = document.createElement("tr");
+            tr.className = "empty-row";
+            tr.innerHTML = "<td colspan='5'>포지션 없음 — 포트폴리오 동기화 전이거나 보유 종목이 없습니다.</td>";
+            pb.appendChild(tr);
+          } else {
+            posList.forEach((p) => {
+              const tr = document.createElement("tr");
+              tr.innerHTML =
+                "<td>" +
+                p.symbol +
+                "</td><td>" +
+                p.quantity +
+                "</td><td>" +
+                (p.average_price_kis ?? p.average_price_internal) +
+                "</td><td>" +
+                (p.current_price ?? "-") +
+                "</td><td>" +
+                (p.unrealized_pnl_kis ?? "-") +
+                "</td>";
+              pb.appendChild(tr);
+            });
+          }
+
+          document.getElementById("openOrdersError").innerText = summary.open_orders_error || "";
+          const ob = document.getElementById("openOrdersBody");
+          ob.innerHTML = "";
+          const oo = summary.open_orders || [];
+          if (!oo.length) {
+            const tr = document.createElement("tr");
+            tr.className = "empty-row";
+            tr.innerHTML = "<td colspan='5'>미체결 없음</td>";
+            ob.appendChild(tr);
+          } else {
+            oo.forEach((o) => {
+              const tr = document.createElement("tr");
+              tr.innerHTML =
+                "<td>" +
+                (o.order_id || "").slice(0, 18) +
+                "…</td><td>" +
+                o.symbol +
+                "</td><td>" +
+                o.side +
+                "</td><td>" +
+                o.remaining_quantity +
+                "/" +
+                o.quantity +
+                "</td><td>" +
+                (o.price ?? "") +
+                "</td>";
+              ob.appendChild(tr);
+            });
+          }
+
+          document.getElementById("fillsError").innerText = summary.recent_fills_error || "";
+          const fb = document.getElementById("fillsBody");
+          fb.innerHTML = "";
+          const fills = summary.recent_fills || [];
+          if (!fills.length) {
+            const tr = document.createElement("tr");
+            tr.className = "empty-row";
+            tr.innerHTML = "<td colspan='5'>최근 체결 없음 — fills.jsonl / 동기화 확인</td>";
+            fb.appendChild(tr);
+          } else {
+            fills.forEach((f) => {
+              const tr = document.createElement("tr");
+              tr.innerHTML =
+                "<td>" +
+                f.symbol +
+                "</td><td>" +
+                f.side +
+                "</td><td>" +
+                f.quantity +
+                "</td><td>" +
+                f.price +
+                "</td><td>" +
+                (f.strategy_id || "") +
+                "</td>";
+              fb.appendChild(tr);
+            });
+          }
+
+          const sc = summary.screener || {};
+          const scStatus = document.getElementById("screenerStatus");
+          const scBody = document.getElementById("screenerBody");
+          scBody.innerHTML = "";
+          const cand = summary.selected_candidates && summary.selected_candidates.length ? summary.selected_candidates : sc.candidates || [];
+          if (sc.status === "empty" && !cand.length) {
+            scStatus.innerText = sc.message || "스크리너 데이터 없음";
+            const tr = document.createElement("tr");
+            tr.className = "empty-row";
+            tr.innerHTML = "<td colspan='3'>선정 후보 없음</td>";
+            scBody.appendChild(tr);
+          } else {
+            scStatus.innerText =
+              "국면: " +
+              (sc.regime || "-") +
+              " | 상태: " +
+              (sc.status || "-") +
+              " | 갱신(UTC): " +
+              (sc.updated_at_utc || "-") +
+              " | 차단: " +
+              (sc.blocked ? "예" : "아니오");
+            if (sc.block_reason) scStatus.innerText += " | 사유: " + sc.block_reason;
+            if (!cand.length) {
+              const tr = document.createElement("tr");
+              tr.className = "empty-row";
+              tr.innerHTML = "<td colspan='3'>후보 심볼 없음</td>";
+              scBody.appendChild(tr);
+            } else {
+              cand.forEach((c) => {
+                const tr = document.createElement("tr");
+                const reason0 = (c.reasons && c.reasons[0]) || "";
+                tr.innerHTML = "<td>" + c.symbol + "</td><td>" + c.total_score + "</td><td>" + reason0 + "</td>";
+                scBody.appendChild(tr);
+              });
+            }
+          }
+
           const tbody = document.getElementById("recentTradesBody");
           tbody.innerHTML = "";
-          (trades.items || []).forEach((trade) => {
+          const titems = trades.items || [];
+          if (!titems.length) {
             const tr = document.createElement("tr");
-            tr.innerHTML = `<td>${trade.trade_id}</td><td>${trade.symbol}</td><td>${trade.side}</td><td>${trade.quantity}</td><td>${trade.price}</td>`;
+            tr.className = "empty-row";
+            tr.innerHTML = "<td colspan='5'>recent-trades 비어 있음</td>";
             tbody.appendChild(tr);
-          });
+          } else {
+            titems.forEach((trade) => {
+              const tr = document.createElement("tr");
+              tr.innerHTML =
+                "<td>" +
+                (trade.trade_id || "").slice(0, 24) +
+                "</td><td>" +
+                trade.symbol +
+                "</td><td>" +
+                trade.side +
+                "</td><td>" +
+                trade.quantity +
+                "</td><td>" +
+                trade.price +
+                "</td>";
+              tbody.appendChild(tr);
+            });
+          }
+
+          const al = summary.alerts || {};
+          document.getElementById("alertBox").innerHTML =
+            (al.portfolio_sync_risk_review ? "<p style='color:#b91c1c'>portfolio sync risk 플래그</p>" : "") +
+            (al.runtime_risk_off ? "<p style='color:#b91c1c'>runtime RISK_OFF</p>" : "") +
+            (!al.broker_ok ? "<p style='color:#b45309'>브로커 토큰 실패</p>" : "");
+
+          const oe = summary.order_engine || {};
+          document.getElementById("trackedActive").innerText = String(oe.tracked_active_submitted ?? 0);
+          const pd = summary.paper_trading_demo || {};
+          document.getElementById("paperDemo").innerText =
+            (pd.status || "-") + " · " + (pd.strategy_id || "-") + " · hb " + (pd.last_heartbeat_at || "-");
+
+          const lp = document.getElementById("logPanel");
+          lp.innerHTML = "";
+          const logs = summary.recent_logs || [];
+          if (!logs.length) {
+            const d = document.createElement("div");
+            d.className = "log-line";
+            d.innerText = "(로그 없음)";
+            lp.appendChild(d);
+          } else {
+            logs.slice(0, 25).forEach((log) => {
+              const d = document.createElement("div");
+              d.className = "log-line";
+              d.innerText = "[" + log.source + "] " + log.message;
+              lp.appendChild(d);
+            });
+          }
         } catch {
-          document.getElementById("riskBanner").innerText = "network error";
+          setRiskBanner("warning", "network error");
+        } finally {
+          document.getElementById("loadState").innerText = "";
         }
       }
-      loadDashboard();
 
-      document.getElementById("logoutBtn").addEventListener("click", () => {
-        localStorage.removeItem("accessToken");
-        localStorage.removeItem("refreshToken");
-        localStorage.removeItem("email");
+      document.getElementById("refreshNowBtn").addEventListener("click", function () {
+        void loadDashboard();
+      });
+
+      document.getElementById("logoutBtn").addEventListener("click", async () => {
+        await clearDesktopSession();
         window.location.href = "./login.html";
       });
       document.getElementById("brokerSettingsBtn").addEventListener("click", () => {

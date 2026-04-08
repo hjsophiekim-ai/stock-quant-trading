@@ -1,151 +1,384 @@
 <!doctype html>
-<html>
+<html lang="ko">
   <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Paper Trading</title>
     <style>
-      body { font-family: Arial, sans-serif; margin: 0; background: #f8fafc; }
-      .layout { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
-      .sidebar { background: #0f172a; color: #e2e8f0; padding: 16px; }
-      .sidebar button { width: 100%; margin-bottom: 8px; }
-      .main { padding: 16px; }
-      .row { margin-bottom: 10px; }
-      .panel { background: white; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
-      .chart { font-family: monospace; white-space: pre-line; }
+      body {
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        margin: 0;
+        background: #f8fafc;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 220px 1fr;
+        min-height: 100vh;
+      }
+      .sidebar {
+        background: #0f172a;
+        color: #e2e8f0;
+        padding: 16px;
+      }
+      .sidebar button {
+        width: 100%;
+        margin-bottom: 8px;
+        padding: 8px;
+        cursor: pointer;
+      }
+      .main {
+        padding: 16px;
+      }
+      .row {
+        margin-bottom: 10px;
+      }
+      .panel {
+        background: white;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        padding: 10px;
+        margin-bottom: 10px;
+      }
+      .chart {
+        font-family: monospace;
+        white-space: pre-line;
+      }
+      .broker-gate {
+        background: #fff7ed;
+        border: 1px solid #fdba74;
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-bottom: 12px;
+        font-size: 0.88rem;
+        color: #9a3412;
+        line-height: 1.45;
+      }
+      #startBtn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      .toast {
+        position: fixed;
+        left: 16px;
+        right: 16px;
+        bottom: 20px;
+        max-width: 480px;
+        margin: 0 auto;
+        padding: 12px 14px;
+        border-radius: 8px;
+        color: #fff;
+        font-weight: 700;
+        font-size: 0.88rem;
+        display: none;
+        z-index: 50;
+      }
+      .toast.show {
+        display: block;
+      }
+      .toast.err {
+        background: #7f1d1d;
+      }
+      .toast.ok {
+        background: #14532d;
+      }
     </style>
   </head>
   <body>
     <div class="layout">
       <aside class="sidebar">
         <h3>Auto Trading</h3>
-        <button id="dashboardBtn">Dashboard</button>
-        <button id="performanceBtn">Performance</button>
-        <button id="brokerSettingsBtn">Broker Settings</button>
-        <button id="paperTradingBtn">Paper Trading</button>
-        <button id="liveSettingsBtn">Live Settings</button>
-        <button id="logoutBtn">Logout</button>
+        <button type="button" id="dashboardBtn">Dashboard</button>
+        <button type="button" id="performanceBtn">Performance</button>
+        <button type="button" id="brokerSettingsBtn">Broker Settings</button>
+        <button type="button" id="paperTradingBtn">Paper Trading</button>
+        <button type="button" id="liveSettingsBtn">Live Settings</button>
+        <button type="button" id="logoutBtn">Logout</button>
       </aside>
       <main class="main">
-        <h2>Paper Trading Console</h2>
-        <div class="row">
-          <b>Mode:</b> paper (live separated)
-          <br />
-          <b>Status:</b> <span id="statusText">stopped</span>
+        <h2>Paper Trading (KIS 모의)</h2>
+        <p class="row" style="color: #64748b; font-size: 0.88rem; line-height: 1.45">
+          앱에 저장한 <b>paper</b> 브로커로만 동작합니다. live 주문 경로와 혼합되지 않습니다. 전역
+          <b>/api/runtime-engine</b> 과는 별도 세션입니다. 시작은 <b>trading_mode=paper</b> 및 연결 테스트 성공 후에만
+          허용됩니다.
+        </p>
+        <div id="brokerGate" class="broker-gate" style="display: none"></div>
+        <div class="panel" style="background: #eff6ff; border-color: #bfdbfe">
+          <div><b>상태:</b> <span id="statusText">stopped</span></div>
+          <div style="margin-top: 6px"><b>실행 중 전략:</b> <span id="strategyRunning">—</span></div>
+          <div style="margin-top: 6px; font-size: 0.88rem; color: #475569">
+            마지막 틱(UTC): <span id="lastTick">—</span> · 실패 연속 <span id="failureStreak">0</span> /
+            <span id="maxFailures">—</span>
+          </div>
+          <div id="lastErrorRow" style="margin-top: 6px; font-size: 0.85rem; color: #b91c1c; display: none">
+            마지막 오류: <span id="lastErrorText"></span>
+          </div>
+        </div>
+        <div id="riskOffPanel" class="panel" style="display: none; background: #fef2f2; border-color: #fecaca">
+          <b>risk_off</b> — 연속 실패 한도에 도달했습니다. 원인을 확인한 뒤 아래에서 해제하거나 중지하세요.
+          <button type="button" id="riskResetBtn" style="margin-left: 12px">risk 해제 후 재개</button>
         </div>
         <div class="row">
-          <label>Strategy: </label>
+          <label>시작 시 전략: </label>
           <select id="strategyId">
             <option value="swing_v1">swing_v1</option>
             <option value="bull_focus_v1">bull_focus_v1</option>
             <option value="defensive_v1">defensive_v1</option>
           </select>
-          <button id="startBtn">Start</button>
-          <button id="stopBtn">Stop</button>
+          <button type="button" id="startBtn">모의 자동매매 시작</button>
+          <button type="button" id="stopBtn">중지</button>
           <span id="message"></span>
+        </div>
+        <div class="panel">
+          <h3>손익(마지막 틱 기준)</h3>
+          <p id="pnlSummary" style="margin: 0; font-size: 0.9rem">—</p>
         </div>
         <div class="panel">
           <h3>Positions</h3>
           <ul id="positionsList"></ul>
         </div>
         <div class="panel">
-          <h3>Return Chart (mock)</h3>
+          <h3>Return Chart (틱 요약 시각화)</h3>
           <div id="chart" class="chart"></div>
         </div>
         <div class="panel">
           <h3>Recent Logs</h3>
           <ul id="logsList"></ul>
         </div>
-        <!-- TODO: connect real APIs
-          GET /api/paper-trading/status
-          GET /api/paper-trading/positions
-          GET /api/paper-trading/pnl
-          GET /api/paper-trading/logs
-        -->
       </main>
     </div>
+    <div id="toast" class="toast" role="status"></div>
+
     <script src="./runtime-config.js"></script>
+    <script src="./auth-session.js"></script>
     <script>
-      const backendUrl = window.RUNTIME_CONFIG?.BACKEND_URL || "http://localhost:8000";
-      const accessToken = localStorage.getItem("accessToken");
-      if (!accessToken) window.location.href = "./login.html";
-
-      const statusText = document.getElementById("statusText");
-      const message = document.getElementById("message");
-      const positionsList = document.getElementById("positionsList");
-      const logsList = document.getElementById("logsList");
-      const chart = document.getElementById("chart");
-
-      async function refreshPaper() {
-        try {
-          const [statusRes, posRes, pnlRes, logsRes] = await Promise.all([
-            fetch(`${backendUrl}/api/paper-trading/status`),
-            fetch(`${backendUrl}/api/paper-trading/positions`),
-            fetch(`${backendUrl}/api/paper-trading/pnl`),
-            fetch(`${backendUrl}/api/paper-trading/logs`),
-          ]);
-          const statusData = await statusRes.json();
-          const posData = await posRes.json();
-          const pnlData = await pnlRes.json();
-          const logsData = await logsRes.json();
-          if (statusRes.ok) statusText.innerText = statusData.status || "stopped";
-          positionsList.innerHTML = "";
-          (posData.items || []).forEach((p) => {
-            const li = document.createElement("li");
-            li.innerText = `${p.symbol} / qty=${p.quantity} / avg=${p.average_price}`;
-            positionsList.appendChild(li);
-          });
-          chart.innerText = (pnlData.chart || [])
-            .map((x) => "▇".repeat(Math.max(1, Math.round(Number(x.return_pct || 0) * 10))))
-            .join("\n");
-          logsList.innerHTML = "";
-          (logsData.items || []).forEach((l) => {
-            const li = document.createElement("li");
-            li.innerText = l.message;
-            logsList.appendChild(li);
-          });
-        } catch {
-          message.innerText = "network error";
+      (async function () {
+        const session = await resolveDesktopSession();
+        if (!session || !session.accessToken) {
+          window.location.href = "./login.html";
+          return;
         }
-      }
-      refreshPaper();
+        const backendUrl = effectiveBackendUrl();
+        const accessToken = session.accessToken;
 
-      document.getElementById("startBtn").addEventListener("click", async () => {
-        const strategyId = document.getElementById("strategyId").value;
-        const res = await fetch(`${backendUrl}/api/paper-trading/start`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ strategy_id: strategyId }),
+        function authHeaders(extra) {
+          return { Authorization: "Bearer " + accessToken, ...(extra || {}) };
+        }
+
+        const statusText = document.getElementById("statusText");
+        const strategyRunningEl = document.getElementById("strategyRunning");
+        const lastTickEl = document.getElementById("lastTick");
+        const failureStreakEl = document.getElementById("failureStreak");
+        const maxFailuresEl = document.getElementById("maxFailures");
+        const lastErrorRow = document.getElementById("lastErrorRow");
+        const lastErrorText = document.getElementById("lastErrorText");
+        const riskOffPanel = document.getElementById("riskOffPanel");
+        const riskResetBtn = document.getElementById("riskResetBtn");
+        const pnlSummary = document.getElementById("pnlSummary");
+        const message = document.getElementById("message");
+        const positionsList = document.getElementById("positionsList");
+        const logsList = document.getElementById("logsList");
+        const chart = document.getElementById("chart");
+        const startBtn = document.getElementById("startBtn");
+        const brokerGateEl = document.getElementById("brokerGate");
+        const toastEl = document.getElementById("toast");
+        let toastT = null;
+
+        function toast(type, text) {
+          if (toastT) clearTimeout(toastT);
+          toastEl.textContent = text;
+          toastEl.className = "toast show " + (type === "ok" ? "ok" : "err");
+          toastT = setTimeout(function () {
+            toastEl.classList.remove("show");
+          }, 3200);
+        }
+
+        async function checkBrokerGate() {
+          try {
+            const r = await fetch(backendUrl + "/api/broker-accounts/me/status", { headers: authHeaders() });
+            if (r.status === 404) {
+              startBtn.disabled = true;
+              brokerGateEl.style.display = "block";
+              brokerGateEl.textContent =
+                "브로커 설정에서 계좌를 저장하고 연결 테스트를 통과해야 모의 자동매매를 시작할 수 있습니다.";
+              return false;
+            }
+            const d = await r.json();
+            if (!r.ok) {
+              startBtn.disabled = true;
+              brokerGateEl.style.display = "block";
+              brokerGateEl.textContent = typeof d.detail === "string" ? d.detail : "브로커 상태를 확인할 수 없습니다.";
+              return false;
+            }
+            var tm = d.trading_mode && String(d.trading_mode).toLowerCase();
+            if (tm && tm !== "paper") {
+              startBtn.disabled = true;
+              brokerGateEl.style.display = "block";
+              brokerGateEl.textContent =
+                "Paper 자동매매는 브로커 trading_mode가 paper일 때만 시작할 수 있습니다. live는 차단됩니다.";
+              return false;
+            }
+            if (d.ok === true) {
+              startBtn.disabled = false;
+              brokerGateEl.style.display = "none";
+              return true;
+            }
+            startBtn.disabled = true;
+            brokerGateEl.style.display = "block";
+            brokerGateEl.textContent =
+              d.connection_message ||
+              "연결 테스트에 성공한 뒤에만 시작할 수 있습니다. 브로커 설정에서 「연결 테스트」를 실행하세요.";
+            return false;
+          } catch {
+            startBtn.disabled = true;
+            brokerGateEl.style.display = "block";
+            brokerGateEl.textContent = "네트워크 오류로 브로커 상태를 확인하지 못했습니다.";
+            return false;
+          }
+        }
+
+        async function refreshPaper() {
+          await checkBrokerGate();
+          try {
+            const [statusRes, posRes, pnlRes, logsRes] = await Promise.all([
+              fetch(backendUrl + "/api/paper-trading/status"),
+              fetch(backendUrl + "/api/paper-trading/positions"),
+              fetch(backendUrl + "/api/paper-trading/pnl"),
+              fetch(backendUrl + "/api/paper-trading/logs"),
+            ]);
+            const statusData = await statusRes.json();
+            const posData = await posRes.json();
+            const pnlData = await pnlRes.json();
+            const logsData = await logsRes.json();
+            if (statusRes.ok) {
+              var st = statusData.status || "stopped";
+              statusText.innerText = st;
+              strategyRunningEl.innerText = statusData.strategy_id || "—";
+              lastTickEl.innerText = statusData.last_tick_at || "—";
+              failureStreakEl.innerText = String(statusData.failure_streak != null ? statusData.failure_streak : 0);
+              maxFailuresEl.innerText = String(statusData.max_failures != null ? statusData.max_failures : "—");
+              if (statusData.last_error) {
+                lastErrorRow.style.display = "block";
+                lastErrorText.innerText = statusData.last_error;
+              } else {
+                lastErrorRow.style.display = "none";
+                lastErrorText.innerText = "";
+              }
+              riskOffPanel.style.display = st === "risk_off" ? "block" : "none";
+            }
+            if (pnlRes.ok) {
+              var tc = Number(pnlData.today_return_pct != null ? pnlData.today_return_pct : 0);
+              var cc = Number(pnlData.cumulative_return_pct != null ? pnlData.cumulative_return_pct : 0);
+              var pc = Number(pnlData.position_count != null ? pnlData.position_count : 0);
+              pnlSummary.innerText =
+                "당일수익률(틱기준) " + tc.toFixed(2) + "% · 누적 " + cc.toFixed(2) + "% · 포지션 " + pc + "개";
+            }
+            positionsList.innerHTML = "";
+            (posData.items || []).forEach(function (p) {
+              const li = document.createElement("li");
+              li.innerText = p.symbol + " / qty=" + p.quantity + " / avg=" + p.average_price;
+              positionsList.appendChild(li);
+            });
+            chart.innerText = (pnlData.chart || [])
+              .map(function (x) {
+                return "▇".repeat(Math.max(1, Math.round(Number(x.return_pct || 0) * 10)));
+              })
+              .join("\n");
+            logsList.innerHTML = "";
+            (logsData.items || []).forEach(function (l) {
+              const li = document.createElement("li");
+              var ts = l.ts || "";
+              var lv = l.level || "";
+              li.innerText = (ts ? "[" + ts + "] " : "") + (lv ? lv + ": " : "") + (l.message || "");
+              logsList.appendChild(li);
+            });
+          } catch {
+            message.innerText = "network error";
+          }
+        }
+
+        await refreshPaper();
+        setInterval(function () {
+          refreshPaper();
+        }, 15000);
+
+        riskResetBtn.addEventListener("click", async function () {
+          const res = await fetch(backendUrl + "/api/paper-trading/risk-reset", {
+            method: "POST",
+            headers: authHeaders(),
+          });
+          const data = await res.json().catch(function () {
+            return {};
+          });
+          if (!res.ok) {
+            const detail = typeof data.detail === "string" ? data.detail : "risk-reset failed";
+            message.innerText = detail;
+            toast("err", detail);
+            return;
+          }
+          toast("ok", "risk_off 해제됨.");
+          refreshPaper();
         });
-        const data = await res.json();
-        if (!res.ok) {
-          message.innerText = data?.detail || "start failed";
-          return;
-        }
-        statusText.innerText = data.status;
-        message.innerText = "started";
-        refreshPaper();
-      });
 
-      document.getElementById("stopBtn").addEventListener("click", async () => {
-        const res = await fetch(`${backendUrl}/api/paper-trading/stop`, { method: "POST" });
-        const data = await res.json();
-        if (!res.ok) {
-          message.innerText = data?.detail || "stop failed";
-          return;
-        }
-        statusText.innerText = data.status;
-        message.innerText = "stopped";
-        refreshPaper();
-      });
-      document.getElementById("dashboardBtn").addEventListener("click", () => (window.location.href = "./dashboard.html"));
-      document.getElementById("performanceBtn").addEventListener("click", () => (window.location.href = "./performance.html"));
-      document.getElementById("brokerSettingsBtn").addEventListener("click", () => (window.location.href = "./broker-settings.html"));
-      document.getElementById("paperTradingBtn").addEventListener("click", () => (window.location.href = "./paper-trading.html"));
-      document.getElementById("liveSettingsBtn").addEventListener("click", () => (window.location.href = "./live-settings.html"));
-      document.getElementById("logoutBtn").addEventListener("click", () => {
-        localStorage.removeItem("accessToken");
-        localStorage.removeItem("refreshToken");
-        localStorage.removeItem("email");
-        window.location.href = "./login.html";
-      });
+        document.getElementById("startBtn").addEventListener("click", async function () {
+          if (startBtn.disabled) return;
+          const strategyId = document.getElementById("strategyId").value;
+          const res = await fetch(backendUrl + "/api/paper-trading/start", {
+            method: "POST",
+            headers: authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify({ strategy_id: strategyId }),
+          });
+          const data = await res.json().catch(function () {
+            return {};
+          });
+          if (!res.ok) {
+            const detail = typeof data.detail === "string" ? data.detail : "start failed";
+            message.innerText = detail;
+            toast("err", detail);
+            return;
+          }
+          statusText.innerText = data.status;
+          message.innerText = "시작됨";
+          toast("ok", "모의 자동매매를 시작했습니다.");
+          refreshPaper();
+        });
+
+        document.getElementById("stopBtn").addEventListener("click", async function () {
+          const res = await fetch(backendUrl + "/api/paper-trading/stop", { method: "POST", headers: authHeaders() });
+          const data = await res.json().catch(function () {
+            return {};
+          });
+          if (!res.ok) {
+            const detail = typeof data.detail === "string" ? data.detail : "stop failed";
+            message.innerText = detail;
+            toast("err", detail);
+            return;
+          }
+          statusText.innerText = data.status;
+          message.innerText = "중지됨";
+          toast("ok", "모의 자동매매를 중지했습니다.");
+          refreshPaper();
+        });
+
+        document.getElementById("dashboardBtn").addEventListener("click", function () {
+          window.location.href = "./dashboard.html";
+        });
+        document.getElementById("performanceBtn").addEventListener("click", function () {
+          window.location.href = "./performance.html";
+        });
+        document.getElementById("brokerSettingsBtn").addEventListener("click", function () {
+          window.location.href = "./broker-settings.html";
+        });
+        document.getElementById("paperTradingBtn").addEventListener("click", function () {
+          window.location.href = "./paper-trading.html";
+        });
+        document.getElementById("liveSettingsBtn").addEventListener("click", function () {
+          window.location.href = "./live-settings.html";
+        });
+        document.getElementById("logoutBtn").addEventListener("click", async function () {
+          await clearDesktopSession();
+          window.location.href = "./login.html";
+        });
+      })();
     </script>
   </body>
 </html>

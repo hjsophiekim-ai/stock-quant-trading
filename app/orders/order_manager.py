@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from app.brokers.base_broker import BaseBroker
 from app.orders.models import OrderIntent, OrderRequest, OrderResult, OrderSignal, OrderStatus
 from app.portfolio.positions import Position, apply_buy_fill, apply_sell_fill, update_high_watermark
+from app.risk.audit_hook import emit_risk_audit
 from app.risk.rules import RiskRules, RiskSnapshot
 
 
@@ -25,6 +26,7 @@ class OrderManager:
     def evaluate_signal(self, signal: OrderSignal, snapshot: RiskSnapshot) -> OrderIntent:
         order = self.create_order_from_signal(signal)
         decision = self.risk_rules.approve_order(order=order, snapshot=snapshot)
+        emit_risk_audit(order, snapshot, decision)
         return OrderIntent(
             signal=signal,
             approved=decision.approved,

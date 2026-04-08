@@ -45,6 +45,7 @@ class BrokerSecretService:
     db_path: str
     encryption_seed: str
     kis_base_url: str
+    kis_mock_base_url: str = ""
     timeout_sec: int = 8
 
     def __post_init__(self) -> None:
@@ -82,6 +83,12 @@ class BrokerSecretService:
 
     def _decrypt(self, encrypted: str) -> str:
         return self._cipher.decrypt(encrypted.encode("utf-8")).decode("utf-8")
+
+    def _resolve_kis_api_base(self, trading_mode: str) -> str:
+        mode = (trading_mode or "paper").strip().lower()
+        if mode == "paper":
+            return (self.kis_mock_base_url or self.kis_base_url).rstrip("/")
+        return self.kis_base_url.rstrip("/")
 
     def upsert_account(self, user_id: str, payload: BrokerAccountUpsertRequest) -> BrokerAccountResponse:
         now = _utc_now_iso()
@@ -140,7 +147,7 @@ class BrokerSecretService:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM broker_accounts WHERE user_id = ?", (user_id,)).fetchone()
         if row is None:
-            raise ValueError("Broker account not found")
+            raise ValueError("등록된 브로커 계정이 없습니다.")
         return BrokerAccountResponse(
             id=row["id"],
             user_id=row["user_id"],
@@ -155,6 +162,21 @@ class BrokerSecretService:
             created_at=_to_dt(row["created_at"]) or datetime.now(timezone.utc),
         )
 
+    def get_plain_credentials(self, user_id: str) -> tuple[str, str, str, str, str]:
+        """서버 내부(모의 자동매매 루프) 전용 — 평문 키·계좌. 외부로 반환 금지."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM broker_accounts WHERE user_id = ?", (user_id,)).fetchone()
+        if row is None:
+            raise ValueError("등록된 브로커 계정이 없습니다.")
+        mode = str(row["trading_mode"] or "paper").strip().lower()
+        return (
+            self._decrypt(row["kis_app_key_enc"]),
+            self._decrypt(row["kis_app_secret_enc"]),
+            self._decrypt(row["kis_account_no_enc"]),
+            self._decrypt(row["kis_account_product_code_enc"]),
+            mode,
+        )
+
     def delete_account(self, user_id: str) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM broker_accounts WHERE user_id = ?", (user_id,))
@@ -164,12 +186,13 @@ class BrokerSecretService:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM broker_accounts WHERE user_id = ?", (user_id,)).fetchone()
         if row is None:
-            raise ValueError("Broker account not found")
+            raise ValueError("등록된 브로커 계정이 없습니다.")
 
         app_key = self._decrypt(row["kis_app_key_enc"])
         app_secret = self._decrypt(row["kis_app_secret_enc"])
         account_no = self._decrypt(row["kis_account_no_enc"])
         account_product_code = self._decrypt(row["kis_account_product_code_enc"])
+        api_base = self._resolve_kis_api_base(str(row["trading_mode"]))
 
         status = "failed"
         message = "토큰 발급 실패"
@@ -179,7 +202,7 @@ class BrokerSecretService:
             app_secret=app_secret,
             account_no=account_no,
             account_product_code=account_product_code,
-            base_url=self.kis_base_url,
+            base_url=api_base,
         )
         if validation_issues:
             message = " / ".join(validation_issues)
@@ -187,7 +210,7 @@ class BrokerSecretService:
             token_result = issue_access_token(
                 app_key=app_key,
                 app_secret=app_secret,
-                base_url=self.kis_base_url,
+                base_url=api_base,
                 timeout_sec=self.timeout_sec,
             )
             if token_result.ok:

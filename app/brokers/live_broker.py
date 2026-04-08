@@ -25,6 +25,8 @@ class LiveBroker(BaseBroker):
     @classmethod
     def from_env(cls, kis_client: KISClient, account_no: str, account_product_code: str, settings: Settings | None = None) -> "LiveBroker":
         cfg = settings or get_settings()
+        # REST 클라이언트 실전 주문 잠금: 다중 플래그 통과 시에만 해제
+        kis_client.live_execution_unlocked = bool(cfg.is_live_order_allowed)
         return cls(
             kis_client=kis_client,
             account_no=account_no,

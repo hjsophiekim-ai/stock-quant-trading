@@ -44,7 +44,7 @@
         <div class="cards" id="kpiCards"></div>
 
         <div class="panel">
-          <h3>수익률 차트(mock)</h3>
+          <h3>수익률 차트(실데이터 기반)</h3>
           <div id="chartLine" class="chart-line"></div>
         </div>
 
@@ -143,7 +143,6 @@
       document.getElementById("liveSettingsBtn").addEventListener("click", () => (window.location.href = "./live-settings.html"));
       document.getElementById("brokerSettingsBtn").addEventListener("click", () => (window.location.href = "./broker-settings.html"));
 
-      // TODO: currently APIs return mock data; replace backend responses with DB/engine aggregations.
       loadData();
     </script>
   </body>

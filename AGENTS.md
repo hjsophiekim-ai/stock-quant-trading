@@ -70,6 +70,7 @@
 - 한국투자 토큰 발급 테스트는 서버에서만 호출하며, 앱은 상태만 조회/표시합니다.
 - 앱의 모의투자 실행/중지/모니터링 기능은 `paper-trading` 전용 API로 분리합니다.
 - 모의투자 제어 API는 `PaperBroker`만 사용하며, live 주문 경로와 로직을 혼합하지 않습니다.
+- 코어 실행기(`python -m app.main`)에서 KIS **모의투자 REST**와 주문을 연결할 때는 `KisPaperBroker`만 사용합니다(`https://openapivts...` 전용, 실전 도메인과 분리). 환경변수 `PAPER_USE_KIS_EXECUTION`, `PAPER_TRADING_LOOP` 등으로 켭니다.
 - live trading unlock은 환경변수 + 앱 다중 확인 + 추가 승인 상태를 모두 요구합니다.
 - `LIVE_TRADING=true` 단독으로는 live 주문을 허용하지 않습니다.
 - live 안전 설정 변경은 반드시 이력(history)으로 남기고, 앱에 위험 경고를 표시합니다.
@@ -107,3 +108,6 @@
 4. 실거래 전환(잠금 해제)
 
 순서를 건너뛰는 구현은 허용하지 않습니다.
+
+- 로컬에서 모의 계좌·백엔드까지 빠르게 띄우는 절차는 `docs/quickstart_real_mock_trading.md` 와 `env.paper.example` / `scripts/run_backend.*` 를 따른다.
+- 일반 사용자 설치형 제품(Win 설치본·Android·백엔드 번들) 목표는 `docs/product_architecture.md` 에 정리한다.

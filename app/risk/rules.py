@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from app.orders.models import OrderRequest
+from app.risk.reason_codes import RiskReasonCode
 
 MarketRegime = Literal["bullish_trend", "bearish_trend", "sideways", "high_volatility_risk"]
 
@@ -36,6 +37,7 @@ class RiskLimits:
     default_stop_loss_pct: float = 4.0
     bearish_max_positions: int = 2
     bearish_max_position_weight: float = 0.08
+    bearish_min_position_weight: float = 0.03
     bearish_max_stop_loss_pct: float = 2.5
     bearish_max_new_entries_per_day: int = 1
     bearish_min_entry_price: float = 0.0
@@ -50,6 +52,10 @@ class RiskLimits:
     adaptive_performance_floor_pct: float = -1.0
     adaptive_min_entry_score: float = 0.65
     adaptive_enable_entry_filter: bool = True
+    """단일 매수 주문의 최대 명목가(자기자본 대비 %). 주문 실수·과도한 단일 베팅 방지."""
+    max_single_order_notional_pct: float = 25.0
+    """비어 있으면 화이트리스트 미사용. 값이 있으면 해당 종목만 매수 허용."""
+    allowed_symbols: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -79,6 +85,10 @@ class RiskRules:
     def can_trade(self, snapshot: RiskSnapshot) -> bool:
         return self.evaluate_global_guard(snapshot).approved
 
+    def can_open_new_risk(self, snapshot: RiskSnapshot) -> bool:
+        """신규 매수·리스크 증가 허용 여부(청산·매도와 구분)."""
+        return self.evaluate_global_guard(snapshot).approved
+
     def validate_stop_loss(self, stop_loss_pct: float | None) -> bool:
         if stop_loss_pct is None:
             return False
@@ -88,33 +98,33 @@ class RiskRules:
         if snapshot.trading_cooldown_until is not None and datetime.now(timezone.utc) < snapshot.trading_cooldown_until:
             return RiskDecision(
                 approved=False,
-                reason_code="TRADING_COOLDOWN_ACTIVE",
+                reason_code=RiskReasonCode.TRADING_COOLDOWN_ACTIVE.value,
                 reason=f"Trading cooldown active until {snapshot.trading_cooldown_until.isoformat()}",
                 is_hard_stop=False,
             )
         if snapshot.total_pnl_pct <= -abs(self.limits.total_loss_limit_pct):
             return RiskDecision(
                 approved=False,
-                reason_code="SYSTEM_OFF_TOTAL_LOSS",
-                reason="Account total loss limit reached (-10%): system OFF",
+                reason_code=RiskReasonCode.SYSTEM_OFF_TOTAL_LOSS.value,
+                reason="Account total loss limit reached: system risk_off (신규 리스크 중단)",
                 is_hard_stop=True,
             )
         if snapshot.daily_pnl_pct <= -abs(self.limits.daily_loss_limit_pct):
             return RiskDecision(
                 approved=False,
-                reason_code="HALT_DAILY_LOSS",
-                reason="Daily loss limit reached (-3%): trading halted for today",
+                reason_code=RiskReasonCode.HALT_DAILY_LOSS.value,
+                reason="Daily loss limit reached: 신규 매수 중단 (청산·매도는 별도 허용)",
                 is_hard_stop=True,
             )
         rolling = rolling_trade_pnl_pct(snapshot.recent_trade_pnls, self.limits.rolling_loss_window_trades, snapshot.equity)
         if rolling <= -abs(self.limits.rolling_loss_limit_pct):
             return RiskDecision(
                 approved=False,
-                reason_code="HALT_ROLLING_LOSS_LIMIT",
+                reason_code=RiskReasonCode.HALT_ROLLING_LOSS_LIMIT.value,
                 reason=f"Rolling loss limit reached ({rolling:.2f}% <= -{self.limits.rolling_loss_limit_pct:.2f}%)",
                 is_hard_stop=False,
             )
-        return RiskDecision(approved=True, reason_code="OK", reason="Global risk guard passed")
+        return RiskDecision(approved=True, reason_code=RiskReasonCode.OK.value, reason="Global risk guard passed")
 
     def approve_order(
         self,
@@ -125,25 +135,43 @@ class RiskRules:
     ) -> RiskDecision:
         now_utc = now or datetime.now(timezone.utc)
 
+        # 손절·리스크 축소 매도는 일일/총 손실 한도보다 우선(자동 청산 유지).
+        if order.side == "sell":
+            return RiskDecision(
+                approved=True,
+                reason_code=RiskReasonCode.OK_SELL.value,
+                reason="Sell order allowed: stop-loss / risk reduction priority",
+            )
+
         global_guard = self.evaluate_global_guard(snapshot)
         if not global_guard.approved:
             return global_guard
 
-        if order.side == "sell":
-            # Sell must pass even when market filters are bad, because stop-loss is absolute priority.
-            return RiskDecision(approved=True, reason_code="OK_SELL", reason="Sell order allowed for risk reduction")
+        if order.quantity <= 0:
+            return RiskDecision(
+                approved=False,
+                reason_code=RiskReasonCode.ORDER_QUANTITY_INVALID.value,
+                reason="Order quantity must be positive",
+            )
+
+        if self.limits.allowed_symbols and order.symbol not in self.limits.allowed_symbols:
+            return RiskDecision(
+                approved=False,
+                reason_code=RiskReasonCode.SYMBOL_NOT_ALLOWED.value,
+                reason="Symbol not in allowed universe for automated buys",
+            )
 
         adaptive = self._build_adaptive_guard(snapshot)
         if adaptive.cooldown_required:
             return RiskDecision(
                 approved=False,
-                reason_code="TRADING_COOLDOWN_REQUIRED_ADAPTIVE",
+                reason_code=RiskReasonCode.TRADING_COOLDOWN_REQUIRED_ADAPTIVE.value,
                 reason="Loss adaptation triggered cooldown due to deteriorating recent performance",
             )
         if snapshot.todays_new_entries >= adaptive.max_new_entries:
             return RiskDecision(
                 approved=False,
-                reason_code="ADAPTIVE_NEW_ENTRY_LIMIT",
+                reason_code=RiskReasonCode.ADAPTIVE_NEW_ENTRY_LIMIT.value,
                 reason=f"Adaptive defense: max new entries reached ({adaptive.max_new_entries})",
             )
         if (
@@ -153,7 +181,7 @@ class RiskRules:
         ):
             return RiskDecision(
                 approved=False,
-                reason_code="ADAPTIVE_ENTRY_FILTER_BLOCK",
+                reason_code=RiskReasonCode.ADAPTIVE_ENTRY_FILTER_BLOCK.value,
                 reason=(
                     f"Adaptive defense: entry score {snapshot.latest_entry_score:.2f} "
                     f"below required {adaptive.min_entry_score:.2f}"
@@ -163,13 +191,13 @@ class RiskRules:
         if snapshot.market_regime == "high_volatility_risk" and self.limits.high_vol_new_entry_blocked:
             return RiskDecision(
                 approved=False,
-                reason_code="BLOCK_REGIME_HIGH_VOLATILITY_NEW_ENTRY",
+                reason_code=RiskReasonCode.BLOCK_REGIME_HIGH_VOLATILITY_NEW_ENTRY.value,
                 reason="High volatility regime: new entries are blocked, only position management allowed",
             )
         if snapshot.market_regime == "bearish_trend" and snapshot.todays_new_entries >= self.limits.bearish_max_new_entries_per_day:
             return RiskDecision(
                 approved=False,
-                reason_code="BLOCK_REGIME_BEARISH_NEW_ENTRY_LIMIT",
+                reason_code=RiskReasonCode.BLOCK_REGIME_BEARISH_NEW_ENTRY_LIMIT.value,
                 reason=(
                     f"Bearish regime daily new entry limit reached "
                     f"({self.limits.bearish_max_new_entries_per_day})"
@@ -179,14 +207,14 @@ class RiskRules:
         if not snapshot.market_filter_ok:
             return RiskDecision(
                 approved=False,
-                reason_code="BLOCK_BAD_MARKET_FILTER",
+                reason_code=RiskReasonCode.BLOCK_BAD_MARKET_FILTER.value,
                 reason="Market filter is bad: new buy orders are blocked",
             )
 
         if not self.validate_stop_loss(order.stop_loss_pct):
             return RiskDecision(
                 approved=False,
-                reason_code="MISSING_STOP_LOSS",
+                reason_code=RiskReasonCode.MISSING_STOP_LOSS.value,
                 reason="Stop-loss is required and must be positive",
             )
 
@@ -195,7 +223,7 @@ class RiskRules:
             if order.stop_loss_pct > max_stop_loss:
                 return RiskDecision(
                     approved=False,
-                    reason_code="BLOCK_REGIME_BEARISH_STOP_LOSS_TOO_WIDE",
+                    reason_code=RiskReasonCode.BLOCK_REGIME_BEARISH_STOP_LOSS_TOO_WIDE.value,
                     reason=f"Bearish regime requires tighter stop-loss <= {max_stop_loss:.2f}%",
                 )
 
@@ -203,15 +231,27 @@ class RiskRules:
         if cooldown is not None and now_utc < cooldown:
             return RiskDecision(
                 approved=False,
-                reason_code="REENTRY_COOLDOWN",
+                reason_code=RiskReasonCode.REENTRY_COOLDOWN.value,
                 reason=f"Symbol re-entry cooldown active until {cooldown.isoformat()}",
             )
 
         if order.price is None or order.price <= 0:
             return RiskDecision(
                 approved=False,
-                reason_code="INVALID_ORDER_PRICE",
+                reason_code=RiskReasonCode.INVALID_ORDER_PRICE.value,
                 reason="Buy order requires positive price for risk sizing checks",
+            )
+
+        notional = float(order.quantity) * float(order.price)
+        max_notional = snapshot.equity * (self.limits.max_single_order_notional_pct / 100.0)
+        if max_notional > 0 and notional > max_notional:
+            return RiskDecision(
+                approved=False,
+                reason_code=RiskReasonCode.ORDER_NOTIONAL_EXCEEDS_CAP.value,
+                reason=(
+                    f"Single order notional {notional:,.0f} exceeds cap {max_notional:,.0f} "
+                    f"({self.limits.max_single_order_notional_pct}% of equity)"
+                ),
             )
 
         weight_decision = self._validate_buy_weight(order, snapshot, adaptive_weight_multiplier=adaptive.position_weight_multiplier)
@@ -221,10 +261,10 @@ class RiskRules:
         if snapshot.market_regime == "bearish_trend":
             return RiskDecision(
                 approved=True,
-                reason_code="OK_REGIME_BEARISH_BUY_CONSERVATIVE",
+                reason_code=RiskReasonCode.OK_REGIME_BEARISH_BUY_CONSERVATIVE.value,
                 reason="Bearish regime buy approved with conservative limits",
             )
-        return RiskDecision(approved=True, reason_code="OK_BUY", reason="Buy order approved by risk engine")
+        return RiskDecision(approved=True, reason_code=RiskReasonCode.OK_BUY.value, reason="Buy order approved by risk engine")
 
     def mark_symbol_exit(self, snapshot: RiskSnapshot, symbol: str, now: datetime | None = None) -> RiskSnapshot:
         now_utc = now or datetime.now(timezone.utc)
@@ -239,6 +279,7 @@ class RiskRules:
             market_regime=snapshot.market_regime,
             recent_trade_pnls=snapshot.recent_trade_pnls,
             consecutive_losses=snapshot.consecutive_losses,
+            latest_entry_score=snapshot.latest_entry_score,
             todays_new_entries=snapshot.todays_new_entries,
             trading_cooldown_until=snapshot.trading_cooldown_until,
             cooldown_until=updated,
@@ -246,7 +287,7 @@ class RiskRules:
 
     def _validate_buy_weight(self, order: OrderRequest, snapshot: RiskSnapshot, *, adaptive_weight_multiplier: float) -> RiskDecision:
         if snapshot.equity <= 0:
-            return RiskDecision(approved=False, reason_code="INVALID_EQUITY", reason="Equity must be positive")
+            return RiskDecision(approved=False, reason_code=RiskReasonCode.INVALID_EQUITY.value, reason="Equity must be positive")
 
         current_positions = {k: v for k, v in snapshot.position_values.items() if v > 0}
         new_position_count = len(current_positions)
@@ -257,10 +298,10 @@ class RiskRules:
             max_positions = min(max_positions, self.limits.bearish_max_positions)
 
         if new_position_count > max_positions:
-            code = "MAX_POSITIONS_EXCEEDED"
+            code = RiskReasonCode.MAX_POSITIONS_EXCEEDED.value
             msg = f"Maximum {max_positions} holdings exceeded"
             if snapshot.market_regime == "bearish_trend":
-                code = "BLOCK_REGIME_BEARISH_MAX_POSITIONS"
+                code = RiskReasonCode.BLOCK_REGIME_BEARISH_MAX_POSITIONS.value
                 msg = f"Bearish regime max holdings exceeded ({max_positions})"
             return RiskDecision(
                 approved=False,
@@ -279,10 +320,10 @@ class RiskRules:
         max_weight = max_weight * adaptive_weight_multiplier
 
         if weight > max_weight:
-            code = "POSITION_WEIGHT_TOO_HIGH"
+            code = RiskReasonCode.POSITION_WEIGHT_TOO_HIGH.value
             msg = f"Position weight exceeds {max_weight*100:.1f}% limit"
             if snapshot.market_regime == "bearish_trend":
-                code = "BLOCK_REGIME_BEARISH_POSITION_WEIGHT"
+                code = RiskReasonCode.BLOCK_REGIME_BEARISH_POSITION_WEIGHT.value
                 msg = f"Bearish regime position weight exceeds {max_weight*100:.1f}% limit"
             return RiskDecision(
                 approved=False,
@@ -290,14 +331,19 @@ class RiskRules:
                 reason=msg,
             )
 
-        if weight < self.limits.min_position_weight:
+        if snapshot.market_regime == "bearish_trend":
+            eff_min = min(self.limits.bearish_min_position_weight, max_weight * 0.99)
+        else:
+            eff_min = min(self.limits.min_position_weight, max_weight * 0.99)
+
+        if weight < eff_min:
             return RiskDecision(
                 approved=False,
-                reason_code="POSITION_WEIGHT_TOO_LOW",
-                reason="Position weight must be at least 10%",
+                reason_code=RiskReasonCode.POSITION_WEIGHT_TOO_LOW.value,
+                reason=f"Position weight below minimum ({eff_min*100:.1f}% required for policy)",
             )
 
-        return RiskDecision(approved=True, reason_code="OK_WEIGHT", reason="Position sizing check passed")
+        return RiskDecision(approved=True, reason_code=RiskReasonCode.OK_WEIGHT.value, reason="Position sizing check passed")
 
     def _build_adaptive_guard(self, snapshot: RiskSnapshot) -> AdaptiveGuard:
         loss_streak_triggered = snapshot.consecutive_losses >= self.limits.adaptive_loss_streak_threshold

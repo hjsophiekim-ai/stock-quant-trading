@@ -5,7 +5,7 @@ from fastapi import APIRouter, Header, HTTPException, status
 from ..auth.jwt_service import JWTConfig, JWTService
 from ..auth.user_auth import UserAuthService
 from ..core.config import get_backend_settings
-from ..models.user import LogoutRequest, RefreshRequest, TokenPair, UserCreate, UserLogin, UserPublic
+from ..models.user import LogoutRequest, LoginResponse, RefreshRequest, TokenPair, UserCreate, UserLogin, UserPublic
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -46,8 +46,8 @@ def register(payload: UserCreate) -> UserPublic:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
-@router.post("/login", response_model=TokenPair)
-def login(payload: UserLogin) -> TokenPair:
+@router.post("/login", response_model=LoginResponse)
+def login(payload: UserLogin) -> LoginResponse:
     try:
         return _auth_service.login(payload)
     except ValueError as exc:

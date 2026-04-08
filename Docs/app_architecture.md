@@ -1,5 +1,9 @@
 # App Architecture
 
+> **제품(설치형) 관점의 최종 목표·배포 모델**은 [`product_architecture.md`](product_architecture.md) 를 참고하세요.  
+> 이 문서는 저장소 내 **논리 계층**과 데이터 흐름을 설명합니다.  
+> (`Docs/app_architecture.md` 와 동기화된 복본입니다.)
+
 ## 개요
 
 플랫폼은 `mobile`, `desktop`, `backend`, `shared`의 4계층으로 구성됩니다.
@@ -78,6 +82,20 @@
 - 토큰 발급/연결 테스트/주문 허용 여부 판단을 서버 단에서 통합 수행할 수 있습니다.
 - 보안 사고 발생 시 회전/폐기/차단 절차를 중앙에서 수행할 수 있습니다.
 
+## 운영 대시보드 (Desktop / Mobile)
+
+- **단일 집계**: `GET /api/dashboard/summary` — 모드·손익·포지션·미체결·최근 체결·국면·스크리너 후보·런타임·리스크 배너·로그. `Authorization` 있으면 `user_broker_account` 및 리스크 배너에 반영.
+- **데이터 출처 명시**: `dashboard/summary` 응답의 `value_sources`, `data_quality` 필드로 각 카드의 산출 원천(스냅샷/런타임/재구성)과 추정 여부를 확인.
+- **분할 API**: `/api/dashboard/portfolio-snapshot`, `recent-fills`, `risk-status`, `runtime-status`, `broker-status`. 상세는 [docs/app_architecture.md](../docs/app_architecture.md) 참고.
+- **출처 문서**: [dashboard_data_sources.md](./dashboard_data_sources.md)
+
+## 브로커 설정 화면 (제품 UX)
+
+- **모바일** (`apps/mobile/src/screens/BrokerSettingsScreen.tsx`)과 **데스크톱** (`apps/desktop/src/broker-settings.html`)이 동일한 흐름을 제공합니다: 필드 입력 → 저장(암호화) → 연결 테스트(토큰 발급) → 상태·마지막 테스트 시각 표시 → 필요 시 삭제.
+- **저장 데이터**는 사용자별 1건으로 SQLite `broker_accounts` 테이블에 보관되며, App Key/Secret/계좌번호/상품코드는 **Fernet(앱 시드 기반)** 으로 암호화됩니다. API 응답에는 마스킹된 키·계좌만 노출됩니다.
+- **Trading mode** 기본값은 `paper`이며, `live` 선택 시 앱에서 강한 경고를 표시합니다(실거래 주문은 서버 잠금 정책이 별도로 적용됩니다).
+- **모의 자동매매** `POST /api/paper-trading/start`·`POST /api/paper-trading/stop` 는 **Authorization: Bearer** 가 필요합니다. `start` 는 해당 사용자의 브로커 계정이 있고 **`connection_status === success`** 일 때만 허용됩니다(앱에서는 동일 조건으로 시작 버튼 비활성화).
+
 ## 모드 정책
 
 - 기본: `paper trading`
@@ -106,4 +124,5 @@
   - `GET /api/performance/symbol-performance`
   - `GET /api/performance/strategy-performance`
   - `GET /api/performance/regime-performance`
-  - 현재는 mock 응답이며, 이후 DB/백테스트 집계로 전환
+  - `metrics` 응답의 `value_sources`, `data_quality` 로 실측값/추정값 구분
+  - 손익률·실현/미실현은 포트폴리오 동기화 스냅샷 기반, 승률·손익비는 체결 리플레이 기반 추정치

@@ -7,12 +7,16 @@ import uuid
 
 import pandas as pd
 
+from app.brokers.base_broker import BaseBroker
 from app.brokers.paper_broker import PaperBroker
 from app.orders.models import OrderSignal
 from app.orders.order_manager import OrderManager
 from app.portfolio.pnl import compute_cumulative_return_pct, compute_daily_return_pct
+from app.risk.kill_switch import KillSwitch
 from app.risk.rules import RiskSnapshot, RiskRules
+from app.scheduler.equity_tracker import EquityTracker
 from app.strategy.base_strategy import StrategyContext
+from app.scheduler.kis_universe import build_mock_volatility_series
 from app.strategy.filters import filter_quality_swing_candidates
 from app.strategy.swing_strategy import SwingStrategy
 
@@ -20,24 +24,62 @@ from app.strategy.swing_strategy import SwingStrategy
 @dataclass
 class SchedulerJobs:
     strategy: SwingStrategy = field(default_factory=SwingStrategy)
-    broker: PaperBroker = field(default_factory=PaperBroker)
+    broker: BaseBroker = field(default_factory=PaperBroker)
     risk_rules: RiskRules = field(default_factory=RiskRules)
+    kill_switch: KillSwitch | None = None
+    equity_tracker: EquityTracker | None = None
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger("app.scheduler.jobs"))
 
-    def run_daily_cycle(self) -> dict[str, object]:
+    def run_daily_cycle(
+        self,
+        universe: pd.DataFrame | None = None,
+        *,
+        kospi_index: pd.DataFrame | None = None,
+        sp500_index: pd.DataFrame | None = None,
+    ) -> dict[str, object]:
         self.logger.info("[START] Paper trading daily cycle started")
-        universe = self._build_mock_universe()
+        universe = universe if universe is not None else self._build_mock_universe()
+        if universe.empty:
+            self.logger.error("[ABORT] Empty price universe; skip cycle")
+            return {"halted": True, "reason": "EMPTY_UNIVERSE", "message": "No OHLC data for configured symbols"}
+
+        snapshot_gate = self._build_risk_snapshot(universe)
+        if self.kill_switch is not None:
+            try:
+                from backend.app.risk.kill_switch import attach_kill_switch_event_logging
+
+                attach_kill_switch_event_logging(self.kill_switch)
+            except Exception:
+                pass
+        if self.kill_switch is not None and self.kill_switch.evaluate(snapshot_gate):
+            self.logger.warning(
+                "[HALT] Kill switch active state=%s reason=%s",
+                self.kill_switch.state,
+                self.kill_switch.last_reason,
+            )
+            return {
+                "halted": True,
+                "kill_state": self.kill_switch.state,
+                "reason": self.kill_switch.last_reason,
+                "equity": snapshot_gate.equity,
+                "daily_pnl_pct": snapshot_gate.daily_pnl_pct,
+                "total_pnl_pct": snapshot_gate.total_pnl_pct,
+            }
 
         self.logger.info("[PRE-MARKET] Filtering quality swing candidates")
         candidates = filter_quality_swing_candidates(universe)
         self.logger.info("[PRE-MARKET] Candidate count=%s symbols=%s", len(candidates), candidates)
 
         self.logger.info("[INTRADAY] Price check and strategy signal generation")
+        kospi = kospi_index if kospi_index is not None else self._build_mock_index("KOSPI")
+        sp500 = sp500_index if sp500_index is not None else self._build_mock_index("SP500")
+        vol = build_mock_volatility_series(kospi)
         context = StrategyContext(
             prices=universe,
-            kospi_index=self._build_mock_index("KOSPI"),
-            sp500_index=self._build_mock_index("SP500"),
+            kospi_index=kospi,
+            sp500_index=sp500,
             portfolio=self._portfolio_df_from_broker(),
+            volatility_index=vol,
         )
         strategy_orders = self.strategy.generate_orders(context)
         self.logger.info("[INTRADAY] Generated %s raw strategy orders", len(strategy_orders))
@@ -93,9 +135,11 @@ class SchedulerJobs:
             position_values[pos.symbol] = latest_price * pos.quantity
 
         equity = cash + sum(position_values.values())
-        # Demo values for simulation; real runtime should be DB/account based.
-        daily_pnl_pct = 0.0
-        total_pnl_pct = 0.0
+        if self.equity_tracker is not None:
+            daily_pnl_pct, total_pnl_pct = self.equity_tracker.pnl_snapshot(equity)
+        else:
+            daily_pnl_pct = 0.0
+            total_pnl_pct = 0.0
         return RiskSnapshot(
             daily_pnl_pct=daily_pnl_pct,
             total_pnl_pct=total_pnl_pct,

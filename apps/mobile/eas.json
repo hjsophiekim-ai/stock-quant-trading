@@ -7,19 +7,28 @@
       "developmentClient": true,
       "distribution": "internal",
       "env": {
-        "APP_ENV": "development"
+        "APP_ENV": "development",
+        "EXPO_PUBLIC_BACKEND_URL": "http://10.0.2.2:8000"
       }
     },
-    "preview": {
+    "preview-apk": {
       "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
       "env": {
-        "APP_ENV": "staging"
+        "APP_ENV": "staging",
+        "EXPO_PUBLIC_BACKEND_URL": "https://staging-api.stock-quant.example.com"
       }
     },
     "production": {
       "autoIncrement": true,
+      "android": {
+        "buildType": "app-bundle"
+      },
       "env": {
-        "APP_ENV": "production"
+        "APP_ENV": "production",
+        "EXPO_PUBLIC_BACKEND_URL": "https://api.stock-quant.example.com"
       }
     }
   },

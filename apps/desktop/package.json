@@ -3,23 +3,27 @@
   "version": "0.1.0",
   "private": true,
   "main": "src/main.js",
+  "description": "Stock Quant Trading — Windows desktop client (connects to backend API only).",
+  "author": "Stock Quant",
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
     "run": "electron .",
     "pack": "npx electron-builder --dir",
     "build:win": "node scripts/build-win.js",
-    "build:win:local": "set APP_ENV=production&& set BACKEND_URL=http://127.0.0.1:8000&& node scripts/build-win.js"
+    "build:win:local": "cross-env APP_ENV=production BACKEND_URL=http://127.0.0.1:8000 node scripts/build-win.js"
   },
   "dependencies": {
     "electron": "^31.0.0"
   },
   "devDependencies": {
+    "cross-env": "^7.0.3",
     "electron-builder": "^24.13.3"
   },
   "build": {
     "appId": "com.stockquant.desktop",
     "productName": "Stock Quant Desktop",
+    "artifactName": "${productName}-Setup-${version}.${ext}",
     "files": [
       "src/**/*",
       "package.json"
@@ -40,11 +44,25 @@
           ]
         }
       ],
-      "icon": "build/icons/icon.ico"
+      "icon": "build/icons/icon.ico",
+      "executableName": "StockQuantDesktop"
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Stock Quant Desktop",
+      "installerLanguages": [
+        "Korean",
+        "English"
+      ],
+      "language": "1042",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "installerIcon": "build/icons/icon.ico",
+      "uninstallerIcon": "build/icons/icon.ico"
     }
   }
 }

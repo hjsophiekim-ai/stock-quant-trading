@@ -9,12 +9,13 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "prebuild": "expo prebuild",
-    "build:android:preview": "npx eas build --platform android --profile preview",
-    "build:android:prod": "npx eas build --platform android --profile production",
-    "build:ios:preview": "npx eas build --platform ios --profile preview",
+    "build:android:apk": "npx eas build --platform android --profile preview-apk",
+    "build:android:aab": "npx eas build --platform android --profile production",
+    "build:ios:preview": "npx eas build --platform ios --profile preview-apk",
     "build:ios:prod": "npx eas build --platform ios --profile production"
   },
   "dependencies": {
+    "@react-native-async-storage/async-storage": "1.23.1",
     "expo": "^51.0.0",
     "react": "^18.2.0",
     "react-native": "^0.74.0"

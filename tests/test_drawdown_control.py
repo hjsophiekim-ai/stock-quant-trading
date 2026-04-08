@@ -30,7 +30,7 @@ def test_adaptive_new_entry_limit_blocks_after_loss_streak() -> None:
         market_filter_ok=True,
         position_values={},
         consecutive_losses=3,
-        recent_trade_pnls=(-5000.0, -4000.0, -3000.0, -2000.0),
+        recent_trade_pnls=(-500.0, -400.0, -300.0, -200.0),
         todays_new_entries=1,
     )
     order = OrderRequest(symbol="005930", side="buy", quantity=11, price=10_000.0, stop_loss_pct=3.0)
@@ -97,7 +97,7 @@ def test_adaptive_entry_filter_blocks_low_score_in_defense_mode() -> None:
         market_filter_ok=True,
         position_values={},
         consecutive_losses=3,
-        recent_trade_pnls=(-5000.0, -4000.0, -2500.0),
+        recent_trade_pnls=(-500.0, -400.0, -250.0),
         latest_entry_score=0.55,
     )
     order = OrderRequest(symbol="005930", side="buy", quantity=10, price=10_000.0, stop_loss_pct=2.5)

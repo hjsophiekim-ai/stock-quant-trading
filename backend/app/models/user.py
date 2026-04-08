@@ -49,6 +49,17 @@ class TokenPair(BaseModel):
     refresh_expires_in_sec: int
 
 
+class LoginResponse(BaseModel):
+    """로그인 직후 대시보드 진입용: 토큰 + 사용자 공개 프로필."""
+
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    access_expires_in_sec: int
+    refresh_expires_in_sec: int
+    user: UserPublic
+
+
 class RefreshRequest(BaseModel):
     refresh_token: str
 

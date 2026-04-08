@@ -1,9 +1,2 @@
-fastapi>=0.115.0
-uvicorn>=0.30.0
-pydantic>=2.6.0
-pydantic-settings>=2.2.1
-sqlalchemy>=2.0.0
-python-jose>=3.3.0
-passlib>=1.7.4
-requests>=2.31.0
-cryptography>=42.0.0
+# 이 파일은 하위 호환용입니다. 최신 목록은 저장소 루트의 requirements/backend.txt 를 사용하세요.
+-r ../requirements/backend.txt

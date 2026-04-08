@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     total_loss_limit_pct: float = Field(default=10.0, alias="TOTAL_LOSS_LIMIT_PCT")
     default_stop_loss_pct: float = Field(default=3.0, alias="DEFAULT_STOP_LOSS_PCT")
 
+    # KIS 모의투자 자동 paper trading (실주문 경로와 분리; openapivts 전용 브로커 사용)
+    paper_use_kis_execution: bool = Field(default=False, alias="PAPER_USE_KIS_EXECUTION")
+    paper_trading_loop: bool = Field(default=False, alias="PAPER_TRADING_LOOP")
+    paper_trading_interval_sec: int = Field(default=300, ge=30, alias="PAPER_TRADING_INTERVAL_SEC")
+    paper_trading_symbols: str = Field(default="005930,000660,035420", alias="PAPER_TRADING_SYMBOLS")
+    paper_session_state_path: str = Field(default="data/paper_trading_session.json", alias="PAPER_SESSION_STATE_PATH")
+    paper_kis_chart_lookback_days: int = Field(default=120, ge=20, alias="PAPER_KIS_CHART_LOOKBACK_DAYS")
+
     # Dynamic position sizing controls.
     sizing_bullish_boost_multiplier: float = Field(default=1.20, alias="SIZING_BULLISH_BOOST_MULTIPLIER")
     sizing_bearish_cut_multiplier: float = Field(default=0.60, alias="SIZING_BEARISH_CUT_MULTIPLIER")

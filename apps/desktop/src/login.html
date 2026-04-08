@@ -1,58 +1,205 @@
 <!doctype html>
-<html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <title>로그인</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 420px;
+        margin: 40px auto;
+        padding: 0 20px;
+      }
+      h1 {
+        font-size: 1.35rem;
+      }
+      label {
+        display: block;
+        margin-top: 12px;
+        font-size: 0.85rem;
+      }
+      input[type="text"],
+      input[type="password"],
+      input[type="email"] {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px;
+        margin-top: 4px;
+      }
+      button {
+        margin-top: 16px;
+        padding: 10px 16px;
+        width: 100%;
+        font-size: 1rem;
+        cursor: pointer;
+      }
+      .secondary {
+        background: #f1f5f9;
+        border: 1px solid #cbd5e1;
+      }
+      .msg {
+        margin-top: 12px;
+        color: #b91c1c;
+        font-size: 0.9rem;
+      }
+      .ok {
+        color: #15803d;
+      }
+      .muted {
+        color: #64748b;
+        font-size: 0.8rem;
+      }
+      .conn-ok {
+        color: #15803d;
+        font-size: 0.8rem;
+      }
+      .conn-bad {
+        color: #b91c1c;
+        font-size: 0.8rem;
+      }
+      .row {
+        margin-top: 10px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      details {
+        margin-top: 16px;
+      }
+    </style>
+  </head>
   <body>
-    <h2>Desktop Login</h2>
-    <input id="email" placeholder="Email" />
-    <input id="password" type="password" placeholder="Password" />
-    <input id="displayName" placeholder="Display Name (first run)" />
-    <button id="registerBtn">Register (First Run)</button>
-    <button id="loginBtn">Login</button>
-    <p>첫 실행 순서: Register -> Login -> Broker Settings -> Test Connection -> Paper Trading Start</p>
-    <p id="message"></p>
+    <h1>로그인</h1>
+    <p class="muted" id="connLine">서버 연결: 확인 중…</p>
+    <p class="muted" id="backendLine"></p>
+    <label>이메일</label>
+    <input id="email" type="email" autocomplete="username" />
+    <label>비밀번호</label>
+    <input id="password" type="password" autocomplete="current-password" />
+    <label>표시 이름 (첫 회원가입 시)</label>
+    <input id="displayName" type="text" placeholder="선택" />
+    <div class="row">
+      <input type="checkbox" id="remember" checked />
+      <label for="remember" style="margin: 0">로그인 유지 (이 기기에 토큰 저장)</label>
+    </div>
+    <button id="loginBtn">로그인 후 대시보드로</button>
+    <button class="secondary" id="registerBtn">회원가입 (첫 실행)</button>
+    <details>
+      <summary>고급: 서버 주소</summary>
+      <p class="muted">문제 해결 시에만 수정하세요. 빈 칸이면 아래 기본값을 사용합니다.</p>
+      <input id="backendOverride" type="text" placeholder="https://api.example.com 또는 http://127.0.0.1:8000" />
+      <button type="button" class="secondary" id="saveUrlBtn" style="margin-top: 8px">이 주소로 저장</button>
+      <button type="button" class="secondary" id="recheckBtn" style="margin-top: 8px">연결 다시 확인</button>
+    </details>
+    <p id="message" class="msg"></p>
     <script src="./runtime-config.js"></script>
     <script>
-      const backendUrl = window.RUNTIME_CONFIG?.BACKEND_URL || "http://localhost:8000";
-      const msg = document.getElementById("message");
-      document.getElementById("registerBtn").addEventListener("click", async () => {
-        const email = document.getElementById("email").value;
-        const password = document.getElementById("password").value;
-        const displayName = document.getElementById("displayName").value || (email.split("@")[0] || "new-user");
+      const defaultBackend = window.RUNTIME_CONFIG?.BACKEND_URL || "http://127.0.0.1:8000";
+      function effectiveBackend() {
+        const o = localStorage.getItem("backend_url_override");
+        return (o && o.trim()) || defaultBackend;
+      }
+      async function checkBackendReachable() {
+        const conn = document.getElementById("connLine");
+        const base = effectiveBackend();
+        conn.className = "muted";
+        conn.innerText = "서버 연결: 확인 중… (" + base + ")";
         try {
-          const res = await fetch(`${backendUrl}/api/auth/register`, {
+          const res = await fetch(base.replace(/\/$/, "") + "/api/health", { method: "GET" });
+          if (res.ok) {
+            conn.className = "conn-ok";
+            conn.innerText = "서버 연결: 정상 — " + base;
+          } else {
+            conn.className = "conn-bad";
+            conn.innerText = "서버 연결: HTTP " + res.status + " — " + base;
+          }
+        } catch {
+          conn.className = "conn-bad";
+          conn.innerText =
+            "서버 연결: 실패 — 주소·방화벽·HTTPS 인증서를 확인하세요. (로컬 개발이면 백엔드를 먼저 실행)";
+        }
+      }
+      document.getElementById("backendLine").innerText = "기본 서버(URL): " + defaultBackend;
+      document.getElementById("backendOverride").value = localStorage.getItem("backend_url_override") || "";
+      void checkBackendReachable();
+
+      document.getElementById("saveUrlBtn").addEventListener("click", () => {
+        const v = document.getElementById("backendOverride").value.trim();
+        if (v) localStorage.setItem("backend_url_override", v);
+        else localStorage.removeItem("backend_url_override");
+        document.getElementById("backendLine").innerText = "기본 서버(URL): " + defaultBackend;
+        document.getElementById("message").innerText = "저장됨. 연결 상태를 갱신했습니다.";
+        document.getElementById("message").className = "msg ok";
+        void checkBackendReachable();
+      });
+      document.getElementById("recheckBtn").addEventListener("click", () => void checkBackendReachable());
+
+      const msg = document.getElementById("message");
+
+      async function persistTokens(data, email, remember) {
+        const payload = {
+          accessToken: data.access_token,
+          refreshToken: data.refresh_token,
+          email,
+        };
+        if (remember) {
+          if (window.appBridge) {
+            await window.appBridge.authSave(payload);
+          }
+          localStorage.setItem("accessToken", data.access_token);
+          localStorage.setItem("refreshToken", data.refresh_token);
+          localStorage.setItem("email", email);
+        } else {
+          sessionStorage.setItem("accessToken", data.access_token);
+          sessionStorage.setItem("refreshToken", data.refresh_token);
+          sessionStorage.setItem("email", email);
+        }
+      }
+
+      document.getElementById("registerBtn").addEventListener("click", async () => {
+        const email = document.getElementById("email").value.trim();
+        const password = document.getElementById("password").value;
+        const displayName =
+          document.getElementById("displayName").value.trim() || email.split("@")[0] || "user";
+        msg.className = "msg";
+        try {
+          const res = await fetch(`${effectiveBackend()}/api/auth/register`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ email, password, display_name: displayName, role: "user" }),
           });
           const data = await res.json();
           if (!res.ok) {
-            msg.innerText = data?.detail || "Register failed";
+            msg.innerText = data?.detail || "회원가입 실패";
             return;
           }
-          msg.innerText = "회원가입 완료. Login 버튼을 눌러 로그인하세요.";
+          msg.className = "msg ok";
+          msg.innerText = "가입 완료. 로그인 버튼을 눌러 대시보드로 이동하세요.";
         } catch {
-          msg.innerText = "Network error";
+          msg.innerText = "네트워크 오류 — 백엔드가 실행 중인지 확인하세요.";
         }
       });
+
       document.getElementById("loginBtn").addEventListener("click", async () => {
-        const email = document.getElementById("email").value;
+        const email = document.getElementById("email").value.trim();
         const password = document.getElementById("password").value;
+        const remember = document.getElementById("remember").checked;
+        msg.className = "msg";
         try {
-          const res = await fetch(`${backendUrl}/api/auth/login`, {
+          const res = await fetch(`${effectiveBackend()}/api/auth/login`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ email, password }),
           });
           const data = await res.json();
           if (!res.ok) {
-            msg.innerText = data?.detail || "Login failed";
+            msg.innerText = data?.detail || "로그인 실패";
             return;
           }
-          localStorage.setItem("accessToken", data.access_token);
-          localStorage.setItem("refreshToken", data.refresh_token);
-          localStorage.setItem("email", email);
+          await persistTokens(data, email, remember);
           window.location.href = "./dashboard.html";
         } catch {
-          msg.innerText = "Network error";
+          msg.innerText = "네트워크 오류 — 백엔드가 실행 중인지 확인하세요.";
         }
       });
     </script>

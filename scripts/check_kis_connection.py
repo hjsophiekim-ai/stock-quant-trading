@@ -1,67 +1,67 @@
-﻿from __future__ import annotations
+﻿"""
+1) 토큰 발급  2) 잔고 API 1회 호출 로 KIS 연결을 검증합니다.
+"""
+from __future__ import annotations
 
 import logging
+import sys
+from pathlib import Path
 
-from app.clients.kis_client import KISClient, KISClientError
-from app.config import get_settings
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 from app.logging import setup_logging
-from backend.app.auth.kis_auth import issue_access_token, validate_kis_inputs
+from scripts.kis_script_utils import (
+    build_kis_client,
+    issue_token_or_exit,
+    load_app_settings,
+    resolved_kis_base_url,
+)
+
+from app.clients.kis_client import KISClientError
+from backend.app.auth.kis_auth import validate_kis_inputs
 
 
 def main() -> None:
     setup_logging()
     logger = logging.getLogger("scripts.check_kis_connection")
-    cfg = get_settings()
-    base_url = cfg.kis_mock_base_url if cfg.trading_mode == "paper" else cfg.kis_base_url
-    account_no = cfg.resolved_account_no
-    account_product_code = cfg.resolved_account_product_code
+    cfg = load_app_settings()
+    base_url = resolved_kis_base_url(cfg)
 
-    logger.info("Checking KIS API connectivity")
-    logger.info("Mode=%s, Base URL=%s", cfg.trading_mode, base_url)
+    logger.info("KIS connection check trading_mode=%s api_base=%s", cfg.trading_mode, base_url)
 
+    acct = cfg.resolved_account_no or ""
+    prod = cfg.resolved_account_product_code or ""
     issues = validate_kis_inputs(
         app_key=cfg.kis_app_key,
         app_secret=cfg.kis_app_secret,
-        account_no=account_no or "",
-        account_product_code=account_product_code or "",
+        account_no=acct,
+        account_product_code=prod,
         base_url=base_url,
+        require_account=True,
     )
     if issues:
         for msg in issues:
             logger.error(msg)
         raise SystemExit(1)
 
-    token_result = issue_access_token(
-        app_key=cfg.kis_app_key,
-        app_secret=cfg.kis_app_secret,
-        base_url=base_url,
-        timeout_sec=8,
-    )
-    if not token_result.ok:
-        logger.error("%s (code=%s)", token_result.message, token_result.error_code)
-        raise SystemExit(1)
+    token = issue_token_or_exit(cfg, base_url=base_url, logger=logger)
+    client = build_kis_client(cfg, base_url=base_url, access_token=token)
 
-    logger.info("Token issuance passed.")
-    client = KISClient(
-        base_url=base_url,
-        timeout_sec=5,
-        app_key=cfg.kis_app_key,
-        app_secret=cfg.kis_app_secret,
-        token_provider=lambda: token_result.access_token or "",
-    )
     try:
-        probe = client.get_balance(account_no=account_no, account_product_code=account_product_code)
+        probe = client.get_balance(account_no=acct, account_product_code=prod)
     except KISClientError as exc:
         err = str(exc)
-        if "status=404" in err:
-            logger.error("base url 오류 또는 API 경로 오류입니다. err=%s", err)
-        elif "status=401" in err or "status=403" in err:
-            logger.error("토큰 발급 실패 또는 권한 오류입니다. 앱키/시크릿을 확인하세요. err=%s", err)
+        if "status=404" in err or "HTTP 404" in err:
+            logger.error("URL 또는 API 경로 오류 가능성. api_base=%s", base_url)
+        elif "401" in err or "403" in err:
+            logger.error("인증 오류: 앱키/시크릿·토큰·모의/실전 도메인 일치 여부 확인.")
         else:
-            logger.error("조회 API 연결 실패: 네트워크/계좌 설정을 확인하세요. err=%s", err)
+            logger.error("잔고 조회 실패: %s", err)
         raise SystemExit(1) from exc
 
-    logger.info("Connection check passed. Balance response keys=%s", sorted(probe.keys()))
+    logger.info("OK — rt_cd=0, 응답 키=%s", sorted(probe.keys()))
     raise SystemExit(0)
 
 

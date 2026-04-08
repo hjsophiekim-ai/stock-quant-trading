@@ -8,7 +8,7 @@ from uuid import uuid4
 from passlib.context import CryptContext
 
 from .jwt_service import JWTService
-from ..models.user import TokenPair, UserCreate, UserEntity, UserLogin, UserPublic
+from ..models.user import LoginResponse, TokenPair, UserCreate, UserEntity, UserLogin, UserPublic
 
 
 @dataclass
@@ -36,17 +36,18 @@ class UserAuthService:
         self._users_by_email[key] = user
         return self._to_public(user)
 
-    def login(self, payload: UserLogin) -> TokenPair:
+    def login(self, payload: UserLogin) -> LoginResponse:
         user = self._users_by_email.get(payload.email.lower())
         if user is None or not self._pwd.verify(payload.password, user.password_hash):
             raise ValueError("Invalid credentials")
         access_token, access_ttl = self.jwt_service.create_access_token(user.id, role=user.role)
         refresh_token, refresh_ttl = self.jwt_service.create_refresh_token(user.id)
-        return TokenPair(
+        return LoginResponse(
             access_token=access_token,
             refresh_token=refresh_token,
             access_expires_in_sec=access_ttl,
             refresh_expires_in_sec=refresh_ttl,
+            user=self._to_public(user),
         )
 
     def refresh(self, refresh_token: str) -> TokenPair:

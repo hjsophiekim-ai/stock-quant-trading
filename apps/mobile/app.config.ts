@@ -2,6 +2,8 @@ import type { ExpoConfig } from "expo/config";
 
 const appEnv = process.env.APP_ENV ?? "development";
 const isProd = appEnv === "production";
+const defaultBackendUrl = "https://api.stock-quant.example.com";
+const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL ?? defaultBackendUrl;
 
 const config: ExpoConfig = {
   name: isProd ? "Stock Quant Trader" : "Stock Quant Trader (Dev)",
@@ -21,14 +23,19 @@ const config: ExpoConfig = {
   },
   android: {
     package: isProd ? "com.stockquant.trader" : "com.stockquant.trader.dev",
+    versionCode: 1,
     adaptiveIcon: {
       foregroundImage: "./assets/adaptive-icon.png",
       backgroundColor: "#0f172a",
     },
+    permissions: ["INTERNET"],
+  },
+  updates: {
+    fallbackToCacheTimeout: 0,
   },
   extra: {
     appEnv,
-    backendUrl: process.env.EXPO_PUBLIC_BACKEND_URL ?? "http://localhost:8000",
+    backendUrl,
   },
 };
 

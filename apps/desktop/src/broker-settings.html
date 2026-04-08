@@ -1,120 +1,544 @@
 <!doctype html>
-<html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>브로커 설정</title>
+    <style>
+      :root {
+        --bg: #f8fafc;
+        --card: #ffffff;
+        --border: #e2e8f0;
+        --text: #0f172a;
+        --muted: #64748b;
+        --primary: #2563eb;
+        --primary-h: #1d4ed8;
+        --teal: #0d9488;
+        --teal-h: #0f766e;
+        --ok: #15803d;
+        --bad: #b91c1c;
+        --warn-bg: #fef2f2;
+        --warn-border: #fecaca;
+        --info-bg: #f0f9ff;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+      }
+      .wrap {
+        max-width: 560px;
+        margin: 0 auto;
+        padding: 20px 16px 48px;
+      }
+      h1 {
+        font-size: 1.35rem;
+        font-weight: 800;
+        margin: 0 0 6px;
+      }
+      .sub {
+        color: var(--muted);
+        font-size: 0.85rem;
+        margin-bottom: 18px;
+        line-height: 1.45;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 14px 16px;
+        margin-bottom: 14px;
+      }
+      .card h2 {
+        font-size: 0.95rem;
+        margin: 0 0 10px;
+      }
+      label {
+        display: block;
+        font-weight: 600;
+        font-size: 0.8rem;
+        margin: 10px 0 4px;
+      }
+      label:first-of-type {
+        margin-top: 0;
+      }
+      input,
+      select {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        font-size: 0.95rem;
+      }
+      .row-mode {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 8px;
+      }
+      .mode-btn {
+        padding: 12px;
+        border-radius: 8px;
+        border: 2px solid var(--border);
+        background: #fff;
+        cursor: pointer;
+        text-align: center;
+        font-weight: 700;
+        font-size: 0.85rem;
+      }
+      .mode-btn.active {
+        border-color: var(--primary);
+        background: #eff6ff;
+      }
+      .live-warn {
+        margin-top: 12px;
+        padding: 12px;
+        background: var(--warn-bg);
+        border: 1px solid var(--warn-border);
+        border-radius: 8px;
+        font-size: 0.82rem;
+        line-height: 1.5;
+        color: #7f1d1d;
+      }
+      .live-warn strong {
+        display: block;
+        color: #991b1b;
+        margin-bottom: 6px;
+      }
+      .badge-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      .pill {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-weight: 700;
+        font-size: 0.8rem;
+      }
+      .pill.ok {
+        background: #dcfce7;
+      }
+      .pill.fail {
+        background: #fee2e2;
+      }
+      .pill.unk {
+        background: #f1f5f9;
+      }
+      .test-badge {
+        font-size: 0.8rem;
+        font-weight: 600;
+        padding: 4px 10px;
+        border-radius: 6px;
+        background: #f1f5f9;
+      }
+      .test-badge.ok {
+        color: var(--ok);
+      }
+      .test-badge.fail {
+        color: var(--bad);
+      }
+      .btn {
+        width: 100%;
+        padding: 13px;
+        border: none;
+        border-radius: 10px;
+        font-weight: 800;
+        cursor: pointer;
+        font-size: 0.95rem;
+        margin-bottom: 10px;
+      }
+      .btn-primary {
+        background: var(--primary);
+        color: #fff;
+      }
+      .btn-primary:hover {
+        background: var(--primary-h);
+      }
+      .btn-teal {
+        background: var(--teal);
+        color: #fff;
+      }
+      .btn-teal:hover {
+        background: var(--teal-h);
+      }
+      .btn-muted {
+        background: #f1f5f9;
+        color: #334155;
+        font-weight: 700;
+      }
+      .btn-danger-text {
+        background: transparent;
+        color: var(--bad);
+        font-weight: 700;
+        margin-top: 4px;
+      }
+      .btn-link {
+        background: transparent;
+        color: var(--primary);
+        font-weight: 700;
+      }
+      .toast {
+        position: fixed;
+        left: 16px;
+        right: 16px;
+        bottom: 20px;
+        max-width: 520px;
+        margin: 0 auto;
+        padding: 14px 16px;
+        border-radius: 10px;
+        color: #fff;
+        font-weight: 700;
+        font-size: 0.9rem;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+        z-index: 50;
+        display: none;
+      }
+      .toast.show {
+        display: block;
+      }
+      .toast.ok {
+        background: #14532d;
+      }
+      .toast.err {
+        background: #7f1d1d;
+      }
+      .hint-box {
+        background: var(--info-bg);
+        border: 1px solid #bae6fd;
+        font-size: 0.82rem;
+        color: #0369a1;
+        line-height: 1.45;
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+    </style>
+  </head>
   <body>
-    <h2>Broker Settings</h2>
-    <p>첫 실행 권장: Save -> Test Token Issuance -> 상태 확인 -> Paper Trading Start</p>
-    <p>Status: <span id="statusBadge">unknown</span></p>
-    <input id="kis_app_key" placeholder="KIS_APP_KEY" />
-    <input id="kis_app_secret" type="password" placeholder="KIS_APP_SECRET" />
-    <input id="kis_account_no" placeholder="KIS_ACCOUNT_NO" />
-    <input id="kis_account_product_code" placeholder="KIS_ACCOUNT_PRODUCT_CODE" />
-    <select id="trading_mode">
-      <option value="paper">paper</option>
-      <option value="live">live</option>
-    </select>
-    <div>
-      <button id="saveBtn">Save</button>
-      <button id="testBtn">Test Token Issuance</button>
-      <button id="backBtn">Back</button>
+    <div class="wrap">
+      <h1>브로커 설정</h1>
+      <p class="sub">한국투자증권 App Key·Secret·계좌 정보는 서버에만 암호화되어 저장됩니다. 앱에는 키를 저장하지 않습니다.</p>
+
+      <div class="card">
+        <h2>현재 연결 상태</h2>
+        <div class="badge-row">
+          <span id="connPill" class="pill unk">미확인</span>
+          <span id="testBadge" class="test-badge" style="display: none"></span>
+        </div>
+        <p id="connMessage" class="muted" style="margin: 0 0 8px; color: #334155"></p>
+        <p class="muted" style="margin: 0">마지막 테스트 시각: <span id="lastTested">—</span></p>
+      </div>
+
+      <div id="maskedCard" class="card hint-box" style="display: none">
+        <h2 style="margin-bottom: 8px">저장된 계정 요약</h2>
+        <p style="margin: 4px 0" id="maskedKey"></p>
+        <p style="margin: 4px 0" id="maskedAcct"></p>
+        <p style="margin: 4px 0" id="maskedProd"></p>
+        <p class="muted" style="margin-top: 10px; margin-bottom: 0">수정 시 아래에 값을 다시 입력한 뒤 저장하세요.</p>
+      </div>
+
+      <div class="card">
+        <h2>한국투자 Open API</h2>
+        <label for="kis_app_key">App Key</label>
+        <input id="kis_app_key" autocomplete="off" placeholder="App Key" />
+        <label for="kis_app_secret">App Secret</label>
+        <input id="kis_app_secret" type="password" autocomplete="off" placeholder="App Secret" />
+        <label for="kis_account_no">계좌번호</label>
+        <input id="kis_account_no" inputmode="numeric" placeholder="숫자 8자리 또는 10자리" />
+        <label for="kis_account_product_code">계좌상품코드</label>
+        <input id="kis_account_product_code" inputmode="numeric" maxlength="2" placeholder="숫자 2자리 (예: 01)" />
+
+        <label>Trading mode</label>
+        <div class="row-mode">
+          <button type="button" class="mode-btn active" data-mode="paper" id="modePaper">모의투자 (paper)</button>
+          <button type="button" class="mode-btn" data-mode="live" id="modeLive">실거래 (live)</button>
+        </div>
+        <input type="hidden" id="trading_mode" value="paper" />
+        <div id="liveWarn" class="live-warn" style="display: none">
+          <strong>실거래 모드 경고</strong>
+          실계좌·실주문과 연결될 수 있습니다. 서버의 LIVE_TRADING 등 안전 플래그와 앱 승인 없이는 주문이 막힐 수 있으나, 키는 실거래용으로 취급됩니다. 기본은 모의투자(paper)를 권장합니다.
+        </div>
+      </div>
+
+      <button type="button" class="btn btn-primary" id="saveBtn">저장</button>
+      <button type="button" class="btn btn-teal" id="testBtn">연결 테스트 (토큰 발급)</button>
+      <button type="button" class="btn btn-muted" id="refreshBtn">상태 새로고침</button>
+      <button type="button" class="btn btn-danger-text" id="deleteBtn" style="display: none">저장된 브로커 정보 삭제</button>
+      <button type="button" class="btn btn-link" id="backBtn">← 대시보드로</button>
     </div>
-    <p id="message"></p>
+    <div id="toast" class="toast" role="status"></div>
+
     <script src="./runtime-config.js"></script>
+    <script src="./auth-session.js"></script>
     <script>
-      const backendUrl = window.RUNTIME_CONFIG?.BACKEND_URL || "http://localhost:8000";
-      const accessToken = localStorage.getItem("accessToken");
-      const msg = document.getElementById("message");
-      const badge = document.getElementById("statusBadge");
-      if (!accessToken) {
-        window.location.href = "./login.html";
-      }
-
-      function authHeaders(extra = {}) {
-        return {
-          Authorization: `Bearer ${accessToken}`,
-          ...extra,
-        };
-      }
-
-      function readForm() {
-        return {
-          kis_app_key: document.getElementById("kis_app_key").value.trim(),
-          kis_app_secret: document.getElementById("kis_app_secret").value.trim(),
-          kis_account_no: document.getElementById("kis_account_no").value.trim(),
-          kis_account_product_code: document.getElementById("kis_account_product_code").value.trim(),
-          trading_mode: document.getElementById("trading_mode").value,
-        };
-      }
-
-      function validate(form) {
-        if (form.kis_app_key.length < 8) return "KIS_APP_KEY 길이가 너무 짧습니다.";
-        if (form.kis_app_secret.length < 8) return "KIS_APP_SECRET 길이가 너무 짧습니다.";
-        if (form.kis_account_no.length < 4) return "KIS_ACCOUNT_NO 길이가 너무 짧습니다.";
-        if (form.kis_account_product_code.length < 1) return "KIS_ACCOUNT_PRODUCT_CODE를 입력하세요.";
-        if (!["paper", "live"].includes(form.trading_mode)) return "TRADING_MODE는 paper/live만 허용됩니다.";
-        return "";
-      }
-
-      async function loadCurrentStatus() {
-        try {
-          const res = await fetch(`${backendUrl}/api/broker-accounts/me/status`, {
-            method: "GET",
-            headers: authHeaders(),
-          });
-          if (!res.ok) return;
-          const data = await res.json();
-          badge.innerText = data.connection_status || "unknown";
-          if (data.connection_message) msg.innerText = data.connection_message;
-        } catch {}
-      }
-
-      document.getElementById("saveBtn").addEventListener("click", async () => {
-        const form = readForm();
-        const error = validate(form);
-        if (error) {
-          msg.innerText = error;
+      (async function () {
+        const session = await resolveDesktopSession();
+        if (!session || !session.accessToken) {
+          window.location.href = "./login.html";
           return;
         }
-        try {
-          const res = await fetch(`${backendUrl}/api/broker-accounts/me`, {
-            method: "POST",
-            headers: authHeaders({ "Content-Type": "application/json" }),
-            body: JSON.stringify(form),
-          });
-          const data = await res.json();
-          if (!res.ok) {
-            msg.innerText = data?.detail || "Save failed";
+        const backendUrl = effectiveBackendUrl();
+        const accessToken = session.accessToken;
+
+        function authHeaders(extra) {
+          return { Authorization: "Bearer " + accessToken, ...(extra || {}) };
+        }
+
+        function parseDetail(data) {
+          const d = data && data.detail;
+          if (typeof d === "string") return d;
+          if (Array.isArray(d)) {
+            return (
+              d
+                .map(function (x) {
+                  return x.msg || "";
+                })
+                .filter(Boolean)
+                .join("; ") || "요청 오류"
+            );
+          }
+          return "요청 오류";
+        }
+
+        const toastEl = document.getElementById("toast");
+        let toastT = null;
+        function toast(type, text) {
+          if (toastT) clearTimeout(toastT);
+          toastEl.textContent = text;
+          toastEl.className = "toast show " + (type === "ok" ? "ok" : "err");
+          toastT = setTimeout(function () {
+            toastEl.classList.remove("show");
+          }, 3800);
+        }
+
+        const connPill = document.getElementById("connPill");
+        const connMessage = document.getElementById("connMessage");
+        const lastTested = document.getElementById("lastTested");
+        const testBadge = document.getElementById("testBadge");
+        const maskedCard = document.getElementById("maskedCard");
+        let lastTestResult = "idle";
+
+        function setMode(m) {
+          const paper = document.getElementById("modePaper");
+          const live = document.getElementById("modeLive");
+          const hidden = document.getElementById("trading_mode");
+          const warn = document.getElementById("liveWarn");
+          const v = m === "live" ? "live" : "paper";
+          hidden.value = v;
+          paper.classList.toggle("active", v === "paper");
+          live.classList.toggle("active", v === "live");
+          warn.style.display = v === "live" ? "block" : "none";
+        }
+        document.getElementById("modePaper").addEventListener("click", function () {
+          setMode("paper");
+        });
+        document.getElementById("modeLive").addEventListener("click", function () {
+          setMode("live");
+        });
+
+        function updateConnUI(status, message, testedIso) {
+          connPill.classList.remove("ok", "fail", "unk");
+          if (status === "success") {
+            connPill.textContent = "연결됨";
+            connPill.classList.add("ok");
+          } else if (status === "failed") {
+            connPill.textContent = "실패";
+            connPill.classList.add("fail");
+          } else {
+            connPill.textContent = "미확인";
+            connPill.classList.add("unk");
+          }
+          connMessage.textContent = message || "";
+          if (testedIso) {
+            try {
+              lastTested.textContent = new Date(testedIso).toLocaleString();
+            } catch {
+              lastTested.textContent = testedIso;
+            }
+          } else lastTested.textContent = "—";
+        }
+
+        function renderTestBadge() {
+          if (lastTestResult === "idle") {
+            testBadge.style.display = "none";
             return;
           }
-          badge.innerText = data.connection_status || "unknown";
-          msg.innerText = "저장 완료";
-        } catch {
-          msg.innerText = "네트워크 오류";
+          testBadge.style.display = "inline-block";
+          testBadge.textContent = lastTestResult === "ok" ? "마지막 테스트: 성공" : "마지막 테스트: 실패";
+          testBadge.className = "test-badge " + (lastTestResult === "ok" ? "ok" : "fail");
         }
-      });
 
-      document.getElementById("testBtn").addEventListener("click", async () => {
-        try {
-          const res = await fetch(`${backendUrl}/api/broker-accounts/me/test-connection`, {
-            method: "POST",
-            headers: authHeaders(),
-          });
-          const data = await res.json();
-          if (!res.ok) {
-            msg.innerText = data?.detail || "연결 테스트 실패";
+        async function refreshStatus() {
+          try {
+            const res = await fetch(backendUrl + "/api/broker-accounts/me/status", { headers: authHeaders() });
+            if (res.status === 404) {
+              maskedCard.style.display = "none";
+              document.getElementById("deleteBtn").style.display = "none";
+              updateConnUI("unknown", "", null);
+              return;
+            }
+            const data = await res.json();
+            if (!res.ok) {
+              toast("err", parseDetail(data));
+              return;
+            }
+            document.getElementById("deleteBtn").style.display = "block";
+            updateConnUI(data.connection_status || "unknown", data.connection_message || "", data.last_tested_at);
+          } catch {
+            toast("err", "네트워크 오류");
+          }
+        }
+
+        async function loadAccount() {
+          try {
+            const res = await fetch(backendUrl + "/api/broker-accounts/me", { headers: authHeaders() });
+            if (res.status === 404) {
+              maskedCard.style.display = "none";
+              document.getElementById("deleteBtn").style.display = "none";
+              setMode("paper");
+              await refreshStatus();
+              return;
+            }
+            const data = await res.json();
+            if (!res.ok) {
+              toast("err", parseDetail(data));
+              return;
+            }
+            maskedCard.style.display = "block";
+            document.getElementById("maskedKey").textContent = "앱키: " + (data.kis_app_key_masked || "");
+            document.getElementById("maskedAcct").textContent = "계좌: " + (data.kis_account_no_masked || "");
+            document.getElementById("maskedProd").textContent = "상품코드: " + (data.kis_account_product_code || "");
+            document.getElementById("kis_account_product_code").value = data.kis_account_product_code || "";
+            setMode(data.trading_mode === "live" ? "live" : "paper");
+            updateConnUI(data.connection_status, data.connection_message || "", data.last_tested_at);
+            document.getElementById("deleteBtn").style.display = "block";
+          } catch {
+            toast("err", "계정 정보를 불러오지 못했습니다.");
+          }
+        }
+
+        function readForm() {
+          return {
+            kis_app_key: document.getElementById("kis_app_key").value.trim(),
+            kis_app_secret: document.getElementById("kis_app_secret").value.trim(),
+            kis_account_no: document.getElementById("kis_account_no").value.trim(),
+            kis_account_product_code: document.getElementById("kis_account_product_code").value.trim(),
+            trading_mode: document.getElementById("trading_mode").value,
+          };
+        }
+
+        function validate(form) {
+          if (form.kis_app_key.length < 8) return "앱키는 8자 이상이어야 합니다.";
+          if (form.kis_app_secret.length < 8) return "앱 시크릿은 8자 이상이어야 합니다.";
+          if (form.kis_account_no.length < 4) return "계좌번호를 확인하세요.";
+          if (form.kis_account_product_code.length < 1) return "계좌상품코드를 입력하세요.";
+          if (!["paper", "live"].includes(form.trading_mode)) return "모드는 paper 또는 live만 가능합니다.";
+          return "";
+        }
+
+        document.getElementById("saveBtn").addEventListener("click", async function () {
+          const form = readForm();
+          const err = validate(form);
+          if (err) {
+            toast("err", err);
             return;
           }
-          badge.innerText = data.status || "unknown";
-          msg.innerText = data.message || "";
-        } catch {
-          msg.innerText = "네트워크 오류";
-        }
-      });
+          try {
+            const res = await fetch(backendUrl + "/api/broker-accounts/me", {
+              method: "POST",
+              headers: authHeaders({ "Content-Type": "application/json" }),
+              body: JSON.stringify(form),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+              toast("err", parseDetail(data));
+              return;
+            }
+            lastTestResult = "idle";
+            renderTestBadge();
+            toast("ok", "브로커 정보가 서버에 암호화되어 저장되었습니다.");
+            await loadAccount();
+            await refreshStatus();
+          } catch {
+            toast("err", "네트워크 오류");
+          }
+        });
 
-      document.getElementById("backBtn").addEventListener("click", () => {
-        window.location.href = "./dashboard.html";
-      });
+        document.getElementById("testBtn").addEventListener("click", async function () {
+          lastTestResult = "idle";
+          renderTestBadge();
+          try {
+            const res = await fetch(backendUrl + "/api/broker-accounts/me/test-connection", {
+              method: "POST",
+              headers: authHeaders(),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+              lastTestResult = "fail";
+              renderTestBadge();
+              toast("err", parseDetail(data));
+              return;
+            }
+            lastTestResult = data.ok ? "ok" : "fail";
+            renderTestBadge();
+            toast(data.ok ? "ok" : "err", data.message || (data.ok ? "연결 성공" : "연결 실패"));
+            updateConnUI(data.status, data.message, null);
+            await refreshStatus();
+          } catch {
+            lastTestResult = "fail";
+            renderTestBadge();
+            toast("err", "네트워크 오류");
+          }
+        });
 
-      loadCurrentStatus();
+        document.getElementById("refreshBtn").addEventListener("click", function () {
+          void refreshStatus();
+        });
+
+        document.getElementById("deleteBtn").addEventListener("click", async function () {
+          if (!confirm("서버에 저장된 한국투자 연동 정보를 삭제할까요?")) return;
+          try {
+            const res = await fetch(backendUrl + "/api/broker-accounts/me", { method: "DELETE", headers: authHeaders() });
+            const data = await res.json().catch(function () {
+              return {};
+            });
+            if (!res.ok) {
+              toast("err", parseDetail(data));
+              return;
+            }
+            toast("ok", "저장된 브로커 정보를 삭제했습니다.");
+            document.getElementById("kis_app_key").value = "";
+            document.getElementById("kis_app_secret").value = "";
+            document.getElementById("kis_account_no").value = "";
+            document.getElementById("kis_account_product_code").value = "";
+            setMode("paper");
+            lastTestResult = "idle";
+            renderTestBadge();
+            maskedCard.style.display = "none";
+            document.getElementById("deleteBtn").style.display = "none";
+            await refreshStatus();
+          } catch {
+            toast("err", "삭제 중 오류");
+          }
+        });
+
+        document.getElementById("backBtn").addEventListener("click", function () {
+          window.location.href = "./dashboard.html";
+        });
+
+        await loadAccount();
+        await refreshStatus();
+      })();
     </script>
   </body>
 </html>
