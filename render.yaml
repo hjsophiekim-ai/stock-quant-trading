@@ -2,6 +2,7 @@ services:
   - type: web
     name: stock-quant-backend
     runtime: python
+    # Blueprint scans this file at repository root on main branch.
     rootDir: .
     plan: free
     autoDeploy: true
