@@ -131,10 +131,21 @@ def issue_access_token(
             )
 
         if response.status_code >= 400:
+            detail_msg = ""
+            try:
+                body: dict[str, Any] = response.json()
+                detail_msg = str(body.get("msg1") or body.get("error_description") or body.get("msg") or "").strip()
+            except ValueError:
+                detail_msg = ""
+            # 403은 대부분 모의/실전 도메인-키 조합 불일치 또는 권한/등록 상태 문제다.
+            hint = ""
+            if response.status_code == 403:
+                hint = " (모의/실전 도메인·앱키 조합 또는 API 권한 상태 확인)"
+            suffix = f" - {detail_msg}" if detail_msg else ""
             return KISTokenResult(
                 False,
                 None,
-                f"토큰 발급 실패: HTTP {response.status_code}",
+                f"토큰 발급 실패: HTTP {response.status_code}{suffix}{hint}",
                 "TOKEN_HTTP_ERROR",
                 status_code=response.status_code,
             )

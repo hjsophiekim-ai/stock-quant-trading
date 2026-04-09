@@ -219,6 +219,13 @@ class BrokerSecretService:
                 message = "토큰 발급 성공 및 연결 확인 완료"
             else:
                 message = token_result.message
+                if token_result.status_code == 403:
+                    mode_label = "paper" if str(row["trading_mode"]).strip().lower() == "paper" else "live"
+                    message = (
+                        f"{message} | mode={mode_label} api_base={api_base} | "
+                        "모의투자라면 trading_mode=paper 및 openapivts 도메인, "
+                        "실전이라면 trading_mode=live 및 openapi 도메인/권한을 확인하세요."
+                    )
 
         now = _utc_now_iso()
         with self._connect() as conn:
