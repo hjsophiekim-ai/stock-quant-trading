@@ -11,8 +11,12 @@
 
 ## 파일 구조
 
+- `apps/mobile/assets/`  
+  - `icon.png`, `splash.png`, `adaptive-icon.png` — **EAS Prebuild에 필수** (`app.config.ts` 경로와 일치, 저장소에 커밋 필요)
+- `apps/mobile/babel.config.js`  
+  - `babel-preset-expo` (Expo 번들·Prebuild 호환)
 - `apps/mobile/app.config.ts`  
-  - `extra.backendUrl`, `extra.appEnv` 주입
+  - `extra.backendUrl`, `extra.appEnv`, `extra.eas.projectId` 주입
 - `apps/mobile/eas.json`  
   - `preview-apk`(APK), `production`(AAB) 프로필
 - `apps/mobile/src/config/env.ts`  
@@ -29,6 +33,18 @@
 ```bash
 npm i -g eas-cli
 eas login
+```
+
+## EAS Prebuild 실패 시 (자주 나오는 원인)
+
+- **`ENOENT` / asset 복사 실패**: `app.config.ts`의 `./assets/*.png` 파일이 **git에 없거나 경로 오타**. 위 세 파일을 추가하고 푸시한 뒤 다시 빌드.
+- **로컬 검증** (저장소 루트 또는 `apps/mobile`):
+
+```bash
+cd apps/mobile
+npm install
+npx expo config --type public
+npx expo-doctor
 ```
 
 ## Android 빌드
