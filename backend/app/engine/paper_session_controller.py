@@ -34,6 +34,8 @@ class PaperSessionController:
         self._last_report: dict[str, Any] = {}
         self._last_positions: list[dict[str, Any]] = []
         self._logs: list[dict[str, str]] = []
+        self._user_loop: UserPaperTradingLoop | None = None
+        self._user_loop_identity: tuple[str, ...] | None = None
 
     def _max_failures(self) -> int:
         return max(1, int(get_backend_settings().runtime_max_consecutive_failures))
@@ -70,15 +72,20 @@ class PaperSessionController:
                 api_base = svc._resolve_kis_api_base(mode)
                 if "openapivts" not in (api_base or ""):
                     raise RuntimeError("모의투자 호스트(openapivts)만 허용됩니다.")
-                loop = UserPaperTradingLoop(
-                    app_key=key,
-                    app_secret=secret,
-                    account_no=acct,
-                    product_code=prod,
-                    api_base=api_base,
-                    strategy_id=sid,
-                    user_tag=uid[:12].replace("/", "_").replace("\\", "_"),
-                )
+                identity = (uid, sid, key, secret, acct, prod, api_base)
+                if self._user_loop is None or self._user_loop_identity != identity:
+                    self._user_loop = UserPaperTradingLoop(
+                        app_key=key,
+                        app_secret=secret,
+                        account_no=acct,
+                        product_code=prod,
+                        api_base=api_base,
+                        strategy_id=sid,
+                        user_tag=uid[:12].replace("/", "_").replace("\\", "_"),
+                    )
+                    self._user_loop_identity = identity
+                    self._append_log("info", "Paper 루프 재초기화 (자격/전략 변경 또는 첫 시작)")
+                loop = self._user_loop
                 out = loop.run_intraday_tick()
                 self._last_tick_at = datetime.now(timezone.utc).isoformat()
                 if not out.get("ok"):
@@ -139,6 +146,8 @@ class PaperSessionController:
             self._failure_streak = 0
             self._last_error = None
             self._status = "running"
+            self._user_loop = None
+            self._user_loop_identity = None
             self._run_flag = True
             self._thread = threading.Thread(target=self._loop, name="paper-user-session", daemon=True)
             self._thread.start()
@@ -157,6 +166,8 @@ class PaperSessionController:
             self._user_id = None
             self._strategy_id = None
             self._thread = None
+            self._user_loop = None
+            self._user_loop_identity = None
         self._append_log("info", "Paper 세션 중지")
         return {"ok": True, "status": "stopped"}
 
