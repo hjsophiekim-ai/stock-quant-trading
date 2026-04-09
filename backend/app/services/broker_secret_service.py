@@ -6,6 +6,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import time
 from uuid import uuid4
 
 from cryptography.fernet import Fernet
@@ -72,6 +73,8 @@ class BrokerSecretService:
                 """
             )
             conn.commit()
+        # user_id -> {token, issued_monotonic, mode, api_base, app_key_tail}
+        self._token_cache: dict[str, dict[str, object]] = {}
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -141,6 +144,7 @@ class BrokerSecretService:
                     ),
                 )
             conn.commit()
+        self._token_cache.pop(user_id, None)
         return self.get_account(user_id)
 
     def get_account(self, user_id: str) -> BrokerAccountResponse:
@@ -181,6 +185,40 @@ class BrokerSecretService:
         with self._connect() as conn:
             conn.execute("DELETE FROM broker_accounts WHERE user_id = ?", (user_id,))
             conn.commit()
+        self._token_cache.pop(user_id, None)
+
+    def get_cached_token(
+        self,
+        *,
+        user_id: str,
+        trading_mode: str,
+        api_base: str,
+        app_key: str,
+        max_age_sec: float = 50 * 60,
+    ) -> str | None:
+        """
+        test-connection 직후 발급된 토큰을 paper 루프 첫 틱에서 재사용.
+        KIS 토큰 발급 빈도 제한(1분당 1회 등) 회피에 도움.
+        """
+        ent = self._token_cache.get(user_id)
+        if not ent:
+            return None
+        try:
+            age = float(time.monotonic() - float(ent.get("issued_monotonic", 0.0)))
+        except (TypeError, ValueError):
+            return None
+        if age < 0 or age > max_age_sec:
+            return None
+        if str(ent.get("mode") or "") != str(trading_mode or ""):
+            return None
+        if str(ent.get("api_base") or "") != str(api_base or ""):
+            return None
+        if str(ent.get("app_key_tail") or "") != _mask_keep_last(app_key):
+            return None
+        token = ent.get("token")
+        if not isinstance(token, str) or not token:
+            return None
+        return token
 
     def test_connection(self, user_id: str) -> BrokerConnectionTestResponse:
         with self._connect() as conn:
@@ -217,6 +255,14 @@ class BrokerSecretService:
                 ok = True
                 status = "success"
                 message = "토큰 발급 성공 및 연결 확인 완료"
+                if token_result.access_token:
+                    self._token_cache[user_id] = {
+                        "token": token_result.access_token,
+                        "issued_monotonic": time.monotonic(),
+                        "mode": str(row["trading_mode"]).strip().lower(),
+                        "api_base": api_base,
+                        "app_key_tail": _mask_keep_last(app_key),
+                    }
             else:
                 message = token_result.message
                 if token_result.status_code == 403:

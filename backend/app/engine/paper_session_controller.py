@@ -74,6 +74,12 @@ class PaperSessionController:
                     raise RuntimeError("모의투자 호스트(openapivts)만 허용됩니다.")
                 identity = (uid, sid, key, secret, acct, prod, api_base)
                 if self._user_loop is None or self._user_loop_identity != identity:
+                    cached_token = svc.get_cached_token(
+                        user_id=uid,
+                        trading_mode=mode,
+                        api_base=api_base,
+                        app_key=key,
+                    )
                     self._user_loop = UserPaperTradingLoop(
                         app_key=key,
                         app_secret=secret,
@@ -82,9 +88,14 @@ class PaperSessionController:
                         api_base=api_base,
                         strategy_id=sid,
                         user_tag=uid[:12].replace("/", "_").replace("\\", "_"),
+                        initial_access_token=cached_token,
                     )
                     self._user_loop_identity = identity
-                    self._append_log("info", "Paper 루프 재초기화 (자격/전략 변경 또는 첫 시작)")
+                    self._append_log(
+                        "info",
+                        "Paper 루프 재초기화 (자격/전략 변경 또는 첫 시작)"
+                        + (" · test-connection 토큰 재사용" if cached_token else ""),
+                    )
                 loop = self._user_loop
                 out = loop.run_intraday_tick()
                 self._last_tick_at = datetime.now(timezone.utc).isoformat()

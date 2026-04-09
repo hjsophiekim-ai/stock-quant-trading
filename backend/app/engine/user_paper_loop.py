@@ -42,6 +42,7 @@ class UserPaperTradingLoop:
         strategy_id: str,
         user_tag: str,
         backend_settings: BackendSettings | None = None,
+        initial_access_token: str | None = None,
     ) -> None:
         self._app_key = app_key
         self._app_secret = app_secret
@@ -51,8 +52,8 @@ class UserPaperTradingLoop:
         self._strategy_id = strategy_id
         self._user_tag = user_tag
         self._backend = backend_settings or get_backend_settings()
-        self._access_token: str | None = None
-        self._token_monotonic: float = 0.0
+        self._access_token: str | None = initial_access_token
+        self._token_monotonic: float = time.monotonic() if initial_access_token else 0.0
 
     def _issue_token(self) -> str:
         tr = issue_access_token(

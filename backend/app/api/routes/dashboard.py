@@ -27,7 +27,8 @@ from backend.app.strategy.signal_engine import get_swing_signal_engine, snapshot
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
-_BROKER_PROBE_TTL_SEC = 45.0
+# 서버 .env 브로커 probe는 토큰 발급 API를 사용하므로 너무 자주 호출하지 않는다.
+_BROKER_PROBE_TTL_SEC = 180.0
 _OPEN_ORDERS_TTL_SEC = 20.0
 _broker_probe_cache: tuple[float, dict[str, Any]] | None = None
 _open_orders_cache: tuple[float, list[dict[str, Any]], str | None] | None = None
