@@ -29,7 +29,8 @@
 
 - Windows 10/11 x64
 - [Node.js LTS](https://nodejs.org/) (권장 20.x)
-- **`package.json` 구조**: `electron` 과 `electron-builder` 는 **반드시 `devDependencies`** 에만 둡니다. `dependencies` 에 `electron` 이 있으면 electron-builder 등이 빌드를 거절할 수 있습니다(`Package "electron" is only allowed in "devDependencies"`).
+- **`package.json` 구조**: `electron` 과 `electron-builder` 는 **반드시 `devDependencies`** 에만 둡니다. `dependencies` 에 `electron` 이 있으면 electron-builder 가 빌드를 거절합니다(`Package "electron" is only allowed in "devDependencies"`). 빌드 전 `node scripts/verify-package-json.js` 가 동일 규칙을 검사합니다( `build:win` 에서 자동 실행).
+- **모노레포**: 저장소 루트의 `package.json` 은 **npm workspaces 를 쓰지 않습니다**(모바일 Expo와 충돌 방지). 데스크톱만 빌드할 때는 `cd apps\desktop` 또는 루트에서 `npm run desktop:build:win` 을 사용하세요.
 - **권장**: `node_modules` 는 **로컬 디스크**(예: `C:\dev\...`)에 두고 빌드하세요. Google Drive·OneDrive 동기화 폴더에서는 `npm install` / 압축 해제 시 `TAR_ENTRY_ERROR` 가 날 수 있습니다.
 
 저장소 클론 후:
@@ -80,8 +81,11 @@ npx cross-env APP_ENV=production BACKEND_URL=https://api.yourcompany.com npm run
 ### 산출물
 
 - **출력 디렉터리**: `apps/desktop/dist/` (`package.json` 의 `build.directories.output`)
-- **NSIS 설치 파일**: `apps/desktop/dist/Stock Quant Desktop-Setup-0.1.0.exe` (버전은 `package.json` 의 `version` 과 동일; 제품명·공백은 `productName` 과 동일)
-- 빌드 중간 산물(언팩 앱 등)도 같은 `dist` 아래에 생성될 수 있습니다.
+- **NSIS 설치 파일(정확한 파일명)**: `artifactName` 이 `${productName}-Setup-${version}.${ext}` 이므로 기본값은  
+  **`apps/desktop/dist/Stock Quant Desktop-Setup-0.1.0.exe`**  
+  (`version` 을 올리면 `Setup-0.1.1.exe` 처럼 따라감)
+- 동일 폴더에 **`Stock Quant Desktop-Setup-0.1.0.exe.blockmap`** 등 부가 파일이 생성될 수 있습니다.
+- **아이콘**: `build/icons/icon.png` (256×256 이상 권장). `win.icon` 으로 지정됩니다.
 
 ## NSIS 설치 동작 요약
 
@@ -121,7 +125,9 @@ npx cross-env APP_ENV=production BACKEND_URL=https://api.yourcompany.com npm run
 | 설치 후 “서버 연결: 실패” | 운영 백엔드 가동·URL·TLS 확인. 로그인 화면 고급에서 올바른 URL 저장 후 재시도. |
 | 빌드 후 `src/runtime-config.js` 가 바뀜 | 정상입니다. 스크립트가 **finally에서 복원**합니다. 복원 실패 시 `git checkout -- apps/desktop/src/runtime-config.js` |
 | `npm run build:win:local` 실패 | `npm install` 재실행, Node LTS 사용, 관리자 권한 불필요(일반 사용자 권한으로 빌드 가능). |
-| `Package "electron" is only allowed in devDependencies` | `apps/desktop/package.json` 에서 `electron` 을 `dependencies` 에서 제거하고 `devDependencies` 로 옮긴 뒤 `npm install` 재실행. |
+| `Package "electron" is only allowed in devDependencies` | `apps/desktop/package.json` 에서 `electron` / `electron-builder` 를 `dependencies` 에 두지 마세요. `devDependencies` 로만 두고 `node_modules`·`package-lock.json` 삭제 후 `npm install` 재실행. |
+| `Language name is unknown for korean` | NSIS `installerLanguages` 에 `Korean` 같은 표기 대신 **`ko_KR`**, **`en_US`** 형식을 사용합니다(현재 저장소 기본값). |
+| `app-builder.exe` / 아이콘 변환 실패 | `build/icons/icon.png` 가 없거나 너무 작으면 실패할 수 있습니다. 256×256 이상 PNG를 두고 `win.icon` 과 맞추세요. |
 | `TAR_ENTRY_ERROR` / Drive 동기화 폴더 | 프로젝트를 로컬 디스크로 복제하거나 `node_modules` 를 로컬 경로에 설치. |
 
 ## 관련 파일

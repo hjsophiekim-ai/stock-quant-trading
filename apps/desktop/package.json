@@ -42,8 +42,10 @@
           ]
         }
       ],
-      "icon": "build/icons/icon.ico",
-      "executableName": "StockQuantDesktop"
+      "executableName": "StockQuantDesktop",
+      "icon": "build/icons/icon.png",
+      "signAndEditExecutable": false,
+      "verifyUpdateCodeSignature": false
     },
     "nsis": {
       "oneClick": false,
@@ -53,14 +55,11 @@
       "createStartMenuShortcut": true,
       "shortcutName": "Stock Quant Desktop",
       "installerLanguages": [
-        "Korean",
-        "English"
+        "ko_KR",
+        "en_US"
       ],
-      "language": "1042",
       "deleteAppDataOnUninstall": false,
-      "runAfterFinish": true,
-      "installerIcon": "build/icons/icon.ico",
-      "uninstallerIcon": "build/icons/icon.ico"
+      "runAfterFinish": true
     }
   }
 }

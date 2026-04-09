@@ -1,6 +1,5 @@
 Desktop build icon directory.
 
-- Default icon path used by electron-builder: `build/icons/icon.ico`
-- `scripts/build-win.js` auto-creates a minimal placeholder icon if missing.
-- For production branding, replace `icon.ico` with your real app icon (256×256 권장, 다중 해상도 포함 `.ico`).
+- Windows 빌드는 **`build/icons/icon.png`** (최소 256×256) 를 사용합니다. `package.json` 의 `build.win.icon` 에 연결되어 있습니다.
+- 상용 브랜딩 시 이 PNG를 교체하거나, 멀티 해상도 `.ico` 로 바꾼 뒤 `win.icon` 경로를 함께 수정하세요.
 - NSIS 추가 비트맵·브랜딩: `build/installer/README.md`

@@ -1,0 +1,9 @@
+{
+  "name": "stock-quant-trading",
+  "private": true,
+  "description": "Monorepo: Python backend + apps/mobile + apps/desktop. No npm workspaces (Expo/mobile 호환). Windows 설치 파일은 apps/desktop 에서만 빌드합니다.",
+  "scripts": {
+    "desktop:install": "npm install --prefix apps/desktop",
+    "desktop:build:win": "npm run build:win --prefix apps/desktop"
+  }
+}
