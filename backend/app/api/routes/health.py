@@ -9,12 +9,12 @@ from backend.app.core.config import get_backend_settings
 router = APIRouter(tags=["health"])
 
 
-@router.get("/health")
+@router.api_route("/health", methods=["GET", "HEAD"])
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "backend-api"}
 
 
-@router.get("/ready")
+@router.api_route("/ready", methods=["GET", "HEAD"])
 def ready() -> dict[str, object]:
     """
     운영 배포용 readiness 힌트.

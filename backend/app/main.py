@@ -67,6 +67,6 @@ app.include_router(risk_router, prefix="/api")
 app.include_router(order_engine_router, prefix="/api")
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def root() -> dict[str, str]:
     return {"service": "stock-quant-backend", "mode": settings.trading_mode}

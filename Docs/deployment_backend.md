@@ -70,10 +70,12 @@ Cloud provider에서 **헬스 체크 URL**로 `/api/health` 또는 `/api/ready` 
 ### 1) Render (웹 서비스)
 
 - Dockerfile 기반 Web Service 로 생성
+- Python 버전 고정 권장: 루트 `runtime.txt` (`python-3.11.10`) 사용
 - 환경 변수:
   - `APP_ENV=production`
   - 나머지 `.env` 값들 (KIS 키 포함) Render 환경 변수로 설정
 - 포트: 8000 (Render가 자동으로 외부 포트에 매핑)
+- Health check: `/api/health` (HEAD 요청도 200 응답하도록 라우트 설정 유지)
 - 앱에서는:
   - 데스크톱 `BACKEND_URL=https://<your-service>.onrender.com`
   - 모바일 `EXPO_PUBLIC_BACKEND_URL=https://<your-service>.onrender.com`
