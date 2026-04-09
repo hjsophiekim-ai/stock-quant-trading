@@ -71,11 +71,14 @@ Cloud provider에서 **헬스 체크 URL**로 `/api/health` 또는 `/api/ready` 
 
 - Dockerfile 기반 Web Service 로 생성
 - Python 버전 고정 권장: 루트 `runtime.txt` (`python-3.11.10`) 사용
+- 사용자/브로커 정보 영속화를 위해 **Render Disk** 사용 권장(예: `/var/data`, 1GB)
 - 환경 변수:
   - `APP_ENV=production`
+  - `BACKEND_DATA_DIR=/var/data` (users.json, broker_accounts.db, runtime state 저장)
   - 나머지 `.env` 값들 (KIS 키 포함) Render 환경 변수로 설정
 - 포트: 8000 (Render가 자동으로 외부 포트에 매핑)
 - Health check: `/api/health` (HEAD 요청도 200 응답하도록 라우트 설정 유지)
+- 주의: Disk를 붙이지 않으면 재배포/재시작 시 로컬 파일 기반 사용자·브로커 정보가 초기화될 수 있습니다.
 - 앱에서는:
   - 데스크톱 `BACKEND_URL=https://<your-service>.onrender.com`
   - 모바일 `EXPO_PUBLIC_BACKEND_URL=https://<your-service>.onrender.com`

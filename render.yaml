@@ -24,7 +24,13 @@ services:
         value: "false"
       - key: APP_SECRET_KEY
         sync: false
+      - key: BACKEND_DATA_DIR
+        value: /var/data
       - key: KIS_APP_KEY
         sync: false
       - key: KIS_APP_SECRET
         sync: false
+    disk:
+      name: stock-quant-backend-data
+      mountPath: /var/data
+      sizeGB: 1

@@ -9,6 +9,10 @@ class BackendSettings(BaseSettings):
 
     app_env: str = Field(default="local", alias="APP_ENV")
     app_secret_key: str = Field(default="", alias="APP_SECRET_KEY")
+    backend_data_dir: str = Field(default="backend_data", alias="BACKEND_DATA_DIR")
+    auth_users_path: str = Field(default="", alias="AUTH_USERS_PATH")
+    auth_revoked_tokens_path: str = Field(default="", alias="AUTH_REVOKED_TOKENS_PATH")
+    broker_accounts_db_path: str = Field(default="", alias="BROKER_ACCOUNTS_DB_PATH")
     database_url: str = Field(default="sqlite:///./trading.db", alias="DATABASE_URL")
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
 

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict
 from uuid import uuid4
 
@@ -14,9 +16,53 @@ from ..models.user import LoginResponse, TokenPair, UserCreate, UserEntity, User
 @dataclass
 class UserAuthService:
     jwt_service: JWTService
+    users_store_path: str = "backend_data/users.json"
+    revoked_store_path: str = "backend_data/revoked_refresh_tokens.json"
     _pwd: CryptContext = field(default_factory=lambda: CryptContext(schemes=["bcrypt"], deprecated="auto"))
     _users_by_email: Dict[str, UserEntity] = field(default_factory=dict)
     _revoked_refresh_tokens: set[str] = field(default_factory=set)
+
+    def __post_init__(self) -> None:
+        self._load_from_disk()
+
+    def _load_from_disk(self) -> None:
+        users_path = Path(self.users_store_path)
+        revoked_path = Path(self.revoked_store_path)
+        users_path.parent.mkdir(parents=True, exist_ok=True)
+        revoked_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if users_path.is_file():
+            try:
+                raw = json.loads(users_path.read_text(encoding="utf-8"))
+                loaded: Dict[str, UserEntity] = {}
+                for item in raw if isinstance(raw, list) else []:
+                    user = UserEntity.model_validate(item)
+                    loaded[user.email.lower()] = user
+                self._users_by_email = loaded
+            except (OSError, ValueError, TypeError):
+                # 파일이 깨졌으면 빈 상태로 시작하되 서비스는 계속 동작
+                self._users_by_email = {}
+
+        if revoked_path.is_file():
+            try:
+                raw = json.loads(revoked_path.read_text(encoding="utf-8"))
+                self._revoked_refresh_tokens = set(raw if isinstance(raw, list) else [])
+            except (OSError, ValueError, TypeError):
+                self._revoked_refresh_tokens = set()
+
+    def _persist_users(self) -> None:
+        p = Path(self.users_store_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        serializable = [
+            user.model_dump(mode="json")
+            for user in sorted(self._users_by_email.values(), key=lambda u: (u.email, u.id))
+        ]
+        p.write_text(json.dumps(serializable, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _persist_revoked(self) -> None:
+        p = Path(self.revoked_store_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(sorted(self._revoked_refresh_tokens), ensure_ascii=False, indent=2), encoding="utf-8")
 
     def register(self, payload: UserCreate) -> UserPublic:
         key = payload.email.lower()
@@ -34,6 +80,7 @@ class UserAuthService:
             created_at=datetime.now(timezone.utc),
         )
         self._users_by_email[key] = user
+        self._persist_users()
         return self._to_public(user)
 
     def login(self, payload: UserLogin) -> LoginResponse:
@@ -64,6 +111,7 @@ class UserAuthService:
         access_token, access_ttl = self.jwt_service.create_access_token(user.id, role=user.role)
         new_refresh, refresh_ttl = self.jwt_service.create_refresh_token(user.id)
         self._revoked_refresh_tokens.add(refresh_token)
+        self._persist_revoked()
         return TokenPair(
             access_token=access_token,
             refresh_token=new_refresh,
@@ -73,6 +121,7 @@ class UserAuthService:
 
     def logout(self, refresh_token: str) -> None:
         self._revoked_refresh_tokens.add(refresh_token)
+        self._persist_revoked()
 
     def get_current_user(self, access_token: str) -> UserPublic:
         payload = self.jwt_service.decode(access_token)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, Header, HTTPException, status
 
 from ..auth.jwt_service import JWTConfig, JWTService
@@ -17,7 +19,12 @@ _jwt = JWTService(
         refresh_ttl_days=14,
     )
 )
-_auth_service = UserAuthService(jwt_service=_jwt)
+_data_dir = Path(_settings.backend_data_dir or "backend_data")
+_auth_service = UserAuthService(
+    jwt_service=_jwt,
+    users_store_path=_settings.auth_users_path or str(_data_dir / "users.json"),
+    revoked_store_path=_settings.auth_revoked_tokens_path or str(_data_dir / "revoked_refresh_tokens.json"),
+)
 
 
 def _extract_bearer_token(authorization: str | None) -> str:

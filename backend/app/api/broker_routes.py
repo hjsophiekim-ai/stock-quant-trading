@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, Header, HTTPException, status
 
 from ..auth.kis_auth import issue_access_token, validate_kis_inputs
@@ -16,8 +18,9 @@ from ..services.broker_secret_service import BrokerSecretService
 router = APIRouter(prefix="/broker-accounts", tags=["broker-accounts"])
 
 _settings = get_backend_settings()
+_data_dir = Path(_settings.backend_data_dir or "backend_data")
 _broker_service = BrokerSecretService(
-    db_path="./backend_data/broker_accounts.db",
+    db_path=_settings.broker_accounts_db_path or str(_data_dir / "broker_accounts.db"),
     encryption_seed=_settings.app_secret_key or "dev-change-me",
     kis_base_url=_settings.kis_base_url,
     kis_mock_base_url=getattr(_settings, "kis_mock_base_url", "") or "https://openapivts.koreainvestment.com:29443",
