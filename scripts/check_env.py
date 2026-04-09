@@ -63,9 +63,9 @@ def main() -> None:
     env_path = Path(".env")
     env_paper = Path(".env.paper")
     if not env_path.is_file():
-        warnings.append(".env missing → copy env.paper.example to .env.paper, edit, then copy to .env")
+        warnings.append(".env missing → copy env.paper.example to .env.paper, edit, then: copy /Y .env.paper .env (cmd) or Copy-Item .env.paper .env (PowerShell)")
     if env_paper.is_file() and not env_path.is_file():
-        warnings.append(".env.paper exists but .env does not → cp .env.paper .env  (Unix) / copy .env.paper .env  (Windows)")
+        warnings.append(".env.paper exists but .env does not → copy /Y .env.paper .env  (Windows cmd)  |  Copy-Item .env.paper .env  (PowerShell)")
 
     venv_py = Path(".venv/bin/python")
     venv_win = Path(".venv/Scripts/python.exe")

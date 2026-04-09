@@ -26,9 +26,7 @@
 
 ### mock/demo 성격이 남아 있는 기능 (명확 구분)
 
-- **Performance API(`backend/app/api/routes/performance.py`)**:
-  - 현재는 샘플/고정 데이터 응답 중심
-  - 실제 체결/손익 DB 기반 집계는 추가 개발 필요
+- **Performance API**: `portfolio_data` 스냅샷·체결 이력 기반 집계이며, 일부 지표(월 수익률·승률 등)는 추정치일 수 있음(`data_quality` 필드 참고).
 - **대시보드 일부 카드**:
   - 사용자별 실계좌와 1:1 완전 동기화가 아닌 스냅샷/집계 혼합 구간 존재
   - README 및 대시보드 TODO 메시지에서 한계를 명시
@@ -109,7 +107,8 @@ Mock/실제 연동 구분:
 
 - `docs/product_architecture.md` : **일반 사용자 설치형 제품** 기준 아키텍처 (Win 설치본·Android·JWT·서버 번들)
 - `docs/user_flow.md` : 실행→로그인→대시보드·자동 로그인·API 목록
-- `docs/quickstart_real_mock_trading.md` : 모의투자·백엔드·Swagger·체크리스트 (초보자)
+- `Docs/today_run_checklist.md` : **오늘 바로 실행** (Windows·Python 3.11·`.env`·Swagger 순서)
+- `Docs/quickstart_real_mock_trading.md` : 모의투자·백엔드·Swagger·체크리스트 (초보자)
 - `docs/e2e_mock_trading.md` : Swagger 11단계 end-to-end 점검 가이드
 - `docs/quickstart_user_desktop.md` : 일반 사용자용 Windows 빠른 시작
 - `docs/quickstart_user_android.md` : 일반 사용자용 Android 빠른 시작
@@ -156,7 +155,8 @@ Render Web Service 기준으로 바로 배포할 수 있도록 루트에 `render
 
 **한국투자 모의계좌부터 Swagger·브로커 등록·paper·손익 확인까지** 하려면 아래 문서를 따르세요.
 
-- **[docs/quickstart_real_mock_trading.md](docs/quickstart_real_mock_trading.md)** — `.env.paper` → `.env`, 가상환경, 점검 스크립트, 10단계 체크리스트, 흔한 오류
+- **[Docs/today_run_checklist.md](Docs/today_run_checklist.md)** — 오늘 실행 최소 체크리스트(Swagger API 순서 포함)
+- **[Docs/quickstart_real_mock_trading.md](Docs/quickstart_real_mock_trading.md)** — `.env.paper` → `.env`, 가상환경, 점검 스크립트, 10단계 체크리스트, 흔한 오류
 
 요약 순서:
 

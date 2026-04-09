@@ -2,6 +2,8 @@
 
 이 문서는 **git clone 후 최소 단계**로 로컬 백엔드를 띄우고, **모의투자 API**와 **앱 계정·브로커 설정**까지 연결하는 순서를 정리합니다.
 
+> **한 페이지만 보고 싶다면** → [today_run_checklist.md](./today_run_checklist.md) (오늘 실행 체크리스트 · Swagger API 순서)
+
 > **실거래(live) 주문은 이 프로젝트에서 기본 금지입니다.**  
 > `TRADING_MODE=live` 와 여러 `LIVE_TRADING*` 확인 플래그가 동시에 켜지지 않으면 실주문 경로는 열리지 않습니다. 초보자는 **paper만** 사용하세요.
 
