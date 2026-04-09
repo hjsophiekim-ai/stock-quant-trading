@@ -257,7 +257,7 @@ npm run desktop:build:win
 
 산출물: **`apps/desktop/dist/Stock Quant Desktop-Setup-0.1.0.exe`** (기본 `version` 이 `0.1.0` 일 때; 버전은 `apps/desktop/package.json` 참고)
 
-**PC·폰에 나눠 줄 zip 패키지**: 빌드 후 루트에서 `npm run release:zip:clients` → `release/stock-quant-client-install.zip`. APK는 EAS로 빌드한 뒤 스크립트에 `-ApkPath`로 넣거나 폴더에 복사 후 다시 압축하면 됩니다. **어디에 올려 받게 할지**는 [Docs/client_install_download.md](Docs/client_install_download.md) 참고(GitHub Releases, 클라우드 링크 등).
+**PC·폰에 나눠 줄 zip 패키지**: 빌드 후 루트에서 `npm run release:zip:clients` → `release/stock-quant-client-install.zip`, Android 전용 안내는 `npm run release:zip:android` → `release/stock-quant-android-install.zip`. README(KO/EN)는 **UTF-8 BOM**으로 넣어 메모장에서도 깨지지 않습니다. APK는 EAS(`eas login`) 후 빌드하고 `.\scripts\package-client-install-zip.ps1 -ApkPath "..."` 등으로 포함합니다. **배포 위치**는 [Docs/client_install_download.md](Docs/client_install_download.md) 참고.
 
 **사용자 최소 설정**: 설치 후 앱 실행 → 로그인(또는 회원가입). 서버 URL은 설치 파일에 포함된 기본값을 쓰며, 바꿀 때만 로그인 화면 **「고급: 서버 주소」**를 사용합니다. 상단 **서버 연결** 표시가 `GET /api/health` 기준으로 정상인지 보여 줍니다.
 

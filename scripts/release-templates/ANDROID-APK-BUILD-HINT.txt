@@ -1,0 +1,15 @@
+APK not included — quick build checklist (UTF-8 BOM)
+====================================================
+
+Why: Expo EAS requires `eas login`. No login → no cloud APK from this repo.
+
+Steps (developer PC):
+  1. npm i -g eas-cli
+  2. eas login
+  3. cd apps/mobile && npm install && eas build:configure
+  4. npm run build:android:apk
+  5. Download APK from Expo, then:
+     .\scripts\package-client-install-zip.ps1 -ApkPath "...\file.apk"
+     .\scripts\package-android-install-zip.ps1 -ApkPath "...\file.apk"
+
+Docs: Docs/deployment_mobile.md
