@@ -19,15 +19,24 @@ npm start
 
 ## Windows 설치 파일 빌드
 
+**권장**: 저장소를 `C:\dev\...` 등 로컬 디스크에 두고, Google Drive 경로에서는 빌드하지 마세요. 빌드 전 `StockQuantDesktop.exe` / Electron 프로세스를 종료하세요.
+
+```powershell
+# 저장소 루트에서 (프리플라이트 포함)
+cd <저장소-루트>
+npm run desktop:install
+npm run desktop:build:win
+```
+
+또는 이 폴더에서 직접:
+
 ```powershell
 cd apps\desktop
 npm install
-# 로컬 API용
 npm run build:win:local
-# 운영 API용 (URL 교체)
 npx cross-env APP_ENV=production BACKEND_URL=https://api.example.com npm run build:win
 ```
 
-결과: `dist/Stock Quant Desktop-Setup-<version>.exe`
+결과: `dist/Stock Quant Desktop-Setup-<version>.exe` (기본 `0.1.0` 이면 `Stock Quant Desktop-Setup-0.1.0.exe`)
 
-상세: [docs/deployment_desktop.md](../../docs/deployment_desktop.md)
+상세: [Docs/deployment_desktop.md](../../Docs/deployment_desktop.md)

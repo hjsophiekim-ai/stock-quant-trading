@@ -25,67 +25,145 @@
 
 로그인 화면 상단의 **「서버 연결」** 은 `GET {BACKEND_URL}/api/health` 로 도달 여부를 표시합니다.
 
-## 빌드 전 준비
+---
 
-- Windows 10/11 x64
-- [Node.js LTS](https://nodejs.org/) (권장 20.x)
-- **`package.json` 구조**: `electron` 과 `electron-builder` 는 **반드시 `devDependencies`** 에만 둡니다. `dependencies` 에 `electron` 이 있으면 electron-builder 가 빌드를 거절합니다(`Package "electron" is only allowed in "devDependencies"`). 빌드 전 `node scripts/verify-package-json.js` 가 동일 규칙을 검사합니다( `build:win` 에서 자동 실행).
-- **모노레포**: 저장소 루트의 `package.json` 은 **npm workspaces 를 쓰지 않습니다**(모바일 Expo와 충돌 방지). 데스크톱만 빌드할 때는 `cd apps\desktop` 또는 루트에서 `npm run desktop:build:win` 을 사용하세요.
-- **권장**: `node_modules` 는 **로컬 디스크**(예: `C:\dev\...`)에 두고 빌드하세요. Google Drive·OneDrive 동기화 폴더에서는 `npm install` / 압축 해제 시 `TAR_ENTRY_ERROR` 가 날 수 있습니다.
+## 초보자용: Windows 설치파일(.exe) 빌드 (저장소 기준)
 
-저장소 클론 후:
+### 1) 왜 Google Drive / 동기화 폴더에서 빌드하면 안 되나
+
+- `npm install` 이 패키지 압축 해제 시 **`TAR_ENTRY_ERROR`**, **파일 잠금**, **불완전한 `node_modules`** 로 실패하기 쉽습니다.
+- 이전 빌드의 **`dist\win-unpacked`**, **`StockQuantDesktop.exe`** 가 잠겨 있으면 폴더 삭제·덮어쓰기가 막혀 **복사본이 깨진 상태**로 남을 수 있습니다.
+
+**권장**: 저장소 전체를 **`C:\dev\stock-quant-trading`** 또는 **`C:\temp\stock-quant-trading`** 처럼 **로컬 디스크**로 복사한 뒤, 그 경로에서만 `npm install` / `npm run build:win` 을 실행합니다.
+
+### 2) 빌드 전 준비 (잠금·깨진 복사본 대비)
+
+1. **실행 중인 앱·빌드 산출물 종료**
+   - 작업 관리자에서 **`Stock Quant Desktop`**, **`StockQuantDesktop.exe`**, **`Electron`** 관련 프로세스가 있으면 종료합니다.
+   - 이전에 `win-unpacked` 안에서 앱을 실행해 둔 경우 **반드시 종료**합니다 (파일 잠금 원인).
+
+2. **잠긴 `dist` 정리 (선택)**
+   - PowerShell (저장소 루트 또는 `apps\desktop`):
+   - `Remove-Item -Recurse -Force .\apps\desktop\dist -ErrorAction SilentlyContinue`
+   - 여전히 삭제가 안 되면 **PC 재부팅** 후 다시 시도하거나, 해당 폴더를 사용 중인 **탐색기 창을 닫습니다**.
+
+3. **필수 파일 존재 확인 (저장소가 온전한지)**
 
 ```powershell
-cd apps\desktop
+# 저장소 루트에서 (루트에 루트 package.json 이 있어야 함)
+Test-Path .\apps\desktop\package.json
+Test-Path .\apps\desktop\scripts\build-win.js
+Test-Path .\apps\desktop\scripts\verify-package-json.js
+Test-Path .\apps\desktop\build\icons\icon.png
+```
+
+위가 모두 **`True`** 여야 합니다. 하나라도 `False` 이면 **clone/복사가 잘렸거나 경로가 잘못된 것**입니다.
+
+4. **`package.json` 을 못 찾는다고 나올 때**
+
+- **루트에서** `npm run desktop:build:win` 을 쓰는 경우: 반드시 **git 저장소 최상위**(루트 `package.json` 이 있는 폴더)에서 실행합니다.
+- 확인:
+
+```powershell
+Get-Location
+Test-Path .\package.json
+Test-Path .\apps\desktop\package.json
+node .\scripts\preflight-desktop-build.js
+```
+
+마지막 명령이 `[preflight] OK ...\apps\desktop\package.json` 을 출력하면 경로가 맞습니다.
+
+5. **의존성 설치**
+
+```powershell
+cd C:\dev\stock-quant-trading
+npm run desktop:install
+```
+
+또는 `apps\desktop` 만 직접 쓸 때:
+
+```powershell
+cd C:\dev\stock-quant-trading\apps\desktop
 npm install
 ```
 
-## 아이콘·NSIS 리소스
+### 3) 설치파일 빌드 명령 (둘 중 하나만 일관되게)
 
-- 필수: `apps/desktop/build/icons/icon.ico`  
-  - 없으면 빌드 스크립트가 **최소 플레이스홀더** `.ico` 를 생성합니다. 상용 배포 전에 **256×256 포함 멀티 해상도 아이콘**으로 교체하세요.
-- 선택: `apps/desktop/build/installer/README.md` 참고 — 사이드바/헤더 BMP, 라이선스 페이지 등.
-
-## 설치 파일 생성 명령
-
-### A) 로컬 백엔드용 설치 패키지 (개발·자가 호스팅)
-
-백엔드를 같은 PC에서 `127.0.0.1:8000` 으로 띄우는 사용자용:
+**방법 A — 저장소 루트에서 (권장, 프리플라이트 포함)**
 
 ```powershell
-cd apps\desktop
-npm run build:win:local
+cd C:\dev\stock-quant-trading
+npm run desktop:build:win
 ```
 
-### B) 원격(운영) API URL이 고정된 설치 패키지 (일반 사용자 권장)
-
-PowerShell (한 줄):
+운영 URL을 넣어 빌드할 때:
 
 ```powershell
-cd apps\desktop
+cd C:\dev\stock-quant-trading
 $env:APP_ENV="production"
-$env:BACKEND_URL="https://api.yourcompany.com"
+$env:BACKEND_URL="https://api.example.com"
+npm run desktop:build:win
+```
+
+**방법 B — `apps\desktop` 으로 들어가서**
+
+```powershell
+cd C:\dev\stock-quant-trading\apps\desktop
 npm run build:win
 ```
 
-또는 `npx cross-env` (npm 스크립트와 동일하게 동작):
+로컬 백엔드(127.0.0.1:8000)용 테스트 설치파일:
 
 ```powershell
-cd apps\desktop
-npx cross-env APP_ENV=production BACKEND_URL=https://api.yourcompany.com npm run build:win
+cd C:\dev\stock-quant-trading\apps\desktop
+npm run build:win:local
 ```
 
-- **HTTPS** 권장. 인증서가 신뢰되지 않으면 Electron에서 연결이 실패할 수 있습니다.
-- 로컬 URL로 빌드하면 스크립트가 **경고**를 출력합니다(실수 방지).
+### 4) 빌드 성공 여부·산출물 확인
 
-### 산출물
+빌드가 끝나면 다음이 있어야 합니다.
 
-- **출력 디렉터리**: `apps/desktop/dist/` (`package.json` 의 `build.directories.output`)
-- **NSIS 설치 파일(정확한 파일명)**: `artifactName` 이 `${productName}-Setup-${version}.${ext}` 이므로 기본값은  
-  **`apps/desktop/dist/Stock Quant Desktop-Setup-0.1.0.exe`**  
-  (`version` 을 올리면 `Setup-0.1.1.exe` 처럼 따라감)
-- 동일 폴더에 **`Stock Quant Desktop-Setup-0.1.0.exe.blockmap`** 등 부가 파일이 생성될 수 있습니다.
-- **아이콘**: `build/icons/icon.png` (256×256 이상 권장). `win.icon` 으로 지정됩니다.
+| 확인 | 명령 또는 경로 |
+|------|----------------|
+| 설치 프로그램 | **`apps/desktop/dist/Stock Quant Desktop-Setup-0.1.0.exe`** (`package.json` 의 `version` 이 `0.1.0` 일 때) |
+| 부가 파일 | 같은 폴더에 `Stock Quant Desktop-Setup-0.1.0.exe.blockmap` 등 생성 가능 |
+| 언팩 결과 | `apps/desktop/dist/win-unpacked\` (중간 산출물) |
+
+PowerShell 예:
+
+```powershell
+Get-ChildItem .\apps\desktop\dist\*.exe
+```
+
+`artifactName` 이 `${productName}-Setup-${version}.${ext}` 이므로, **`version` 을 올리면 파일명의 `0.1.0` 부분만 바뀝니다.**
+
+---
+
+## 빌드 환경 요약
+
+- Windows 10/11 x64
+- [Node.js LTS](https://nodejs.org/) (권장 20.x 이상)
+- **`package.json` 구조**: `electron` / `electron-builder` 는 **`devDependencies` 만** (`build:win` 시 `verify-package-json.js` 로 검사).
+- **모노레포**: 루트 `package.json` 은 **npm workspaces 없음**. 데스크톱 빌드는 **`npm run desktop:*`** 또는 **`cd apps\desktop`** 만 사용.
+
+## 아이콘·NSIS 리소스
+
+- **아이콘**: `apps/desktop/build/icons/icon.png` (256×256 이상 권장). `build.win.icon` 으로 지정됩니다.
+- NSIS 추가 비트맵·브랜딩: `apps/desktop/build/installer/README.md`
+
+## 설치 파일 생성 명령 (경로 요약)
+
+위 **「초보자용」** 절차와 동일합니다. 요약:
+
+- 루트: `npm run desktop:build:win`
+- `apps\desktop` 만: `npm run build:win` / `npm run build:win:local`
+
+- **HTTPS** 권장. 로컬 URL로 빌드하면 스크립트가 **경고**를 출력합니다.
+
+### 산출물 (고정)
+
+- **출력 디렉터리**: `apps/desktop/dist/`
+- **기본 설치 파일명**: **`Stock Quant Desktop-Setup-0.1.0.exe`** (저장소 기본 `version` 기준)
 
 ## NSIS 설치 동작 요약
 
@@ -118,22 +196,35 @@ npx cross-env APP_ENV=production BACKEND_URL=https://api.yourcompany.com npm run
 
 현재 공식 경로는 **원격 백엔드**입니다. 같은 설치 프로그램에 Python 런타임·가상환경·`uvicorn`을 묶으려면 별도 작업(용량·업데이트·방화벽·서비스 등록)이 필요합니다. 필요 시 `docs/product_architecture.md` 와 별도 이슈로 범위를 정의하는 것을 권장합니다.
 
-## 문제 해결
+## 빌드 실패 시 가장 흔한 원인 5가지
+
+| # | 원인 | 해결 |
+|---|------|------|
+| 1 | **저장소 루트가 아닌 곳**에서 `npm run desktop:build:win` 실행 → `apps/desktop/package.json` 없음 | `Get-Location` 과 `Test-Path .\apps\desktop\package.json` 확인. 루트로 이동하거나 `cd apps\desktop` 후 `npm run build:win`. `node scripts/preflight-desktop-build.js` 로 확인. |
+| 2 | **Google Drive / OneDrive** 경로에서 `npm install` · 빌드 → 잠금·깨진 `node_modules` | 프로젝트를 **`C:\dev\...` 또는 `C:\temp\...`** 로 전체 복사 후 그 경로에서만 빌드. |
+| 3 | **이전 빌드 프로세스**(`StockQuantDesktop.exe`, `Electron`) 또는 **탐색기가 `dist\win-unpacked` 사용 중** | 작업 관리자로 프로세스 종료, 탐색기 창 닫기, 필요 시 재부팅 후 `dist` 삭제. |
+| 4 | **`electron` 이 `dependencies`에 있음** (또는 옛 `package-lock` 혼선) | `apps/desktop/package.json` 에서 `electron` 은 **devDependencies만**. `node_modules` 삭제 후 `npm install` 재실행. |
+| 5 | **`build/icons/icon.png` 누락** 또는 NSIS 언어 설정 오류 | `icon.png` 가 저장소에 포함되어 있는지 확인. NSIS 언어는 **`ko_KR` / `en_US`** 형식(저장소 기본값). |
+
+## 문제 해결 (기타)
 
 | 증상 | 조치 |
 |------|------|
 | 설치 후 “서버 연결: 실패” | 운영 백엔드 가동·URL·TLS 확인. 로그인 화면 고급에서 올바른 URL 저장 후 재시도. |
 | 빌드 후 `src/runtime-config.js` 가 바뀜 | 정상입니다. 스크립트가 **finally에서 복원**합니다. 복원 실패 시 `git checkout -- apps/desktop/src/runtime-config.js` |
-| `npm run build:win:local` 실패 | `npm install` 재실행, Node LTS 사용, 관리자 권한 불필요(일반 사용자 권한으로 빌드 가능). |
-| `Package "electron" is only allowed in devDependencies` | `apps/desktop/package.json` 에서 `electron` / `electron-builder` 를 `dependencies` 에 두지 마세요. `devDependencies` 로만 두고 `node_modules`·`package-lock.json` 삭제 후 `npm install` 재실행. |
-| `Language name is unknown for korean` | NSIS `installerLanguages` 에 `Korean` 같은 표기 대신 **`ko_KR`**, **`en_US`** 형식을 사용합니다(현재 저장소 기본값). |
-| `app-builder.exe` / 아이콘 변환 실패 | `build/icons/icon.png` 가 없거나 너무 작으면 실패할 수 있습니다. 256×256 이상 PNG를 두고 `win.icon` 과 맞추세요. |
-| `TAR_ENTRY_ERROR` / Drive 동기화 폴더 | 프로젝트를 로컬 디스크로 복제하거나 `node_modules` 를 로컬 경로에 설치. |
+| `Package "electron" is only allowed in devDependencies` | 위 표 #4 참고. |
+| `Language name is unknown for korean` | `installerLanguages` 를 **`ko_KR`**, **`en_US`** 로 유지. |
+| `app-builder.exe` / 아이콘 변환 실패 | `build/icons/icon.png` (256×256 이상) 유지. |
+| `TAR_ENTRY_ERROR` | 위 표 #2 참고. |
 
 ## 관련 파일
 
+- `package.json` (저장소 루트) — `desktop:preflight` / `desktop:install` / `desktop:build:win`  
+- `scripts/preflight-desktop-build.js` — 루트에서 `apps/desktop` 경로 검증  
 - `apps/desktop/package.json` — `build` / `nsis` / `electron-builder` 설정  
-- `apps/desktop/scripts/build-win.js` — URL 주입·아이콘 플레이스홀더·패킹  
+- `apps/desktop/scripts/build-win.js` — URL 주입·`cwd` 고정·패킹  
+- `apps/desktop/scripts/verify-package-json.js` — electron 의존성 위치 검증  
+- `apps/desktop/build/icons/icon.png` — Windows 아이콘 소스  
 - `apps/desktop/src/main.js` — production 시 로그인 우선 시작  
 - `apps/desktop/src/runtime-config.js` — 개발 기본값(저장소에 커밋)  
 - `apps/desktop/src/login.html` — 연결 확인·URL 오버라이드  

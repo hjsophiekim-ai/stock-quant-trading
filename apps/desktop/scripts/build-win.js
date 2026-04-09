@@ -2,7 +2,19 @@ const { execSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const projectRoot = path.join(__dirname, "..");
+const projectRoot = path.resolve(__dirname, "..");
+
+const desktopPkg = path.join(projectRoot, "package.json");
+if (!fs.existsSync(desktopPkg)) {
+  console.error(
+    `[desktop-build] FATAL: package.json 을 찾을 수 없습니다: ${desktopPkg}`,
+  );
+  console.error(
+    "[desktop-build] scripts/build-win.js 는 apps/desktop 폴더 안에서만 실행되어야 합니다. (npm run build:win 은 apps/desktop 에서 실행하거나, 저장소 루트에서 npm run desktop:build:win)",
+  );
+  process.exit(1);
+}
+console.log(`[desktop-build] projectRoot=${projectRoot}`);
 
 require(path.join(__dirname, "verify-package-json.js"));
 
