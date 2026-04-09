@@ -80,7 +80,7 @@
 
 모바일/데스크톱 공통으로 아래 순서대로 진행하면 바로 확인 가능합니다.
 
-1. 백엔드를 먼저 실행합니다 (기본 주소 `http://127.0.0.1:8000` — 앱에 기본값으로 들어 있어 URL을 매번 입력하지 않아도 됩니다).
+1. **로컬 개발**이면 백엔드를 먼저 실행합니다 (기본 주소 `http://127.0.0.1:8000` — 데스크톱/모바일 **개발 모드** 기본값). **스토어·설치 배포본**은 기본으로 `https://stock-quant-backend.onrender.com` 을 가리키며, 다른 서버를 쓰려면 빌드 시 `BACKEND_URL` / `EXPO_PUBLIC_BACKEND_URL` 로 지정합니다.
 2. **첫 실행**이면 짧은 온보딩(설정 마법사) 후 로그인 화면으로 이동합니다.
 3. Login 화면에서 `Register (First Run)` / `회원가입`으로 계정 생성 후 로그인합니다. **로그인 유지**를 켜면 다음 실행 시 자동 로그인을 시도합니다 (`/api/auth/me` · refresh).
 4. 로그인 성공 후 **대시보드로 자동 진입**합니다.
@@ -138,7 +138,7 @@ Render Web Service 기준으로 바로 배포할 수 있도록 루트에 `render
 2. 생성된 서비스 `Environment`에 `APP_SECRET_KEY` 입력
 3. 브로커 연동까지 쓸 경우 `KIS_APP_KEY`, `KIS_APP_SECRET`도 입력
 4. 배포 후 `https://<service>.onrender.com/api/health` 확인
-5. 앱에는 공용 URL만 넣기:
+5. 다른 Render 서비스나 자체 도메인을 쓸 때만 URL을 빌드에 넣기 (저장소 기본은 이미 `https://stock-quant-backend.onrender.com`):
    - 모바일: `EXPO_PUBLIC_BACKEND_URL=https://<service>.onrender.com`
    - 데스크톱: `BACKEND_URL=https://<service>.onrender.com`
 
@@ -238,20 +238,20 @@ Render Web Service 기준으로 바로 배포할 수 있도록 루트에 `render
 
 Electron 기반 **NSIS 설치 프로그램**(`Stock Quant Desktop-Setup-*.exe`)을 빌드할 수 있습니다. 설치 후 **바탕화면·시작 메뉴 바로가기**로 실행하며, **production 빌드는 로그인 화면부터** 시작합니다(온보딩 생략).
 
-**백엔드는 앱에 포함되지 않습니다.** 일반 사용자가 로컬에서 Python을 실행하지 않게 하려면, 설치 파일을 만들 때 **`BACKEND_URL`을 이미 띄워 둔 원격 API(HTTPS 권장)** 로 지정하세요.
+**백엔드는 앱에 포함되지 않습니다.** `BACKEND_URL` 없이 빌드하면 설치본 기본 API는 **`https://stock-quant-backend.onrender.com`** 입니다. 자체 서버를 쓰면 빌드 시 `BACKEND_URL`만 지정하면 됩니다.
 
 **빌드 요약 (개발자)**
 
 - **Google Drive 등 동기화 폴더에서는 빌드하지 마세요.** 저장소를 **`C:\dev\...` 또는 `C:\temp\...`** 로 복사한 뒤 진행합니다.
 - 빌드 전 **`StockQuantDesktop.exe` / Electron** 프로세스를 종료하고, 잠긴 `apps\desktop\dist` 가 있으면 닫거나 삭제합니다.
 - 저장소 **루트**에서: `npm run desktop:install` → `npm run desktop:build:win` (`apps\desktop\package.json` 경로를 자동 검증).
-- 또는 `cd apps\desktop` 후 `npm install` → `npm run build:win` / `npm run build:win:local`.
+- 또는 `cd apps\desktop` 후 `npm install` → `npm run build:win`(Render 기본) / `npm run build:win:local`(로컬 백엔드용).
 
 ```powershell
-# 예: 로컬 디스크에 복사한 저장소 루트에서
+# 예: 로컬 디스크에 복사한 저장소 루트에서 (설치본 → Render 기본)
 npm run desktop:install
 npm run desktop:build:win
-# 테스트용(127.0.0.1:8000 백엔드 URL 주입)은 apps\desktop 에서:
+# 로컬 백엔드(127.0.0.1:8000)용 설치 파일은 apps\desktop 에서:
 # npm run build:win:local
 ```
 
@@ -268,7 +268,7 @@ Backend URL 주입 요약:
 ## Android 설치 파일 (일반 사용자)
 
 모바일 앱은 Expo/EAS 기반으로 배포하며, **앱에는 KIS 키를 저장하지 않고 로그인 후 백엔드 API만 사용**합니다.  
-일반 사용자 배포는 **클라우드 백엔드 URL이 기본 주입된 빌드**를 사용합니다.
+일반 사용자 배포는 **프로덕션 빌드에서 `https://stock-quant-backend.onrender.com` 이 기본**이며, 다른 API를 쓸 때만 환경변수로 덮어씁니다. 로컬 개발(`expo start`)은 기본이 `http://127.0.0.1:8000` 입니다.
 
 빌드(개발자 PC):
 
@@ -281,7 +281,7 @@ npm run build:android:apk
 npm run build:android:aab
 ```
 
-기본 백엔드 URL은 `apps/mobile/app.config.ts`에서 설정되며, 빌드 시 아래처럼 교체할 수 있습니다.
+`apps/mobile/app.config.ts`에서 `APP_ENV`에 따라 위 기본값이 정해집니다. 다른 서버로 고정하려면:
 
 ```bash
 EXPO_PUBLIC_BACKEND_URL=https://api.mycompany.com npx eas build --platform android --profile production

@@ -5,8 +5,9 @@
 - 앱은 **로그인 후 백엔드 API만 사용**합니다.
 - KIS 키/시크릿은 앱에 저장하지 않고, 서버에만 암호화 저장합니다.
 - 일반 사용자 배포는 **클라우드 백엔드 URL 고정** 방식입니다.
-  - 기본값: `https://api.stock-quant.example.com`
-  - 필요 시 EAS 빌드 환경변수 `EXPO_PUBLIC_BACKEND_URL`로 교체
+  - `APP_ENV=production` 빌드 시 기본값: `https://stock-quant-backend.onrender.com`
+  - 개발(`APP_ENV` 미설정 또는 `development`) 기본값: `http://127.0.0.1:8000`
+  - 필요 시 EAS/로컬 빌드 환경변수 `EXPO_PUBLIC_BACKEND_URL`로 항상 덮어쓸 수 있음
 
 ## 파일 구조
 

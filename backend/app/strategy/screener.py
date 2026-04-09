@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -20,12 +20,13 @@ from backend.app.auth.kis_auth import issue_access_token
 from backend.app.clients.kis_client import build_kis_client_for_backend
 from backend.app.core.config import get_backend_settings, resolved_kis_api_base_url
 from backend.app.strategy.ranking import (
-    ScreenedCandidate,
-    apply_hard_filters,
     apply_return_top_percentile,
+    apply_screening_gates,
     build_symbol_feature_row,
     rank_candidates,
     regime_adjusted_top_n_and_percentile,
+    screened_candidate_to_api_dict,
+    weights_for_regime,
 )
 from app.scheduler.kis_universe import (
     build_kis_stock_universe,
@@ -45,16 +46,6 @@ def _parse_symbols(raw: str) -> list[str]:
     return [p.strip() for p in (raw or "").split(",") if p.strip()]
 
 
-def _candidate_to_dict(c: ScreenedCandidate) -> dict[str, Any]:
-    return {
-        "symbol": c.symbol,
-        "total_score": round(c.total_score, 6),
-        "factor_scores": {k: round(v, 6) for k, v in c.factor_scores.items()},
-        "reasons": list(c.reasons),
-        "metrics": {k: round(v, 6) for k, v in c.metrics.items()},
-    }
-
-
 @dataclass
 class ScreeningSnapshot:
     updated_at_utc: str
@@ -68,6 +59,8 @@ class ScreeningSnapshot:
     filter_audit: list[str]
     top_n_effective: int
     return_percentile_threshold_pct: float | None = None
+    exclusions: list[dict[str, Any]] = field(default_factory=list)
+    regime_screening_profile: dict[str, Any] = field(default_factory=dict)
 
 
 def _kis_client_for_screener() -> Any:
@@ -204,20 +197,55 @@ class ScreenerEngine:
             return snap
 
         rows: list[dict] = []
+        data_exclusions: list[dict[str, Any]] = []
         for sym in symbols:
             row = build_symbol_feature_row(prices_df, sym)
             if row is None:
+                data_exclusions.append(
+                    {
+                        "symbol": sym,
+                        "stage": "insufficient_data",
+                        "block_reasons": [
+                            "일봉이 65거래일 미만이거나 지표 계산에 필요한 데이터가 부족합니다.",
+                        ],
+                    }
+                )
                 audit.append(f"{sym}: 데이터부족(<65일) 제외")
             else:
                 rows.append(row)
 
-        hard_pass, hard_log = apply_hard_filters(rows)
-        audit.extend(hard_log)
-        pct_pass, pct_log, thr = apply_return_top_percentile(hard_pass, top_pct=ret_top_pct)
+        gate_pass, gate_exclusions, gate_log = apply_screening_gates(
+            rows,
+            max_vol_std_pct=bcfg.screener_max_vol_std_pct,
+            max_abs_gap_pct=bcfg.screener_max_abs_gap_pct,
+            min_volume_ratio=bcfg.screener_min_volume_ratio,
+        )
+        audit.extend(gate_log)
+
+        pct_pass, pct_log, pct_exclusions, thr = apply_return_top_percentile(gate_pass, top_pct=ret_top_pct)
         audit.extend(pct_log)
 
-        ranked = rank_candidates(pct_pass, regime=regime, top_n=top_n_eff)
-        cand_dicts = [_candidate_to_dict(c) for c in ranked]
+        w = weights_for_regime(regime)
+        ranked = rank_candidates(pct_pass, regime=regime, top_n=top_n_eff, weights=w)
+        cand_dicts = [screened_candidate_to_api_dict(c, regime=regime) for c in ranked]
+
+        exclusions_merged: list[dict[str, Any]] = [*data_exclusions, *gate_exclusions, *pct_exclusions]
+        regime_profile: dict[str, Any] = {
+            "regime": regime,
+            "weights": asdict(w),
+            "thresholds": {
+                "max_vol_std_pct": bcfg.screener_max_vol_std_pct,
+                "max_abs_gap_pct": bcfg.screener_max_abs_gap_pct,
+                "min_volume_ratio": bcfg.screener_min_volume_ratio,
+                "return_percentile_top_fraction": ret_top_pct,
+                "top_n_effective": top_n_eff,
+            },
+            "stage_descriptions_ko": {
+                "insufficient_data": "시세 데이터 부족",
+                "risk_gate": "추세·유동성·변동성·갭 리스크 게이트",
+                "return_percentile": "60일 수익률 상위 비율 필터",
+            },
+        }
 
         snap = ScreeningSnapshot(
             updated_at_utc=datetime.now(timezone.utc).isoformat(),
@@ -231,6 +259,8 @@ class ScreenerEngine:
             filter_audit=audit,
             top_n_effective=top_n_eff,
             return_percentile_threshold_pct=thr,
+            exclusions=exclusions_merged,
+            regime_screening_profile=regime_profile,
         )
         logger.info(
             "screener refresh regime=%s candidates=%d/%d thr_ret=%s audit_lines=%d",
@@ -258,6 +288,8 @@ class ScreenerEngine:
             "block_reason": snap.block_reason,
             "universe_symbols": snap.universe_symbols,
             "candidates": snap.candidates,
+            "exclusions": snap.exclusions,
+            "regime_screening_profile": snap.regime_screening_profile,
             "filter_audit": snap.filter_audit,
             "top_n_effective": snap.top_n_effective,
             "return_percentile_threshold_pct": snap.return_percentile_threshold_pct,
@@ -296,5 +328,8 @@ def screening_snapshot_to_dashboard_dict(snap: ScreeningSnapshot | None) -> dict
         "block_reason": snap.block_reason,
         "top_n_effective": snap.top_n_effective,
         "candidates": snap.candidates,
+        "exclusions": snap.exclusions,
+        "exclusion_count": len(snap.exclusions),
+        "regime_screening_profile": snap.regime_screening_profile,
         "filter_audit_tail": snap.filter_audit[-12:] if snap.filter_audit else [],
     }

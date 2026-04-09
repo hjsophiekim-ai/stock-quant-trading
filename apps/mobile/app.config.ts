@@ -2,7 +2,12 @@ import type { ExpoConfig } from "expo/config";
 
 const appEnv = process.env.APP_ENV ?? "development";
 const isProd = appEnv === "production";
-const defaultBackendUrl = "https://api.stock-quant.example.com";
+const defaultDevBackendUrl = "http://127.0.0.1:8000";
+const defaultProdBackendUrl = "https://stock-quant-backend.onrender.com";
+const useHostedDefault = isProd || appEnv === "staging";
+const defaultBackendUrl = useHostedDefault
+  ? defaultProdBackendUrl
+  : defaultDevBackendUrl;
 const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL ?? defaultBackendUrl;
 
 const config: ExpoConfig = {

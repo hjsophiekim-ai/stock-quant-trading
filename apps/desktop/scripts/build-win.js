@@ -18,7 +18,10 @@ console.log(`[desktop-build] projectRoot=${projectRoot}`);
 
 require(path.join(__dirname, "verify-package-json.js"));
 
-const backendUrl = process.env.BACKEND_URL || "http://127.0.0.1:8000";
+/** `BACKEND_URL` 미지정 시 NSIS 설치본에 박히는 운영 API 기본값 (Render). */
+const DEFAULT_PRODUCTION_BACKEND_URL =
+  "https://stock-quant-backend.onrender.com";
+const backendUrl = process.env.BACKEND_URL || DEFAULT_PRODUCTION_BACKEND_URL;
 const appEnv = process.env.APP_ENV || "production";
 
 const runtimeConfigPath = path.join(projectRoot, "src", "runtime-config.js");
@@ -35,7 +38,7 @@ let hadPreviousFile = false;
 
 if (appEnv === "production" && /127\.0\.0\.1|localhost/i.test(backendUrl)) {
   console.warn(
-    "[desktop-build] BACKEND_URL이 로컬입니다. 일반 사용자 배포는 운영 서버 URL(예: https://api.example.com)로 다시 빌드하세요.",
+    "[desktop-build] BACKEND_URL이 로컬입니다. 일반 사용자 배포는 기본값(Render)을 쓰거나 운영 HTTPS URL로 `BACKEND_URL`을 지정해 빌드하세요.",
   );
 }
 

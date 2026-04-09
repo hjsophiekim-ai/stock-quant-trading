@@ -22,6 +22,17 @@ class BackendSettings(BaseSettings):
     live_trading_confirm: bool = Field(default=False, alias="LIVE_TRADING_CONFIRM")
     live_trading_extra_confirm: bool = Field(default=False, alias="LIVE_TRADING_EXTRA_CONFIRM")
 
+    # 실거래 잠금 해제 전 모의(paper) 자동 검증 게이트
+    live_unlock_enabled: bool = Field(default=True, alias="LIVE_UNLOCK_ENABLED")
+    live_unlock_bypass: bool = Field(default=False, alias="LIVE_UNLOCK_BYPASS")
+    live_unlock_lookback_days: int = Field(default=30, ge=7, le=365, alias="LIVE_UNLOCK_LOOKBACK_DAYS")
+    live_unlock_min_pnl_samples: int = Field(default=10, ge=3, le=500, alias="LIVE_UNLOCK_MIN_PNL_SAMPLES")
+    live_unlock_min_period_return_pct: float = Field(default=0.0, ge=-50.0, le=200.0, alias="LIVE_UNLOCK_MIN_PERIOD_RETURN_PCT")
+    live_unlock_max_mdd_pct: float = Field(default=15.0, ge=1.0, le=80.0, alias="LIVE_UNLOCK_MAX_MDD_PCT")
+    live_unlock_max_consecutive_loss_days: int = Field(default=5, ge=1, le=60, alias="LIVE_UNLOCK_MAX_CONSECUTIVE_LOSS_DAYS")
+    live_unlock_max_order_issue_rate: float = Field(default=0.05, ge=0.0, le=1.0, alias="LIVE_UNLOCK_MAX_ORDER_ISSUE_RATE")
+    live_unlock_max_sync_failure_streak: int = Field(default=0, ge=0, le=20, alias="LIVE_UNLOCK_MAX_SYNC_FAILURE_STREAK")
+
     runtime_loop_interval_sec: int = Field(default=120, ge=10, alias="RUNTIME_LOOP_INTERVAL_SEC")
     runtime_max_consecutive_failures: int = Field(default=5, ge=1, alias="RUNTIME_MAX_CONSECUTIVE_FAILURES")
     runtime_state_path: str = Field(default="backend_data/runtime_engine_state.json", alias="RUNTIME_STATE_PATH")
@@ -35,6 +46,10 @@ class BackendSettings(BaseSettings):
     screener_report_dir: str = Field(default="backend_data/screening", alias="SCREENER_REPORT_DIR")
     screener_universe_symbols: str = Field(default="", alias="SCREENER_UNIVERSE_SYMBOLS")
     screener_auto_refresh_with_runtime: bool = Field(default=True, alias="SCREENER_AUTO_REFRESH_WITH_RUNTIME")
+    # 스크리너 리스크 게이트 (리스크 최소화: 고변동·갭 과열·유동성 부족 제외)
+    screener_max_vol_std_pct: float = Field(default=4.0, ge=0.5, le=20.0, alias="SCREENER_MAX_VOL_STD_PCT")
+    screener_max_abs_gap_pct: float = Field(default=5.0, ge=0.5, le=30.0, alias="SCREENER_MAX_ABS_GAP_PCT")
+    screener_min_volume_ratio: float = Field(default=1.0, ge=0.5, le=3.0, alias="SCREENER_MIN_VOLUME_RATIO")
 
     signal_engine_order_quantity: int = Field(default=10, ge=1, alias="SIGNAL_ENGINE_ORDER_QUANTITY")
     signal_suppress_ttl_sec: float = Field(default=120.0, ge=5.0, alias="SIGNAL_SUPPRESS_TTL_SEC")
@@ -57,6 +72,11 @@ class BackendSettings(BaseSettings):
     portfolio_sync_max_consecutive_failures: int = Field(
         default=3, ge=1, le=20, alias="PORTFOLIO_SYNC_MAX_CONSECUTIVE_FAILURES"
     )
+
+    # 성과·FIFO: 체결 행에 수수료/세금이 없을 때 적용하는 비율(소수, 예: 0.0015 = 0.15%)
+    kis_buy_fee_rate: float = Field(default=0.00015, ge=0.0, le=0.05, alias="KIS_BUY_FEE_RATE")
+    kis_sell_fee_rate: float = Field(default=0.00015, ge=0.0, le=0.05, alias="KIS_SELL_FEE_RATE")
+    krx_sell_tax_rate: float = Field(default=0.0015, ge=0.0, le=0.05, alias="KRX_SELL_TAX_RATE")
 
 
 @lru_cache(maxsize=1)

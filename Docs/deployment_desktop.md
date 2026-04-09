@@ -8,9 +8,9 @@
 | **백엔드 API** (`backend/`) | FastAPI 서버. 한국투자 연동·암호화 저장·Paper 세션 등 **반드시 서버에서 실행**. |
 
 이 저장소의 Windows 설치 패키지는 **내장 백엔드(파이썬 번들)를 포함하지 않습니다.**  
-일반 사용자가 **로컬에서 `uvicorn`을 직접 실행하지 않아도** 쓰려면, 배포 시 **`BACKEND_URL`을 운영 중인 원격(또는 사내) API 서버**로 고정해 빌드하는 방식을 권장합니다.
+`npm run build:win`(또는 루트 `desktop:build:win`)에서 **`BACKEND_URL`을 지정하지 않으면** 설치본 기본 API는 **`https://stock-quant-backend.onrender.com`** 입니다.
 
-- **권장(일반 사용자)**: 원격 백엔드 URL을 빌드 시 주입 → 사용자는 앱 설치 후 **로그인만** 하면 됨(서버는 운영자가 상시 구동).
+- **권장(일반 사용자)**: 위 기본값으로 빌드하거나, 자체 서버가 있으면 빌드 시 `BACKEND_URL`만 지정 → 사용자는 앱 설치 후 **로그인만** 하면 됨.
 - **개발·내부 테스트**: `build:win:local` 로 `http://127.0.0.1:8000` 을 넣은 설치 파일을 만들고, PC에서 백엔드를 별도로 띄움.
 
 로그인 화면 **「고급: 서버 주소」**에서 `localStorage` 기준으로 URL을 덮어쓸 수 있어, 현장 지원·스테이징 서버 전환이 가능합니다.
@@ -96,7 +96,7 @@ cd C:\dev\stock-quant-trading
 npm run desktop:build:win
 ```
 
-운영 URL을 넣어 빌드할 때:
+다른 운영 서버 URL로 덮어써 빌드할 때:
 
 ```powershell
 cd C:\dev\stock-quant-trading
@@ -104,6 +104,8 @@ $env:APP_ENV="production"
 $env:BACKEND_URL="https://api.example.com"
 npm run desktop:build:win
 ```
+
+(`BACKEND_URL`을 비우면 기본으로 `https://stock-quant-backend.onrender.com` 이 들어갑니다.)
 
 **방법 B — `apps\desktop` 으로 들어가서**
 

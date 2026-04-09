@@ -21,12 +21,12 @@ from backend.app.orders.order_store import TrackedOrderStore, filter_active_subm
 from backend.app.portfolio.sync_engine import load_last_snapshot, read_jsonl_tail
 from backend.app.risk.audit import read_jsonl_tail as read_jsonl_tail_risk
 from backend.app.risk.service import build_public_risk_status
+from backend.app.portfolio.performance_aggregate import build_dashboard_performance_block
 from backend.app.strategy.screener import get_screener_engine, screening_snapshot_to_dashboard_dict
 from backend.app.strategy.signal_engine import get_swing_signal_engine, snapshot_to_jsonable
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
-_KST = ZoneInfo("Asia/Seoul")
 _BROKER_PROBE_TTL_SEC = 45.0
 _OPEN_ORDERS_TTL_SEC = 20.0
 _broker_probe_cache: tuple[float, dict[str, Any]] | None = None
@@ -74,7 +74,7 @@ def _dashboard_todos() -> list[str]:
         "open_orders: KIS broker 미체결 조회 기반. 현재 서버 런타임 계정 기준이며 앱 사용자별 1:1 미체결 동기화는 TODO.",
         "recent_fills·손익 카드: portfolio_data 마지막 sync 스냅샷 및 fills.jsonl. 서버 .env KIS가 앱 모의 계정과 다르면 대시보드 정합이 어긋날 수 있음(TODO: 사용자별 sync).",
         "paper_trading: 앱 Paper 세션은 사용자 모의 자격으로 KIS 주문 — 전역 /api/runtime-engine 과 별도. 단일 세션(한 사용자만 동시 실행).",
-        "monthly_return_pct: pnl_history.jsonl 월초 대비 추정. 이력 부족 시 0.",
+        "monthly_return_pct: performance_aggregate 와 /api/performance 동일(equity 곡선, UTC 월앵커).",
     ]
 
 
@@ -155,47 +155,6 @@ def _account_status_from_broker(probe: dict[str, Any]) -> str:
     if probe.get("status") == "misconfigured":
         return "limited"
     return "disconnected"
-
-
-def _monthly_return_pct_from_pnl_history(
-    cfg: BackendSettings,
-    *,
-    latest_equity: float,
-    max_scan_lines: int = 4000,
-) -> float | None:
-    p = Path(cfg.portfolio_data_dir) / "pnl_history.jsonl"
-    rows = read_jsonl_tail(p, max_lines=max_scan_lines)
-    if not rows or latest_equity <= 0:
-        return None
-    now_kst = datetime.now(_KST)
-    month_start = now_kst.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    in_month: list[tuple[datetime, float]] = []
-    for row in rows:
-        ts_raw = row.get("ts_utc")
-        if not ts_raw:
-            continue
-        try:
-            ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=ZoneInfo("UTC"))
-            ts_kst = ts.astimezone(_KST)
-        except (TypeError, ValueError):
-            continue
-        if ts_kst < month_start:
-            continue
-        try:
-            e = float(row.get("equity"))
-        except (TypeError, ValueError):
-            continue
-        if e > 0:
-            in_month.append((ts_kst, e))
-    if not in_month:
-        return None
-    in_month.sort(key=lambda x: x[0])
-    e0 = in_month[0][1]
-    if e0 <= 0:
-        return None
-    return round(((latest_equity / e0) - 1.0) * 100.0, 4)
 
 
 def _risk_banner_from_aggregate(
@@ -346,12 +305,11 @@ def dashboard_summary(authorization: str | None = Header(default=None)) -> dict[
     portfolio_warnings = list(portfolio.get("warnings") or []) if portfolio else []
     sync_flag = (Path(cfg.portfolio_data_dir) / "sync_risk_review.flag").is_file()
 
-    today_pct = float(portfolio.get("daily_pnl_pct") or 0.0) if portfolio else 0.0
-    cumulative_pct = float(portfolio.get("cumulative_pnl_pct") or 0.0) if portfolio else 0.0
     equity = float(portfolio.get("equity") or 0.0) if portfolio else 0.0
-    monthly_pct = _monthly_return_pct_from_pnl_history(cfg, latest_equity=equity)
-    if monthly_pct is None:
-        monthly_pct = 0.0
+    perf_aligned = build_dashboard_performance_block()
+    today_pct = float(perf_aligned["today_return_pct"])
+    monthly_pct = float(perf_aligned["monthly_return_pct"])
+    cumulative_pct = float(perf_aligned["cumulative_return_pct"])
 
     realized = float(portfolio.get("realized_pnl") or 0.0) if portfolio else 0.0
     unrealized = float(portfolio.get("unrealized_pnl") or 0.0) if portfolio else 0.0
@@ -406,6 +364,7 @@ def dashboard_summary(authorization: str | None = Header(default=None)) -> dict[
         ),
         "risk_limits_summary": risk_st["limits"],
         "screener": screener_dash,
+        "performance_aligned": perf_aligned,
         # --- 운영 상세 ---
         "broker": broker_probe,
         "runtime_engine": {
@@ -463,9 +422,10 @@ def dashboard_summary(authorization: str | None = Header(default=None)) -> dict[
         },
         "user_broker_account": user_broker_snap,
         "value_sources": {
-            "today_return_pct": "portfolio_snapshot.daily_pnl_pct",
-            "monthly_return_pct": "derived_from_pnl_history_month_start_to_latest_equity",
-            "cumulative_return_pct": "portfolio_snapshot.cumulative_pnl_pct",
+            "today_return_pct": "performance_aggregate.build_dashboard_performance_block (pnl_history, /performance 동일)",
+            "monthly_return_pct": "performance_aggregate (equity curve, /performance 동일)",
+            "cumulative_return_pct": "performance_aggregate (equity curve, /performance 동일)",
+            "performance_aligned": "fills FIFO + KIS/KRX 비율·체결 컬럼, pnl_history 수익률",
             "realized_pnl": "portfolio_snapshot.realized_pnl",
             "unrealized_pnl": "portfolio_snapshot.unrealized_pnl",
             "current_positions": "portfolio_snapshot.positions (KIS balance + fills replay merge)",
@@ -480,7 +440,7 @@ def dashboard_summary(authorization: str | None = Header(default=None)) -> dict[
         "data_quality": {
             "open_orders_user_scoped": False,
             "recent_fills_user_scoped": False,
-            "monthly_return_estimated": True,
+            "monthly_return_estimated": False,
             "regime_dual_source": True,
         },
         "dashboard_todos": _dashboard_todos(),

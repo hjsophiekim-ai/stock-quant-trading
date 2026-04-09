@@ -18,7 +18,7 @@
       },
       "env": {
         "APP_ENV": "staging",
-        "EXPO_PUBLIC_BACKEND_URL": "https://staging-api.stock-quant.example.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://stock-quant-backend.onrender.com"
       }
     },
     "production": {
@@ -28,7 +28,7 @@
       },
       "env": {
         "APP_ENV": "production",
-        "EXPO_PUBLIC_BACKEND_URL": "https://api.stock-quant.example.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://stock-quant-backend.onrender.com"
       }
     }
   },
