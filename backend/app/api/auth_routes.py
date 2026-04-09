@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi import APIRouter, Header, HTTPException, status
 
 from ..auth.jwt_service import JWTConfig, JWTService
 from ..auth.user_auth import UserAuthService
 from ..core.config import get_backend_settings
+from ..core.storage_paths import get_resolved_storage_paths
 from ..models.user import LogoutRequest, LoginResponse, RefreshRequest, TokenPair, UserCreate, UserLogin, UserPublic
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -19,12 +18,20 @@ _jwt = JWTService(
         refresh_ttl_days=14,
     )
 )
-_data_dir = Path(_settings.backend_data_dir or "backend_data")
-_auth_service = UserAuthService(
-    jwt_service=_jwt,
-    users_store_path=_settings.auth_users_path or str(_data_dir / "users.json"),
-    revoked_store_path=_settings.auth_revoked_tokens_path or str(_data_dir / "revoked_refresh_tokens.json"),
-)
+
+_auth_service: UserAuthService | None = None
+
+
+def get_auth_service() -> UserAuthService:
+    global _auth_service
+    if _auth_service is None:
+        paths = get_resolved_storage_paths()
+        _auth_service = UserAuthService(
+            jwt_service=_jwt,
+            users_store_path=str(paths.auth_users_path),
+            revoked_store_path=str(paths.auth_revoked_tokens_path),
+        )
+    return _auth_service
 
 
 def _extract_bearer_token(authorization: str | None) -> str:
@@ -36,19 +43,15 @@ def _extract_bearer_token(authorization: str | None) -> str:
     return authorization[len(prefix):].strip()
 
 
-def get_auth_service() -> UserAuthService:
-    return _auth_service
-
-
 def get_current_user_from_auth_header(authorization: str | None) -> UserPublic:
     token = _extract_bearer_token(authorization)
-    return _auth_service.get_current_user(token)
+    return get_auth_service().get_current_user(token)
 
 
 @router.post("/register", response_model=UserPublic)
 def register(payload: UserCreate) -> UserPublic:
     try:
-        return _auth_service.register(payload)
+        return get_auth_service().register(payload)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -56,7 +59,7 @@ def register(payload: UserCreate) -> UserPublic:
 @router.post("/login", response_model=LoginResponse)
 def login(payload: UserLogin) -> LoginResponse:
     try:
-        return _auth_service.login(payload)
+        return get_auth_service().login(payload)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
@@ -64,14 +67,14 @@ def login(payload: UserLogin) -> LoginResponse:
 @router.post("/refresh", response_model=TokenPair)
 def refresh(payload: RefreshRequest) -> TokenPair:
     try:
-        return _auth_service.refresh(payload.refresh_token)
+        return get_auth_service().refresh(payload.refresh_token)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
 
 @router.post("/logout")
 def logout(payload: LogoutRequest) -> dict[str, str]:
-    _auth_service.logout(payload.refresh_token)
+    get_auth_service().logout(payload.refresh_token)
     return {"status": "ok"}
 
 
@@ -79,6 +82,6 @@ def logout(payload: LogoutRequest) -> dict[str, str]:
 def me(authorization: str | None = Header(default=None)) -> UserPublic:
     token = _extract_bearer_token(authorization)
     try:
-        return _auth_service.get_current_user(token)
+        return get_auth_service().get_current_user(token)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc

@@ -447,6 +447,21 @@ def dashboard_summary(authorization: str | None = Header(default=None)) -> dict[
         "dashboard_todos": _dashboard_todos(),
         "paper_trading": paper_trading_status,
         "paper_trading_demo": paper_trading_status,  # backward compatibility
+        "broker_cross_checks": {
+            "server_env_token_ok": bool(broker_probe.get("token_ok")),
+            "app_broker_connection_ok": bool(
+                user_broker_snap and user_broker_snap.get("connection_status") == "success"
+            ),
+            "server_env_mismatch_warning": bool(
+                user_broker_snap
+                and user_broker_snap.get("connection_status") == "success"
+                and not broker_probe.get("token_ok")
+            ),
+            "paper_dashboard_note": (
+                "Paper 자동매매는 앱에 저장한 모의 자격만 사용합니다. "
+                "서버 .env KIS와 다르면 런타임/오픈오더·포트폴리오 sync 표시가 앱 계정과 어긋날 수 있습니다."
+            ),
+        },
     }
 
 

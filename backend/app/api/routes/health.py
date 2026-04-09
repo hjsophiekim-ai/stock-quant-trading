@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi import APIRouter
 
 from backend.app.core.config import get_backend_settings
+from backend.app.core.storage_paths import directory_is_writable, get_resolved_storage_paths
 
 router = APIRouter(tags=["health"])
 
@@ -26,15 +25,8 @@ def ready() -> dict[str, object]:
 
     checks["app_secret_configured"] = bool((cfg.app_secret_key or "").strip())
 
-    data_dir = Path("backend_data")
-    try:
-        data_dir.mkdir(parents=True, exist_ok=True)
-        probe = data_dir / ".write_probe"
-        probe.write_text("ok", encoding="utf-8")
-        probe.unlink(missing_ok=True)
-        checks["backend_data_writable"] = True
-    except OSError:
-        checks["backend_data_writable"] = False
+    paths = get_resolved_storage_paths()
+    checks["backend_data_writable"] = directory_is_writable(paths.backend_data_dir)
 
     ok = all(checks.values())
     return {

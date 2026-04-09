@@ -21,6 +21,13 @@ type StrategyOption = "swing_v1" | "bull_focus_v1" | "defensive_v1";
 
 type LogItem = { ts?: string; level?: string; message?: string };
 
+function formatFetchFailure(err: unknown): string {
+  if (err instanceof Error) {
+    return `연결/런타임 오류: ${err.message}`;
+  }
+  return "연결 실패(네트워크/DNS/SSL 등) — 서버 주소를 확인하세요.";
+}
+
 export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpenPerformance }: Props) {
   const [strategyId, setStrategyId] = useState<StrategyOption>("swing_v1");
   const [status, setStatus] = useState("stopped");
@@ -79,9 +86,9 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
             "연결 테스트에 성공한 뒤에만 시작할 수 있습니다. 브로커 설정에서 「연결 테스트」를 실행하세요.",
         );
       }
-    } catch {
+    } catch (e) {
       setCanStart(false);
-      setBrokerHint("네트워크 오류로 브로커 상태를 확인하지 못했습니다.");
+      setBrokerHint(`브로커 상태 확인 실패 — ${formatFetchFailure(e)}`);
     }
   }, [backendUrl]);
 
@@ -113,8 +120,17 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
         );
       }
       if (logsRes.ok) setLogs((logsData.items ?? []) as LogItem[]);
-    } catch {
-      setMessage("network error");
+      if (!statusRes.ok) {
+        setMessage(
+          statusRes.status >= 500
+            ? `Paper 상태: 서버 오류 HTTP ${statusRes.status}`
+            : `Paper 상태 조회 실패 HTTP ${statusRes.status}`,
+        );
+      } else {
+        setMessage("");
+      }
+    } catch (e) {
+      setMessage(formatFetchFailure(e));
     }
   }, [authHeaders, backendUrl, checkBrokerGate]);
 
@@ -135,13 +151,18 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
       });
       const data = await res.json();
       if (!res.ok) {
-        setMessage(typeof data?.detail === "string" ? data.detail : "start failed");
+        const d = typeof data?.detail === "string" ? data.detail : "";
+        setMessage(
+          res.status >= 500
+            ? `서버 오류 HTTP ${res.status}${d ? " — " + d : ""}`
+            : d || `시작 실패 HTTP ${res.status}`,
+        );
         return;
       }
       setMessage("Paper 세션 시작됨 (KIS 모의 주문 루프). 첫 틱까지 수십 초 걸릴 수 있습니다.");
       await refresh();
-    } catch {
-      setMessage("network error");
+    } catch (e) {
+      setMessage(formatFetchFailure(e));
     }
   };
 
@@ -158,8 +179,8 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
       }
       setMessage("Paper 세션 중지됨.");
       await refresh();
-    } catch {
-      setMessage("network error");
+    } catch (e) {
+      setMessage(formatFetchFailure(e));
     }
   };
 
@@ -176,8 +197,8 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
       }
       setMessage("risk_off 해제됨. 루프가 재개됩니다.");
       await refresh();
-    } catch {
-      setMessage("network error");
+    } catch (e) {
+      setMessage(formatFetchFailure(e));
     }
   };
 

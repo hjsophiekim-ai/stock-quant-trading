@@ -346,6 +346,11 @@
           return;
         }
         backendUrl = effectiveBackendUrl();
+        const sv = await ensureValidBackendSession(backendUrl);
+        if (!sv.ok) {
+          window.location.href = "./login.html?reason=" + encodeURIComponent(sv.message || sv.kind || "");
+          return;
+        }
         document.getElementById("user").innerText = "User: " + (session.email || "-");
         await loadDashboard();
         await checkBrokerGate();

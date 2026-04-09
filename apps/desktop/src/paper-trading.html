@@ -158,6 +158,11 @@
           return;
         }
         const backendUrl = effectiveBackendUrl();
+        const sv = await ensureValidBackendSession(backendUrl);
+        if (!sv.ok) {
+          window.location.href = "./login.html?reason=" + encodeURIComponent(sv.message || sv.kind || "");
+          return;
+        }
         const accessToken = session.accessToken;
 
         function authHeaders(extra) {
@@ -291,8 +296,18 @@
               li.innerText = (ts ? "[" + ts + "] " : "") + (lv ? lv + ": " : "") + (l.message || "");
               logsList.appendChild(li);
             });
-          } catch {
-            message.innerText = "network error";
+            if (!statusRes.ok) {
+              message.innerText =
+                statusRes.status >= 500
+                  ? "Paper 상태: 서버 오류 HTTP " + statusRes.status
+                  : "Paper 상태 조회 실패 HTTP " + statusRes.status;
+            } else {
+              message.innerText = "";
+            }
+          } catch (e) {
+            message.innerText =
+              "Paper 화면 갱신 실패(네트워크/브라우저). 백엔드 URL·방화벽·HTTPS를 확인하세요. " +
+              (e && e.message ? "(" + e.message + ")" : "");
           }
         }
 

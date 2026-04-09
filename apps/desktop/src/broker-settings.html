@@ -295,6 +295,11 @@
           return;
         }
         const backendUrl = effectiveBackendUrl();
+        const sv = await ensureValidBackendSession(backendUrl);
+        if (!sv.ok) {
+          window.location.href = "./login.html?reason=" + encodeURIComponent(sv.message || sv.kind || "");
+          return;
+        }
         const accessToken = session.accessToken;
 
         function authHeaders(extra) {

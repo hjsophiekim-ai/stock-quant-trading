@@ -36,6 +36,7 @@ class PaperSessionController:
         self._logs: list[dict[str, str]] = []
         self._user_loop: UserPaperTradingLoop | None = None
         self._user_loop_identity: tuple[str, ...] | None = None
+        self._paper_diagnostics: dict[str, Any] = {}
 
     def _max_failures(self) -> int:
         return max(1, int(get_backend_settings().runtime_max_consecutive_failures))
@@ -47,6 +48,31 @@ class PaperSessionController:
         entry = {"ts": datetime.now(timezone.utc).isoformat(), "level": level, "message": msg[:2000]}
         self._logs.insert(0, entry)
         self._logs = self._logs[:100]
+
+    def _apply_paper_tick_diagnostics(self, out: dict[str, Any]) -> None:
+        """틱 결과에서 KIS 실패 맥락·토큰 출처를 누적(진단 API용)."""
+        ok = bool(out.get("ok"))
+        kis_ctx = out.get("kis_context") if isinstance(out.get("kis_context"), dict) else {}
+        if ok:
+            self._paper_diagnostics = {
+                "last_error": None,
+                "last_failed_step": None,
+                "last_failed_endpoint": None,
+                "last_failed_tr_id": None,
+                "sanitized_params": None,
+                "token_source": out.get("token_source"),
+                "failure_kind": None,
+            }
+            return
+        self._paper_diagnostics = {
+            "last_error": out.get("error"),
+            "last_failed_step": out.get("failed_step"),
+            "last_failed_endpoint": kis_ctx.get("path"),
+            "last_failed_tr_id": kis_ctx.get("tr_id"),
+            "sanitized_params": kis_ctx.get("params"),
+            "token_source": out.get("token_source"),
+            "failure_kind": out.get("failure_kind"),
+        }
 
     def _loop(self) -> None:
         settings = get_backend_settings()
@@ -99,6 +125,7 @@ class PaperSessionController:
                 loop = self._user_loop
                 out = loop.run_intraday_tick()
                 self._last_tick_at = datetime.now(timezone.utc).isoformat()
+                self._apply_paper_tick_diagnostics(out)
                 if not out.get("ok"):
                     raise RuntimeError(str(out.get("error") or "tick_failed"))
                 self._failure_streak = 0
@@ -217,7 +244,15 @@ class PaperSessionController:
                     "equity": self._last_report.get("equity"),
                     "daily_return_pct": self._last_report.get("daily_return_pct"),
                 },
+                "diagnostics": dict(self._paper_diagnostics),
             }
+
+    def diagnostics_payload(self) -> dict[str, Any]:
+        with self._lock:
+            base = dict(self._paper_diagnostics)
+            base["session_last_error"] = self._last_error
+            base["session_status"] = self._status
+            return base
 
     def get_positions(self) -> list[dict[str, Any]]:
         return list(self._last_positions)

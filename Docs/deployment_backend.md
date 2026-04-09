@@ -75,6 +75,8 @@ Cloud provider에서 **헬스 체크 URL**로 `/api/health` 또는 `/api/ready` 
 - 환경 변수:
   - `APP_ENV=production`
   - `BACKEND_DATA_DIR=/var/data` (users.json, broker_accounts.db, runtime state 저장)
+  - (선택, 명시 분리 시) `AUTH_USERS_PATH`, `AUTH_REVOKED_TOKENS_PATH`, `BROKER_ACCOUNTS_DB_PATH` — 미설정이면 `BACKEND_DATA_DIR` 아래 기본 파일명 사용
+  - (선택) `DATABASE_URL` — SQLite 파일도 가능한 한 동일 디스크(`/var/data/...`)에 두면 재배포 후에도 유지
   - 나머지 `.env` 값들 (KIS 키 포함) Render 환경 변수로 설정
 - 포트: 8000 (Render가 자동으로 외부 포트에 매핑)
 - Health check: `/api/health` (HEAD 요청도 200 응답하도록 라우트 설정 유지)

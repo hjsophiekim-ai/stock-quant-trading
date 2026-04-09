@@ -12,8 +12,41 @@ from app.clients.kis_contract import DomesticStockPaths, DomesticTrIds, is_paper
 from app.clients.kis_parsers import business_error_detail, rt_cd_ok
 
 
+def sanitize_kis_params_for_log(params: dict[str, Any] | None) -> dict[str, Any] | None:
+    """로그·진단용: 계좌·종목 등 민감 필드 마스킹."""
+    if not params:
+        return params
+    out: dict[str, Any] = {}
+    for k, v in params.items():
+        ks = str(k).upper()
+        if ks in ("CANO", "ACNT_PRDT_CD"):
+            s = str(v) if v is not None else ""
+            out[k] = (s[:2] + "****" + s[-2:]) if len(s) > 4 else "****"
+        elif ks == "PDNO" and isinstance(v, str) and len(v) > 3:
+            out[k] = v[:3] + "**"
+        else:
+            out[k] = v
+    return out
+
+
+def omit_empty_ctx_params(params: dict[str, Any] | None) -> dict[str, Any] | None:
+    """첫 페이지 조회 시 빈 CTX_AREA_* 는 전송하지 않음(OPSQ2001 INPUT_FIELD_NAME 등 예방)."""
+    if not params:
+        return params
+    out = dict(params)
+    for key in ("CTX_AREA_FK100", "CTX_AREA_NK100"):
+        if key not in out:
+            continue
+        val = out[key]
+        if val is None or (isinstance(val, str) and not str(val).strip()):
+            del out[key]
+    return out
+
+
 class KISClientError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, kis_context: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.kis_context = kis_context or {}
 
 
 class KISLiveTradingLockedError(KISClientError):
@@ -106,7 +139,15 @@ class KISClient:
                     headers=headers,
                     timeout=self.timeout_sec,
                 )
-                self._raise_for_status(response, method=method, url=url)
+                self._raise_for_status(
+                    response,
+                    method=method,
+                    url=url,
+                    path=path,
+                    tr_id=tr_id,
+                    params=params,
+                    data=data,
+                )
                 return self._safe_json(response)
             except (requests.Timeout, requests.ConnectionError) as exc:
                 last_error = exc
@@ -121,8 +162,21 @@ class KISClient:
             except KISClientError:
                 raise
 
+        ctx = {
+            "method": method,
+            "path": path,
+            "tr_id": tr_id,
+            "params": sanitize_kis_params_for_log(params if method == "GET" else None),
+            "body_keys": sorted(data.keys()) if isinstance(data, dict) else None,
+            "error_type": type(last_error).__name__ if last_error else "unknown",
+        }
+        self.logger.error(
+            "KIS request exhausted retries",
+            extra={"method": method, "path": path, "tr_id": tr_id},
+        )
         raise KISClientError(
-            f"KIS request failed after {self.max_retries + 1} attempts: method={method} path={path}"
+            f"KIS request failed after {self.max_retries + 1} attempts: method={method} path={path}",
+            kis_context=ctx,
         ) from last_error
 
     def _get(
@@ -134,10 +188,11 @@ class KISClient:
         bearer_token: str | None = None,
         extra_headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
+        q = omit_empty_ctx_params(params)
         return self._request(
             "GET",
             path,
-            params=params,
+            params=q,
             tr_id=tr_id,
             bearer_token=bearer_token,
             extra_headers=extra_headers,
@@ -161,16 +216,37 @@ class KISClient:
             extra_headers=extra_headers,
         )
 
-    def _raise_for_status(self, response: requests.Response, *, method: str, url: str) -> None:
+    def _raise_for_status(
+        self,
+        response: requests.Response,
+        *,
+        method: str,
+        url: str,
+        path: str,
+        tr_id: str | None,
+        params: dict[str, Any] | None,
+        data: dict[str, Any] | None = None,
+    ) -> None:
         if response.status_code < 400:
             return
         status = response.status_code
         body_preview = response.text[:400] if response.text else ""
+        ctx = {
+            "method": method,
+            "path": path,
+            "tr_id": tr_id,
+            "params": sanitize_kis_params_for_log(params if method == "GET" else None),
+            "body_keys": sorted(data.keys()) if isinstance(data, dict) else None,
+            "http_status": status,
+        }
         self.logger.error(
             "KIS HTTP error",
-            extra={"status_code": status, "method": method, "url": url.split("?")[0]},
+            extra={"status_code": status, "method": method, "url": url.split("?")[0], "tr_id": tr_id},
         )
-        raise KISClientError(f"KIS HTTP {status} {method} — 응답 본문 일부: {body_preview}")
+        raise KISClientError(
+            f"KIS HTTP {status} {method} — 응답 본문 일부: {body_preview}",
+            kis_context=ctx,
+        )
 
     @staticmethod
     def _safe_json(response: requests.Response) -> dict[str, Any]:
@@ -182,11 +258,37 @@ class KISClient:
             raise KISClientError("KIS response JSON payload is not object")
         return payload
 
-    @staticmethod
-    def _validate_kis_business_success(payload: dict[str, Any]) -> None:
+    def _validate_kis_business_success(
+        self,
+        payload: dict[str, Any],
+        *,
+        method: str,
+        path: str,
+        tr_id: str | None,
+        params: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> None:
         if rt_cd_ok(payload):
             return
-        raise KISClientError(f"KIS business error: {business_error_detail(payload)}")
+        detail = business_error_detail(payload)
+        params_for_log = omit_empty_ctx_params(dict(params)) if params else None
+        ctx: dict[str, Any] = {
+            "method": method,
+            "path": path,
+            "tr_id": tr_id,
+            "params": sanitize_kis_params_for_log(params_for_log),
+            "data_keys": sorted(data.keys()) if isinstance(data, dict) else None,
+        }
+        self.logger.error(
+            "KIS business error",
+            extra={
+                "kis_path": path,
+                "kis_tr_id": tr_id,
+                "detail": detail[:800],
+                "params": ctx.get("params"),
+            },
+        )
+        raise KISClientError(f"KIS business error: {detail}", kis_context=ctx)
 
     def _ensure_order_execution_allowed(self) -> None:
         if is_paper_host(self.base_url):
@@ -213,7 +315,13 @@ class KISClient:
         }
         tr_id = self._resolve_tr_id(paper_tr_id=self.tr_ids.balance_paper, live_tr_id=self.tr_ids.balance_live)
         payload = self._get(self.endpoints.get_balance, params=params, tr_id=tr_id)
-        self._validate_kis_business_success(payload)
+        self._validate_kis_business_success(
+            payload,
+            method="GET",
+            path=self.endpoints.get_balance,
+            tr_id=tr_id,
+            params=params,
+        )
         return payload
 
     def get_quote(self, symbol: str) -> dict[str, Any]:
@@ -223,7 +331,13 @@ class KISClient:
         }
         tr_id = self._resolve_tr_id(paper_tr_id=self.tr_ids.quote_paper, live_tr_id=self.tr_ids.quote_live)
         payload = self._get(self.endpoints.get_quote, params=params, tr_id=tr_id)
-        self._validate_kis_business_success(payload)
+        self._validate_kis_business_success(
+            payload,
+            method="GET",
+            path=self.endpoints.get_quote,
+            tr_id=tr_id,
+            params=params,
+        )
         return payload
 
     def get_positions(self, account_no: str, account_product_code: str) -> dict[str, Any]:
@@ -254,7 +368,13 @@ class KISClient:
         }
         tr_id = self._resolve_tr_id(paper_tr_id=self.tr_ids.psbl_order_paper, live_tr_id=self.tr_ids.psbl_order_live)
         payload = self._get(self.endpoints.inquire_psbl_order, params=params, tr_id=tr_id)
-        self._validate_kis_business_success(payload)
+        self._validate_kis_business_success(
+            payload,
+            method="GET",
+            path=self.endpoints.inquire_psbl_order,
+            tr_id=tr_id,
+            params=params,
+        )
         return payload
 
     def inquire_nccs(
@@ -277,7 +397,13 @@ class KISClient:
         }
         tr_id = self._resolve_tr_id(paper_tr_id=self.tr_ids.nccs_paper, live_tr_id=self.tr_ids.nccs_live)
         payload = self._get(self.endpoints.inquire_nccs, params=params, tr_id=tr_id)
-        self._validate_kis_business_success(payload)
+        self._validate_kis_business_success(
+            payload,
+            method="GET",
+            path=self.endpoints.inquire_nccs,
+            tr_id=tr_id,
+            params=params,
+        )
         return payload
 
     def inquire_daily_ccld(
@@ -318,13 +444,27 @@ class KISClient:
         }
         tr_id = self._resolve_tr_id(paper_tr_id=self.tr_ids.daily_ccld_paper, live_tr_id=self.tr_ids.daily_ccld_live)
         payload = self._get(self.endpoints.inquire_daily_ccld, params=params, tr_id=tr_id)
-        self._validate_kis_business_success(payload)
+        self._validate_kis_business_success(
+            payload,
+            method="GET",
+            path=self.endpoints.inquire_daily_ccld,
+            tr_id=tr_id,
+            params=params,
+        )
         return payload
 
     def request_hashkey(self, body: dict[str, Any]) -> str:
         payload = self._post(self.endpoints.hashkey, data=body, tr_id=None)
         if not rt_cd_ok(payload):
-            raise KISClientError(f"hashkey issuance failed: {business_error_detail(payload)}")
+            raise KISClientError(
+                f"hashkey issuance failed: {business_error_detail(payload)}",
+                kis_context={
+                    "method": "POST",
+                    "path": self.endpoints.hashkey,
+                    "tr_id": None,
+                    "body_keys": sorted(body.keys()),
+                },
+            )
         h = payload.get("HASH") or payload.get("hash")
         if not isinstance(h, str) or not h.strip():
             raise KISClientError("hashkey response missing HASH")
@@ -350,7 +490,13 @@ class KISClient:
         }
         tr_id = self._resolve_tr_id(paper_tr_id=self.tr_ids.daily_chart_paper, live_tr_id=self.tr_ids.daily_chart_live)
         payload = self._get(self.endpoints.daily_itemchart, params=params, tr_id=tr_id)
-        self._validate_kis_business_success(payload)
+        self._validate_kis_business_success(
+            payload,
+            method="GET",
+            path=self.endpoints.daily_itemchart,
+            tr_id=tr_id,
+            params=params,
+        )
         return payload
 
     # --- 주문 (실전 호스트는 잠금) ---
@@ -392,7 +538,13 @@ class KISClient:
         hashkey = self.request_hashkey(body)
         extra = {"hashkey": hashkey}
         payload = self._post(self.endpoints.place_order, data=body, tr_id=tr_id, extra_headers=extra)
-        self._validate_kis_business_success(payload)
+        self._validate_kis_business_success(
+            payload,
+            method="POST",
+            path=self.endpoints.place_order,
+            tr_id=tr_id,
+            data=body,
+        )
         return payload
 
     def cancel_order(
@@ -426,5 +578,11 @@ class KISClient:
         hashkey = self.request_hashkey(body)
         extra = {"hashkey": hashkey}
         payload = self._post(self.endpoints.cancel_order, data=body, tr_id=tr_id, extra_headers=extra)
-        self._validate_kis_business_success(payload)
+        self._validate_kis_business_success(
+            payload,
+            method="POST",
+            path=self.endpoints.cancel_order,
+            tr_id=tr_id,
+            data=body,
+        )
         return payload

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from app.brokers.kis_paper_broker import KisPaperBroker
+from app.clients.kis_client import KISClientError
 from app.config import get_settings
 from app.risk.kill_switch import KillSwitch
 from app.risk.rules import RiskLimits, RiskRules
@@ -54,6 +55,7 @@ class UserPaperTradingLoop:
         self._backend = backend_settings or get_backend_settings()
         self._access_token: str | None = initial_access_token
         self._token_monotonic: float = time.monotonic() if initial_access_token else 0.0
+        self._token_issued_locally: bool = False
 
     def _issue_token(self) -> str:
         tr = issue_access_token(
@@ -66,7 +68,12 @@ class UserPaperTradingLoop:
             raise RuntimeError(tr.message or "token_failed")
         self._access_token = tr.access_token
         self._token_monotonic = time.monotonic()
+        self._token_issued_locally = True
         return tr.access_token
+
+    def token_source_for_diagnostics(self) -> str:
+        """루프가 브로커 test-connection 캐시 토큰을 쓰는지, 루프 내 재발급인지 구분."""
+        return "fresh_issue" if self._token_issued_locally else "test_connection_reuse"
 
     def _kis_client(self):
         if not self._access_token or (time.monotonic() - self._token_monotonic) > 1500:
@@ -107,43 +114,90 @@ class UserPaperTradingLoop:
         )
 
     def run_intraday_tick(self) -> dict[str, Any]:
-        client = self._kis_client()
-        jobs = self._build_jobs(client)
-        cfg = get_settings()
-        symbols = [s.strip() for s in cfg.paper_trading_symbols.split(",") if s.strip()]
-        if not symbols:
-            return {"ok": False, "error": "paper_trading_symbols 비어 있음 (app 설정)"}
-
-        universe = build_kis_stock_universe(
-            client,
-            symbols,
-            lookback_calendar_days=max(cfg.paper_kis_chart_lookback_days, 60),
-            logger=logger,
-        )
-        kospi = build_kospi_index_series(
-            client,
-            lookback_calendar_days=max(cfg.paper_kis_chart_lookback_days, 60),
-            logger=logger,
-        )
-        sp500 = build_mock_sp500_proxy_from_kospi(kospi)
-        report = jobs.run_daily_cycle(universe=universe, kospi_index=kospi, sp500_index=sp500)
-
-        if self._backend.screener_auto_refresh_with_runtime:
+        failed_step = "kis_client"
+        try:
             try:
-                from backend.app.strategy.screener import get_screener_engine
-
-                snap = get_screener_engine().refresh()
-                report = dict(report)
-                report["screener"] = {
-                    "regime": snap.regime,
-                    "blocked": snap.blocked,
-                    "candidate_count": len(snap.candidates),
-                    "updated_at_utc": snap.updated_at_utc,
+                client = self._kis_client()
+            except RuntimeError as exc:
+                return {
+                    "ok": False,
+                    "error": str(exc),
+                    "failed_step": "kis_token",
+                    "kis_context": {},
+                    "token_source": self.token_source_for_diagnostics(),
+                    "failure_kind": "token_failure",
                 }
-            except Exception as exc:
-                logger.warning("screener refresh failed: %s", exc)
 
-        return {"ok": True, "report": report}
+            failed_step = "build_jobs"
+            jobs = self._build_jobs(client)
+            cfg = get_settings()
+            symbols = [s.strip() for s in cfg.paper_trading_symbols.split(",") if s.strip()]
+            if not symbols:
+                return {
+                    "ok": False,
+                    "error": "paper_trading_symbols 비어 있음 (app 설정)",
+                    "failed_step": "config",
+                    "kis_context": {},
+                    "token_source": self.token_source_for_diagnostics(),
+                    "failure_kind": "config",
+                }
+
+            failed_step = "kis_universe"
+            universe = build_kis_stock_universe(
+                client,
+                symbols,
+                lookback_calendar_days=max(cfg.paper_kis_chart_lookback_days, 60),
+                logger=logger,
+            )
+            failed_step = "kospi_series"
+            kospi = build_kospi_index_series(
+                client,
+                lookback_calendar_days=max(cfg.paper_kis_chart_lookback_days, 60),
+                logger=logger,
+            )
+            failed_step = "daily_cycle"
+            sp500 = build_mock_sp500_proxy_from_kospi(kospi)
+            report = jobs.run_daily_cycle(universe=universe, kospi_index=kospi, sp500_index=sp500)
+
+            if self._backend.screener_auto_refresh_with_runtime:
+                try:
+                    from backend.app.strategy.screener import get_screener_engine
+
+                    snap = get_screener_engine().refresh()
+                    report = dict(report)
+                    report["screener"] = {
+                        "regime": snap.regime,
+                        "blocked": snap.blocked,
+                        "candidate_count": len(snap.candidates),
+                        "updated_at_utc": snap.updated_at_utc,
+                    }
+                except Exception as exc:
+                    logger.warning("screener refresh failed: %s", exc)
+
+            return {
+                "ok": True,
+                "report": report,
+                "token_source": self.token_source_for_diagnostics(),
+            }
+        except KISClientError as exc:
+            fk = "kis_business_error" if "business error" in str(exc).lower() else "kis_client_error"
+            return {
+                "ok": False,
+                "error": str(exc),
+                "failed_step": failed_step,
+                "kis_context": getattr(exc, "kis_context", {}),
+                "token_source": self.token_source_for_diagnostics(),
+                "failure_kind": fk,
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": str(exc),
+                "failed_step": failed_step,
+                "kis_context": {},
+                "token_source": self.token_source_for_diagnostics(),
+                "failure_kind": type(exc).__name__,
+            }
 
     def snapshot_positions(self) -> list[dict[str, Any]]:
         client = self._kis_client()

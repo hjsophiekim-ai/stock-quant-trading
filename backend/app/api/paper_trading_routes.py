@@ -158,6 +158,12 @@ def get_paper_pnl() -> dict[str, object]:
     return get_paper_session_controller().pnl_from_last_report()
 
 
+@router.get("/diagnostics")
+def get_paper_diagnostics() -> dict[str, object]:
+    """Paper 세션 마지막 KIS 실패 맥락·토큰 출처(민감값 제외)."""
+    return get_paper_session_controller().diagnostics_payload()
+
+
 @router.get("/logs")
 def get_paper_logs() -> dict[str, object]:
     ctrl = get_paper_session_controller()
