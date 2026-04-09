@@ -122,6 +122,36 @@
         line-height: 1.45;
         color: #78350f;
       }
+      .test-guide {
+        background: #eff6ff;
+        border: 1px solid #93c5fd;
+        border-radius: 8px;
+        padding: 0 12px 10px;
+        margin-bottom: 14px;
+        font-size: 12px;
+        line-height: 1.5;
+        color: #1e3a5f;
+      }
+      .test-guide summary {
+        cursor: pointer;
+        font-weight: 800;
+        padding: 10px 0 6px;
+        list-style-position: outside;
+      }
+      .test-guide ol {
+        margin: 0 0 0 1.1rem;
+        padding: 0;
+      }
+      .test-guide li {
+        margin-bottom: 6px;
+      }
+      .test-guide .screen-map {
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px dashed #93c5fd;
+        font-size: 11px;
+        color: #334155;
+      }
     </style>
   </head>
   <body>
@@ -139,6 +169,19 @@
       </aside>
       <main class="main">
         <h2>운영 대시보드</h2>
+        <details class="test-guide" open>
+          <summary>모의 투자 테스트 — 실행 순서와 이 화면에서 확인할 것</summary>
+          <ol>
+            <li><b>서버</b>: 로그인 화면에서 「서버 연결」이 정상인지 확인 (<code>/api/health</code>). 기본 API는 빌드 시 박힌 주소입니다.</li>
+            <li><b>계정</b>: 회원가입/로그인 후 이 대시보드로 들어옵니다.</li>
+            <li><b>브로커</b>: 사이드바 「Broker Settings」에서 한국투자 <b>모의</b> 계정 저장 → 연결 테스트 성공까지.</li>
+            <li><b>Paper 시작</b>: 「Paper Trading」에서 모의 자동매매 <b>시작</b>. 잠시 후 이 대시보드를 새로고침합니다.</li>
+            <li><b>여기서 볼 결과</b>: 아래 카드들 — <b>현재 모드</b>·<b>런타임 엔진</b>·<b>시장 국면·전략</b>·<b>스크리너 후보</b>·<b>보유 포지션</b>·<b>미체결/최근 체결</b>·<b>최근 거래 API</b>. 수익·히스토리는 「Performance」 탭.</li>
+          </ol>
+          <div class="screen-map">
+            <b>화면 이동</b>: Dashboard(현재) → Paper Trading(시작·중지) → Performance(손익·지표) → Broker Settings(키·계좌) → Live Settings(실거래는 별도 잠금 정책).
+          </div>
+        </details>
         <div class="toolbar">
           <button type="button" id="refreshNowBtn">지금 새로고침</button>
           <span class="load-state" id="loadState"></span>
