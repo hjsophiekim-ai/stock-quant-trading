@@ -41,6 +41,9 @@ const config: ExpoConfig = {
   extra: {
     appEnv,
     backendUrl,
+    eas: {
+      projectId: "4204cf86-5628-4f91-be00-4ce87d4d05e2",
+    },
   },
 };
 
