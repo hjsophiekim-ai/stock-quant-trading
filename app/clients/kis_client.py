@@ -274,7 +274,7 @@ class KISClient:
                 )
                 body_preview = text[:400] if text else ""
                 raise KISClientError(
-                    f"KIS HTTP {response.status_code} {method} — 응답 본문 일부: {body_preview}",
+                    f"KIS HTTP {response.status_code} {method} - 응답 본문 일부: {body_preview}",
                     kis_context=ctx,
                 )
 
@@ -405,7 +405,7 @@ class KISClient:
             extra={"status_code": status, "method": method, "url": url.split("?")[0], "tr_id": tr_id},
         )
         raise KISClientError(
-            f"KIS HTTP {status} {method} — 응답 본문 일부: {body_preview}",
+            f"KIS HTTP {status} {method} - 응답 본문 일부: {body_preview}",
             kis_context=ctx,
         )
 
@@ -513,12 +513,15 @@ class KISClient:
         symbol: str,
         order_price: int | None = None,
         order_div: str = "01",
+        cma_evlu_amt_icld_yn: str = "N",
+        ovrs_icld_yn: str = "N",
     ) -> dict[str, Any]:
         """
         매수가능조회 (주문가능현금·가능수량 등).
         ORD_DVSN: 00 지정가, 01 시장가.
-        - 시장가(01): ORD_UNPR 키 자체를 보내지 않음(빈 문자열 GET 금지).
+        - 시장가(01): 모의/실전 API가 ORD_UNPR 를 필수로 검사함 → "0" 전송(주문 시와 동일).
         - 지정가(00): ORD_UNPR 에 가격 문자열 전송.
+        - CMA_EVLU_AMT_ICLD_YN / OVRS_ICLD_YN: KIS 공식 필수(샘플은 보통 N/N).
         - 첫 페이지: CTX_AREA_* 키 없음(연속조회 시에만 API 응답 ctx로 채움).
         """
         params: dict[str, Any] = {
@@ -526,8 +529,12 @@ class KISClient:
             "ACNT_PRDT_CD": account_product_code,
             "PDNO": symbol,
             "ORD_DVSN": order_div,
+            "CMA_EVLU_AMT_ICLD_YN": str(cma_evlu_amt_icld_yn).strip() or "N",
+            "OVRS_ICLD_YN": str(ovrs_icld_yn).strip() or "N",
         }
-        if order_div != "01" and order_price is not None:
+        if str(order_div).strip() == "01":
+            params["ORD_UNPR"] = "0"
+        elif order_price is not None:
             params["ORD_UNPR"] = str(int(order_price))
         tr_id = self._resolve_tr_id(paper_tr_id=self.tr_ids.psbl_order_paper, live_tr_id=self.tr_ids.psbl_order_live)
         payload = self._get(self.endpoints.inquire_psbl_order, params=params, tr_id=tr_id)
@@ -549,27 +556,17 @@ class KISClient:
     ) -> dict[str, Any]:
         """
         미체결 내역 조회.
-        - PDNO: 종목 지정 시만 전송(전체 조회는 키 생략).
-        - ORD_GNO_BRNO/ODNO: 특정 주문 조회 시에만; 첫 페이지는 미전송.
-        - CTX_AREA_*: 연속조회 시에만; 첫 페이지는 미전송.
+
+        과거 전용 URL(/trading/inquire-nccs, VTTC8003R)은 모의 서버에서 HTTP 404가 나는 경우가 있어,
+        공식 샘플과 동일하게 **주식일별주문체결조회**에 CCLD_DVSN=02(미체결)로 위임한다.
         """
-        params: dict[str, Any] = {
-            "CANO": account_no,
-            "ACNT_PRDT_CD": account_product_code,
-            "INQR_DVSN": "00",
-        }
-        if symbol and str(symbol).strip():
-            params["PDNO"] = str(symbol).strip()
-        tr_id = self._resolve_tr_id(paper_tr_id=self.tr_ids.nccs_paper, live_tr_id=self.tr_ids.nccs_live)
-        payload = self._get(self.endpoints.inquire_nccs, params=params, tr_id=tr_id)
-        self._validate_kis_business_success(
-            payload,
-            method="GET",
-            path=self.endpoints.inquire_nccs,
-            tr_id=tr_id,
-            params=prune_empty_get_params(params),
+        return self.inquire_daily_ccld(
+            account_no=account_no,
+            account_product_code=account_product_code,
+            symbol=symbol,
+            sell_buy_code="00",
+            ccld_div="02",
         )
-        return payload
 
     def inquire_daily_ccld(
         self,

@@ -41,6 +41,7 @@ class DomesticStockPaths:
     hashkey: str = "/uapi/hashkey"
     daily_itemchart: str = "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
     inquire_psbl_order: str = "/uapi/domestic-stock/v1/trading/inquire-psbl-order"
+    # 레거시 전용 미체결 URL(일부 환경 404). 클라이언트는 inquire_daily_ccld(CCLD_DVSN=02) 사용.
     inquire_nccs: str = "/uapi/domestic-stock/v1/trading/inquire-nccs"
     inquire_daily_ccld: str = "/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
 
@@ -57,9 +58,9 @@ class DomesticTrIds:
     psbl_order_live: str = "TTTC8908R"
     nccs_paper: str = "VTTC8003R"
     nccs_live: str = "TTTC8003R"
-    # 일별체결: 증권사 공지에 따라 TTTC0081R/VTTC0081R 등으로 변경될 수 있음 → 개발자센터 최신 TR 확인
-    daily_ccld_paper: str = "VTTC8001R"
-    daily_ccld_live: str = "TTTC8001R"
+    # 일별주문체결(3개월 이내): 공식 샘플·포털 기준 모의 VTTC0081R / 실전 TTTC0081R
+    daily_ccld_paper: str = "VTTC0081R"
+    daily_ccld_live: str = "TTTC0081R"
     buy_paper: str = "VTTC0802U"
     buy_live: str = "TTTC0802U"
     sell_paper: str = "VTTC0801U"

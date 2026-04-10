@@ -27,7 +27,7 @@ def test_prune_allow_empty_keys() -> None:
     assert p == {"X": ""}
 
 
-def test_inquire_psbl_market_no_ord_unpr_no_ctx() -> None:
+def test_inquire_psbl_market_sends_ord_unpr_zero_no_ctx() -> None:
     client = KISClient(base_url="https://openapivts.koreainvestment.com:29443", kis_min_request_interval_ms=0)
     captured: dict = {}
 
@@ -55,16 +55,19 @@ def test_inquire_psbl_market_no_ord_unpr_no_ctx() -> None:
         order_div="01",
     )
     q = captured["params"]
-    assert "ORD_UNPR" not in q
+    assert q.get("ORD_UNPR") == "0"
+    assert q.get("CMA_EVLU_AMT_ICLD_YN") == "N"
+    assert q.get("OVRS_ICLD_YN") == "N"
     assert "CTX_AREA_FK100" not in q
     assert q.get("PDNO") == "005930"
 
 
-def test_inquire_nccs_omits_pdno_when_symbol_blank() -> None:
+def test_inquire_nccs_delegates_to_daily_ccld_unfilled() -> None:
     client = KISClient(base_url="https://openapivts.koreainvestment.com:29443", kis_min_request_interval_ms=0)
     captured: dict = {}
 
     def fake_request(self, method, path, *, params=None, **_k):
+        captured["path"] = path
         captured["params"] = dict(params or {})
         return {"rt_cd": "0"}
 
@@ -72,8 +75,9 @@ def test_inquire_nccs_omits_pdno_when_symbol_blank() -> None:
     client._validate_kis_business_success = MagicMock()  # type: ignore[method-assign]
 
     client.inquire_nccs(account_no="50000000", account_product_code="01", symbol="")
+    assert captured["path"] == "/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
     assert "PDNO" not in captured["params"]
-    assert "ORD_GNO_BRNO" not in captured["params"]
+    assert captured["params"].get("CCLD_DVSN") == "02"
 
 
 def test_inquire_daily_ccld_omits_empty_dvsn_and_pdno() -> None:
