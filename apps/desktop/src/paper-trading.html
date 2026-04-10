@@ -149,6 +149,7 @@
           </select>
           <button type="button" id="startBtn">모의 자동매매 시작</button>
           <button type="button" id="stopBtn">중지</button>
+          <button type="button" id="balanceCheckBtn">잔고진단</button>
           <span id="message"></span>
         </div>
         <div class="panel">
@@ -210,6 +211,7 @@
         const logsList = document.getElementById("logsList");
         const chart = document.getElementById("chart");
         const startBtn = document.getElementById("startBtn");
+        const balanceCheckBtn = document.getElementById("balanceCheckBtn");
         const brokerGateEl = document.getElementById("brokerGate");
         const toastEl = document.getElementById("toast");
         let toastT = null;
@@ -302,6 +304,19 @@
           }
           if (typeof d === "string") return d;
           return "start failed";
+        }
+
+        async function parseJsonOrText(res) {
+          const rawText = await res.text();
+          var data = {};
+          if (rawText) {
+            try {
+              data = JSON.parse(rawText);
+            } catch (_e) {
+              data = {};
+            }
+          }
+          return { data: data || {}, rawText: rawText || "" };
         }
 
         async function refreshPaper() {
@@ -489,11 +504,17 @@
             headers: authHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify({ strategy_id: strategyId }),
           });
-          const data = await res.json().catch(function () {
-            return {};
-          });
+          const parsed = await parseJsonOrText(res);
+          const data = parsed.data;
           if (!res.ok) {
-            const detail = formatPaperStartError(data);
+            var detail = formatPaperStartError(data);
+            if (!detail || detail === "start failed") {
+              var d = data && data.detail;
+              if (typeof d === "string" && d.trim()) detail = d.trim();
+              else if (parsed.rawText && parsed.rawText.trim()) detail = parsed.rawText.trim().slice(0, 600);
+              else detail = "start failed";
+            }
+            detail = "HTTP " + res.status + " · " + detail;
             message.innerText = detail;
             toast("err", detail);
             return;
@@ -502,6 +523,44 @@
           message.innerText = "시작됨";
           toast("ok", "모의 자동매매를 시작했습니다.");
           refreshPaper();
+        });
+
+        balanceCheckBtn.addEventListener("click", async function () {
+          try {
+            const res = await fetch(backendUrl + "/api/debug/kis-balance-check", { headers: authHeaders() });
+            const parsed = await parseJsonOrText(res);
+            const body = parsed.data || {};
+            if (!res.ok) {
+              const line =
+                "HTTP " +
+                res.status +
+                " · " +
+                (typeof body.detail === "string"
+                  ? body.detail
+                  : parsed.rawText
+                    ? parsed.rawText.slice(0, 500)
+                    : "balance check failed");
+              message.innerText = line;
+              toast("err", line);
+              return;
+            }
+            var lines = [];
+            lines.push("ok: " + String(body.ok));
+            if (body.path) lines.push("path: " + body.path);
+            if (body.tr_id) lines.push("tr_id: " + body.tr_id);
+            if (body.failure_kind) lines.push("failure_kind: " + body.failure_kind);
+            if (body.error) lines.push("error: " + body.error);
+            if (body.sanitized_params != null) lines.push("sanitized_params:\n" + JSON.stringify(body.sanitized_params, null, 2));
+            if (body.summary != null) lines.push("summary:\n" + JSON.stringify(body.summary, null, 2));
+            kisFailureDetail.style.display = "block";
+            kisFailureDetail.textContent = lines.join("\n");
+            message.innerText = body.ok ? "잔고진단 성공" : "잔고진단 실패";
+            toast(body.ok ? "ok" : "err", message.innerText);
+          } catch (e) {
+            const line = "잔고진단 실패: " + (e && e.message ? e.message : "unknown");
+            message.innerText = line;
+            toast("err", line);
+          }
         });
 
         document.getElementById("stopBtn").addEventListener("click", async function () {
