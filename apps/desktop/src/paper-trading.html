@@ -286,11 +286,18 @@
                 ? "[토큰 1분제한] "
                 : d.code === "PAPER_TOKEN_NOT_READY"
                   ? "[토큰 준비 안 됨] "
+                  : d.code === "PAPER_BALANCE_PREFLIGHT_FAILED"
+                    ? "[balance preflight] "
                   : "";
+            var extra =
+              (d.path ? " · path=" + d.path : "") +
+              (d.tr_id ? " · tr_id=" + d.tr_id : "") +
+              (d.failure_kind ? " · kind=" + d.failure_kind : "");
             return (
               pre +
               d.message +
-              (d.token_error_code ? " (" + d.token_error_code + ")" : "")
+              (d.token_error_code ? " (" + d.token_error_code + ")" : "") +
+              extra
             );
           }
           if (typeof d === "string") return d;

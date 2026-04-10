@@ -99,13 +99,14 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
     await checkBrokerGate();
     try {
       const headers = authHeaders();
-      const [statusRes, posRes, pnlRes, logsRes, diagRes, verRes] = await Promise.all([
+      const [statusRes, posRes, pnlRes, logsRes, diagRes, verRes, runtimeRes] = await Promise.all([
         fetch(`${backendUrl}/api/paper-trading/status`),
         fetch(`${backendUrl}/api/paper-trading/positions`),
         fetch(`${backendUrl}/api/paper-trading/pnl`),
         fetch(`${backendUrl}/api/paper-trading/logs`),
         fetch(`${backendUrl}/api/paper-trading/diagnostics`, { headers }),
         fetch(`${backendUrl}/api/version`),
+        fetch(`${backendUrl}/api/debug/runtime-info`),
       ]);
       const statusData = await statusRes.json();
       const posData = await posRes.json();
@@ -113,6 +114,7 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
       const logsData = await logsRes.json();
       const diagData = diagRes.ok ? await diagRes.json() : {};
       const verData = verRes.ok ? await verRes.json() : {};
+      const runtimeData = runtimeRes.ok ? await runtimeRes.json() : {};
       if (statusRes.ok) {
         setStatus(statusData.status ?? "stopped");
         setStrategyRunning(statusData.strategy_id ?? null);
@@ -181,6 +183,15 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
       );
       const kl: string[] = [];
       if (shaFull) kl.push(`paper_diag.git_sha: ${shaFull}`);
+      if (runtimeData.backend_git_sha) kl.push(`runtime.git_sha: ${String(runtimeData.backend_git_sha)}`);
+      if (runtimeData.backend_build_time) kl.push(`runtime.build_time: ${String(runtimeData.backend_build_time)}`);
+      if (runtimeData.python_executable) kl.push(`python: ${String(runtimeData.python_executable)}`);
+      const files = (runtimeData.module_files ?? {}) as Record<string, unknown>;
+      if (files["app.clients.kis_client"]) kl.push(`module.kis_client: ${String(files["app.clients.kis_client"])}`);
+      if (files["backend.app.engine.user_paper_loop"])
+        kl.push(`module.user_paper_loop: ${String(files["backend.app.engine.user_paper_loop"])}`);
+      if (files["app.brokers.kis_paper_broker"])
+        kl.push(`module.kis_paper_broker: ${String(files["app.brokers.kis_paper_broker"])}`);
       if (dgx.last_failed_endpoint) kl.push(`path: ${String(dgx.last_failed_endpoint)}`);
       if (dgx.last_failed_tr_id) kl.push(`tr_id: ${String(dgx.last_failed_tr_id)}`);
       if (dgx.sanitized_params != null)
@@ -224,7 +235,17 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
       });
       const data = await res.json();
       if (!res.ok) {
-        const raw = data?.detail as string | { message?: string; code?: string; token_error_code?: string } | undefined;
+        const raw = data?.detail as
+          | string
+          | {
+              message?: string;
+              code?: string;
+              token_error_code?: string;
+              path?: string;
+              tr_id?: string;
+              failure_kind?: string;
+            }
+          | undefined;
         let line = "";
         if (raw && typeof raw === "object" && "message" in raw && raw.message) {
           const pre =
@@ -232,8 +253,15 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
               ? "[토큰 1분제한] "
               : raw.code === "PAPER_TOKEN_NOT_READY"
                 ? "[토큰 준비 안 됨] "
+                : raw.code === "PAPER_BALANCE_PREFLIGHT_FAILED"
+                  ? "[balance preflight] "
                 : "";
-          line = pre + String(raw.message) + (raw.token_error_code ? ` (${String(raw.token_error_code)})` : "");
+          const extra =
+            (raw.path ? ` · path=${String(raw.path)}` : "") +
+            (raw.tr_id ? ` · tr_id=${String(raw.tr_id)}` : "") +
+            (raw.failure_kind ? ` · kind=${String(raw.failure_kind)}` : "");
+          line =
+            pre + String(raw.message) + (raw.token_error_code ? ` (${String(raw.token_error_code)})` : "") + extra;
         } else if (typeof raw === "string") {
           line = raw;
         }
