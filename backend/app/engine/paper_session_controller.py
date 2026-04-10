@@ -54,6 +54,8 @@ class PaperSessionController:
         self._paper_diagnostics: dict[str, Any] = {}
         self._last_positions_refresh_at: float = 0.0
         self._last_paper_portfolio_sync_at: float = 0.0
+        self._paper_token_ensure_meta: dict[str, Any] = {}
+        self._last_paper_initial_token_source: str | None = None
 
     def _max_failures(self) -> int:
         return max(1, int(get_backend_settings().runtime_max_consecutive_failures))
@@ -80,6 +82,8 @@ class PaperSessionController:
             "paper_tick_interval_sec": out.get("paper_tick_interval_sec"),
             "positions_refresh_skipped": None,
             "portfolio_sync_skipped": None,
+            "token_cache_source": out.get("token_cache_source"),
+            "token_error_code": out.get("token_error_code"),
         }
         if ok:
             self._paper_diagnostics = {
@@ -93,6 +97,7 @@ class PaperSessionController:
                 "rate_limit": None,
                 "retry_after_sec": None,
                 "http_status": None,
+                "token_error_code": None,
                 **budget_base,
             }
             return
@@ -151,6 +156,7 @@ class PaperSessionController:
                         strategy_id=sid,
                         user_tag=uid[:12].replace("/", "_").replace("\\", "_"),
                         initial_access_token=cached_token,
+                        initial_token_source_label=self._last_paper_initial_token_source,
                     )
                     self._user_loop_identity = identity
                     self._append_log(
@@ -226,6 +232,19 @@ class PaperSessionController:
         if "openapivts" not in (api_base or ""):
             raise ValueError("MOCK_HOST_REQUIRED")
 
+        ens = svc.ensure_cached_token_for_paper_start(user_id)
+        self._paper_token_ensure_meta = {
+            "token_cache_hit": ens.token_cache_hit,
+            "token_cache_source": ens.token_cache_source,
+            "token_cache_persisted": ens.token_cache_persisted,
+            "cache_miss_reason": ens.cache_miss_reason,
+            "start_blocked_reason": None if ens.ok else ens.message,
+            "token_error_code": ens.token_error_code,
+        }
+        if not ens.ok:
+            raise ValueError(ens.failure_code or "PAPER_TOKEN_NOT_READY")
+        self._last_paper_initial_token_source = ens.token_cache_source or None
+
         with self._lock:
             if self._run_flag and self._thread is not None and self._thread.is_alive():
                 if self._user_id == user_id:
@@ -260,6 +279,7 @@ class PaperSessionController:
             self._thread = None
             self._user_loop = None
             self._user_loop_identity = None
+        self._last_paper_initial_token_source = None
         self._append_log("info", "Paper 세션 중지")
         return {"ok": True, "status": "stopped"}
 
@@ -304,9 +324,15 @@ class PaperSessionController:
     def diagnostics_payload(self) -> dict[str, Any]:
         with self._lock:
             base = dict(self._paper_diagnostics)
-            base["session_last_error"] = self._last_error
-            base["session_status"] = self._status
-            return base
+            merged = {**self._paper_token_ensure_meta, **base}
+            merged["session_last_error"] = self._last_error
+            merged["session_status"] = self._status
+            return merged
+
+    def paper_token_ensure_snapshot(self) -> dict[str, Any]:
+        """마지막 Paper start 시도 시 토큰 확보 메타(HTTP 예외 detail 용)."""
+        with self._lock:
+            return dict(self._paper_token_ensure_meta)
 
     def get_positions(self) -> list[dict[str, Any]]:
         return list(self._last_positions)

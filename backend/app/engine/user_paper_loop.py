@@ -44,6 +44,7 @@ class UserPaperTradingLoop:
         user_tag: str,
         backend_settings: BackendSettings | None = None,
         initial_access_token: str | None = None,
+        initial_token_source_label: str | None = None,
     ) -> None:
         self._app_key = app_key
         self._app_secret = app_secret
@@ -56,6 +57,7 @@ class UserPaperTradingLoop:
         self._access_token: str | None = initial_access_token
         self._token_monotonic: float = time.monotonic() if initial_access_token else 0.0
         self._token_issued_locally: bool = False
+        self._initial_token_source_label: str | None = initial_token_source_label
         self._univ_sig: str | None = None
         self._univ_ts: float = 0.0
         self._univ_df: Any = None
@@ -71,15 +73,23 @@ class UserPaperTradingLoop:
             timeout_sec=12,
         )
         if not tr.ok or not tr.access_token:
-            raise RuntimeError(tr.message or "token_failed")
+            code = tr.error_code or ""
+            msg = tr.message or "token_failed"
+            if code == "TOKEN_RATE_LIMIT":
+                raise RuntimeError("TOKEN_RATE_LIMIT: " + msg)
+            raise RuntimeError(msg)
         self._access_token = tr.access_token
         self._token_monotonic = time.monotonic()
         self._token_issued_locally = True
         return tr.access_token
 
     def token_source_for_diagnostics(self) -> str:
-        """루프가 브로커 test-connection 캐시 토큰을 쓰는지, 루프 내 재발급인지 구분."""
-        return "fresh_issue" if self._token_issued_locally else "test_connection_reuse"
+        """브로커 메모리/DB 캐시·루프 내 재발급 구분 (diagnostics token_cache_source)."""
+        if self._token_issued_locally:
+            return "fresh_issue"
+        if self._initial_token_source_label:
+            return self._initial_token_source_label
+        return "broker_reuse"
 
     def _kis_client(self):
         if not self._access_token or (time.monotonic() - self._token_monotonic) > 1500:
@@ -125,13 +135,17 @@ class UserPaperTradingLoop:
             try:
                 client = self._kis_client()
             except RuntimeError as exc:
+                err_s = str(exc)
+                is_rl = err_s.startswith("TOKEN_RATE_LIMIT:") or "TOKEN_RATE_LIMIT" in err_s
+                fk = "token_rate_limit" if is_rl else "token_failure"
                 return {
                     "ok": False,
-                    "error": str(exc),
+                    "error": err_s,
                     "failed_step": "kis_token",
                     "kis_context": {},
                     "token_source": self.token_source_for_diagnostics(),
-                    "failure_kind": "token_failure",
+                    "failure_kind": fk,
+                    "token_error_code": "TOKEN_RATE_LIMIT" if is_rl else "TOKEN_FAILURE",
                 }
 
             failed_step = "build_jobs"
@@ -221,6 +235,7 @@ class UserPaperTradingLoop:
                 "ok": True,
                 "report": report,
                 "token_source": self.token_source_for_diagnostics(),
+                "token_cache_source": self.token_source_for_diagnostics(),
                 "universe_cache_hit": universe_cache_hit,
                 "kospi_cache_hit": kospi_cache_hit,
                 "request_budget_mode": "paper_conserve",

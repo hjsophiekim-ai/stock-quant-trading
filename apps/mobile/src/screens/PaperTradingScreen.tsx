@@ -118,13 +118,15 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
         const prefix =
           fk === "rate_limit"
             ? "[KIS 초당한도] "
-            : fk === "token_failure"
-              ? "[토큰] "
-              : fk === "kis_business_error"
-                ? "[KIS 업무] "
-                : fk
-                  ? `[${fk}] `
-                  : "";
+            : fk === "token_rate_limit"
+              ? "[KIS 토큰 1분제한] "
+              : fk === "token_failure"
+                ? "[토큰] "
+                : fk === "kis_business_error"
+                  ? "[KIS 업무] "
+                  : fk
+                    ? `[${fk}] `
+                    : "";
         const ep = dg.last_failed_endpoint ? ` · path=${String(dg.last_failed_endpoint)}` : "";
         const tr = dg.last_failed_tr_id ? ` · tr=${String(dg.last_failed_tr_id)}` : "";
         const err = statusData.last_error != null ? String(statusData.last_error) : null;
@@ -151,7 +153,14 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
               : "포폴sync실행"
             : "";
         const rateHint = fk === "rate_limit" ? "초당한도·백오프 " : "";
-        const parts = [tok && `토큰: ${tok}`, tickIv, bmode, thr, uhit, khit, pskip, sskip, rateHint].filter(Boolean);
+        const sb =
+          dg.start_blocked_reason != null && String(dg.start_blocked_reason).length > 0
+            ? `시작차단: ${String(dg.start_blocked_reason)}`
+            : "";
+        const tec = dg.token_error_code != null ? `token_err=${String(dg.token_error_code)}` : "";
+        const parts = [tok && `토큰: ${tok}`, tickIv, bmode, thr, uhit, khit, pskip, sskip, rateHint, sb, tec].filter(
+          Boolean,
+        );
         setDiagHint(parts.join(" · "));
       }
       if (posRes.ok) setPositions(posData.items ?? []);
@@ -192,11 +201,23 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
       });
       const data = await res.json();
       if (!res.ok) {
-        const d = typeof data?.detail === "string" ? data.detail : "";
+        const raw = data?.detail as string | { message?: string; code?: string; token_error_code?: string } | undefined;
+        let line = "";
+        if (raw && typeof raw === "object" && "message" in raw && raw.message) {
+          const pre =
+            raw.code === "TOKEN_RATE_LIMIT_WAIT"
+              ? "[토큰 1분제한] "
+              : raw.code === "PAPER_TOKEN_NOT_READY"
+                ? "[토큰 준비 안 됨] "
+                : "";
+          line = pre + String(raw.message) + (raw.token_error_code ? ` (${String(raw.token_error_code)})` : "");
+        } else if (typeof raw === "string") {
+          line = raw;
+        }
         setMessage(
           res.status >= 500
-            ? `서버 오류 HTTP ${res.status}${d ? " — " + d : ""}`
-            : d || `시작 실패 HTTP ${res.status}`,
+            ? `서버 오류 HTTP ${res.status}${line ? " — " + line : ""}`
+            : line || `시작 실패 HTTP ${res.status}`,
         );
         return;
       }

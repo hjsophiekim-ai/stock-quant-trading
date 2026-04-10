@@ -66,6 +66,27 @@ def start_paper_trading(
         ctrl.start(user.id, payload.strategy_id.strip())
     except ValueError as exc:
         code = str(exc)
+        snap = ctrl.paper_token_ensure_snapshot()
+        if code == "TOKEN_RATE_LIMIT_WAIT":
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "code": "TOKEN_RATE_LIMIT_WAIT",
+                    "message": snap.get("start_blocked_reason") or "KIS 접근 토큰 발급 제한 — 잠시 후 다시 시도하세요.",
+                    "token_error_code": snap.get("token_error_code"),
+                    "token_cache_persisted": snap.get("token_cache_persisted"),
+                },
+            ) from exc
+        if code == "PAPER_TOKEN_NOT_READY":
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "PAPER_TOKEN_NOT_READY",
+                    "message": snap.get("start_blocked_reason") or "재사용 가능한 접근 토큰을 확보하지 못했습니다. 연결 테스트 후 다시 시도하세요.",
+                    "token_error_code": snap.get("token_error_code"),
+                    "cache_miss_reason": snap.get("cache_miss_reason"),
+                },
+            ) from exc
         if code == "PAPER_MODE_REQUIRED":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

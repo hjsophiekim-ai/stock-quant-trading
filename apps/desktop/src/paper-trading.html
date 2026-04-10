@@ -249,10 +249,30 @@
 
         function paperFailureLabel(fk) {
           if (fk === "rate_limit") return "[KIS 초당한도·백오프] ";
+          if (fk === "token_rate_limit") return "[KIS 토큰 1분제한] ";
           if (fk === "token_failure") return "[토큰 실패] ";
           if (fk === "kis_business_error") return "[KIS 업무오류] ";
           if (fk === "kis_client_error") return "[KIS 클라이언트] ";
           return fk ? "[" + fk + "] " : "";
+        }
+
+        function formatPaperStartError(data) {
+          var d = data && data.detail;
+          if (d && typeof d === "object" && d.message) {
+            var pre =
+              d.code === "TOKEN_RATE_LIMIT_WAIT"
+                ? "[토큰 1분제한] "
+                : d.code === "PAPER_TOKEN_NOT_READY"
+                  ? "[토큰 준비 안 됨] "
+                  : "";
+            return (
+              pre +
+              d.message +
+              (d.token_error_code ? " (" + d.token_error_code + ")" : "")
+            );
+          }
+          if (typeof d === "string") return d;
+          return "start failed";
         }
 
         async function refreshPaper() {
@@ -318,7 +338,10 @@
                 (typeof khit === "boolean" ? "KOSPI " + (khit ? "캐시HIT" : "캐시MISS") + " · " : "") +
                 (typeof pskip === "boolean" ? "포지션스냅 " + (pskip ? "스킵" : "실행") + " · " : "") +
                 (typeof sskip === "boolean" ? "포폴sync " + (sskip ? "스킵" : "실행") + " · " : "") +
-                (fk === "rate_limit" ? "[초당한도·백오프] " : "") +
+                (dg.token_cache_source ? "토큰캐시 " + dg.token_cache_source + " · " : "") +
+                (dg.start_blocked_reason ? "시작차단 " + dg.start_blocked_reason + " · " : "") +
+                (dg.token_error_code ? "token_err " + dg.token_error_code + " · " : "") +
+                (fk === "rate_limit" || fk === "token_rate_limit" ? "[한도·토큰] " : "") +
                 (fk && !statusData.last_error ? "최근 실패유형: " + fk : "");
               diagHint.innerText = hint.replace(/\s·\s$/, "");
               riskOffPanel.style.display = st === "risk_off" ? "block" : "none";
@@ -399,7 +422,7 @@
             return {};
           });
           if (!res.ok) {
-            const detail = typeof data.detail === "string" ? data.detail : "start failed";
+            const detail = formatPaperStartError(data);
             message.innerText = detail;
             toast("err", detail);
             return;
