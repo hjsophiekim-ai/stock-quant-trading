@@ -19,27 +19,6 @@ class KISTokenResult:
     status_code: int | None = None
 
 
-def classify_token_issue_error(*, status_code: int | None, detail_msg: str) -> str:
-    """
-    KIS 토큰 발급 HTTP 403 중 '1분당 1회' 등은 TOKEN_RATE_LIMIT 으로 분류.
-    """
-    if status_code != 403:
-        return "TOKEN_HTTP_ERROR"
-    d = detail_msg or ""
-    if (
-        "1분" in d
-        or "1 분" in d
-        or "잠시 후" in d
-        or "잠시후" in d
-        or "접근토큰" in d
-        or "1회" in d
-        or "rate limit" in d.lower()
-        or "too many" in d.lower()
-    ):
-        return "TOKEN_RATE_LIMIT"
-    return "TOKEN_HTTP_ERROR"
-
-
 def mask_secret_tail(value: str, *, keep_last: int = 4) -> str:
     """로그용: 앱키·시크릿·토큰 전체를 남기지 않을 때 사용."""
     if not value:
@@ -152,25 +131,11 @@ def issue_access_token(
             )
 
         if response.status_code >= 400:
-            detail_msg = ""
-            try:
-                body: dict[str, Any] = response.json()
-                detail_msg = str(body.get("msg1") or body.get("error_description") or body.get("msg") or "").strip()
-            except ValueError:
-                detail_msg = ""
-            err_code = classify_token_issue_error(status_code=response.status_code, detail_msg=detail_msg)
-            # 403은 대부분 모의/실전 도메인-키 조합 불일치 또는 권한/등록 상태 문제다.
-            hint = ""
-            if response.status_code == 403 and err_code != "TOKEN_RATE_LIMIT":
-                hint = " (모의/실전 도메인·앱키 조합 또는 API 권한 상태 확인)"
-            elif err_code == "TOKEN_RATE_LIMIT":
-                hint = " (KIS 접근토큰 발급 빈도 제한 — 잠시 후 재시도)"
-            suffix = f" - {detail_msg}" if detail_msg else ""
             return KISTokenResult(
                 False,
                 None,
-                f"토큰 발급 실패: HTTP {response.status_code}{suffix}{hint}",
-                err_code,
+                f"토큰 발급 실패: HTTP {response.status_code}",
+                "TOKEN_HTTP_ERROR",
                 status_code=response.status_code,
             )
 

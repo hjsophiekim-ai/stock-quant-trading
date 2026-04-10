@@ -6,6 +6,7 @@
     "desktop:preflight": "node scripts/preflight-desktop-build.js",
     "desktop:install": "node scripts/preflight-desktop-build.js && npm install --prefix apps/desktop",
     "desktop:build:win": "node scripts/preflight-desktop-build.js && npm run build:win --prefix apps/desktop",
+    "release:build:zips": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release-zips.ps1",
     "release:zip:clients": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-client-install-zip.ps1",
     "release:zip:android": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-android-install-zip.ps1"
   }

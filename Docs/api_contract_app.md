@@ -52,11 +52,6 @@ Base: `/api/dashboard`
 
 - `GET /summary`
   - res: `DashboardSummaryResponse`
-  - `screener` / `selected_candidates`: 종목 스크리너 스냅샷. 후보에는 `score`, `reasons`(초보자용), `reasons_detail`, `block_reasons`(선정 시 빈 배열), `metrics`, `exclusions`(제외 종목·사유), `regime_screening_profile`(국면별 가중·임계값) 포함.
-
-Base: `/api/screening`
-
-- `GET /latest`, `POST /refresh` — 위와 동일 필드 + `exclusion_count`.
 
 ## 5) Paper Trading API
 
@@ -83,10 +78,6 @@ Base: `/api/performance`
 공통 query: `PerformanceFilterQuery`
 
 - `GET /metrics` -> `PerformanceMetricsResponse`
-  - 자산 수익률: `pnl_history.jsonl` equity 곡선(필터 구간). `cumulative_return_pct`와 `net_cumulative_return_pct`는 동일(자산 기준 별칭).
-  - 체결: `fills.jsonl` **FIFO**; `gross_realized_pnl`, `total_fees`, `total_taxes`, `net_realized_pnl`; 컬럼 없으면 `KIS_BUY_FEE_RATE`, `KIS_SELL_FEE_RATE`, `KRX_SELL_TAX_RATE`(소수 비율).
-  - `calculation_basis`, `assumptions`, `data_quality`, `display_labels_ko`, `fee_rates_applied` 등 메타 포함.
-- `GET /dashboard/summary` 의 flat `today_return_pct` / `monthly_return_pct` / `cumulative_return_pct` 는 위와 동일 집계(`performance_aligned`).
 - `GET /pnl-history` -> `PnlHistoryResponse`
 - `GET /trade-history` -> `TradeHistoryResponse`
 - `GET /symbol-performance` -> `SymbolPerformanceResponse`
@@ -109,19 +100,16 @@ Base: `/api/trading`
 Base: `/api/live-trading`
 
 - `GET /status`
-  - res: `LiveTradingStatusResponse` — `paper_readiness_ok`, `can_place_live_order`(환경·앱 승인·**모의 검증** 모두 충족 시만 true)
-- `GET /paper-readiness`
-  - res: 모의투자 자동 체크리스트(항목별 pass/관측값/임계값/설명 한글)
+  - res: `LiveTradingStatusResponse`
 - `POST /settings`
   - req: `LiveTradingSettingsUpdateRequest`
   - res: `{ ok: boolean } & LiveTradingStatusResponse`
-  - 앱에서 세 확인 플래그를 모두 켜 실거래 해제를 시도할 때, 모의 검증 미통과 시 **403** 및 `message_ko`(초보자용 문구)
 - `GET /runtime-safety-validation`
-  - res: `RuntimeSafetyValidationResponse` + `paper_readiness`
+  - res: `RuntimeSafetyValidationResponse`
 - `GET /kill-switch-status`
   - res: `KillSwitchStatusResponse`
 - `GET /settings-history`
-  - res: `{ items: Array<{ ts: string; actor: string; action: string; reason: string }> }` — 거절 시 `live_unlock_denied_paper_readiness` 등 기록
+  - res: `{ items: Array<{ ts: string; actor: string; action: string; reason: string }> }`
 
 ## 9) OpenAPI 자동생성 전환 가이드
 

@@ -123,20 +123,6 @@
       document.getElementById("backendOverride").value = localStorage.getItem("backend_url_override") || "";
       void checkBackendReachable();
 
-      (function showReasonFromQuery() {
-        try {
-          var q = new URLSearchParams(window.location.search || "");
-          var reason = q.get("reason");
-          if (reason) {
-            var m = document.getElementById("message");
-            m.className = "msg";
-            m.innerText = decodeURIComponent(reason);
-          }
-        } catch {
-          /* ignore */
-        }
-      })();
-
       document.getElementById("saveUrlBtn").addEventListener("click", () => {
         const v = document.getElementById("backendOverride").value.trim();
         if (v) localStorage.setItem("backend_url_override", v);

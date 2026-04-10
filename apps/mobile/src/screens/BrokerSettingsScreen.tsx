@@ -272,13 +272,6 @@ export default function BrokerSettingsScreen({ backendUrl, onBack }: Props) {
         <Text style={{ color: "#64748b", fontSize: 13, marginBottom: 16 }}>
           한국투자증권 App Key·Secret·계좌 정보는 서버에만 암호화되어 저장됩니다.
         </Text>
-        <View style={{ ...card, backgroundColor: "#fff7ed", borderColor: "#fdba74" }}>
-          <Text style={{ fontWeight: "700", color: "#9a3412", marginBottom: 4 }}>모의투자 키 안내</Text>
-          <Text style={{ fontSize: 12, color: "#9a3412", lineHeight: 18 }}>
-            Paper 모드에서는 한국투자 모의투자(VTS)용 App Key/Secret을 사용해야 합니다. 실전 키를 넣으면 토큰 발급이
-            HTTP 403으로 거절될 수 있습니다.
-          </Text>
-        </View>
 
         <View style={card}>
           <Text style={{ fontWeight: "700", marginBottom: 8 }}>현재 연결 상태</Text>

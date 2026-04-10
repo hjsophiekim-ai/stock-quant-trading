@@ -112,29 +112,6 @@
           <div id="lastErrorRow" style="margin-top: 6px; font-size: 0.85rem; color: #b91c1c; display: none">
             마지막 오류: <span id="lastErrorText"></span>
           </div>
-          <div id="diagRow" style="margin-top: 6px; font-size: 0.78rem; color: #475569; line-height: 1.4">
-            <span id="diagHint"></span>
-          </div>
-          <div
-            id="backendVersionRow"
-            style="margin-top: 8px; font-size: 0.72rem; color: #64748b; font-family: ui-monospace, monospace"
-          >
-            <b>백엔드 버전:</b> <span id="backendVersionText">조회 중…</span>
-          </div>
-          <div
-            id="kisFailureDetail"
-            style="
-              margin-top: 6px;
-              font-size: 0.72rem;
-              color: #0f172a;
-              font-family: ui-monospace, monospace;
-              white-space: pre-wrap;
-              background: #f1f5f9;
-              padding: 8px;
-              border-radius: 6px;
-              display: none;
-            "
-          ></div>
         </div>
         <div id="riskOffPanel" class="panel" style="display: none; background: #fef2f2; border-color: #fecaca">
           <b>risk_off</b> — 연속 실패 한도에 도달했습니다. 원인을 확인한 뒤 아래에서 해제하거나 중지하세요.
@@ -149,7 +126,6 @@
           </select>
           <button type="button" id="startBtn">모의 자동매매 시작</button>
           <button type="button" id="stopBtn">중지</button>
-          <button type="button" id="balanceCheckBtn">잔고진단</button>
           <span id="message"></span>
         </div>
         <div class="panel">
@@ -182,11 +158,6 @@
           return;
         }
         const backendUrl = effectiveBackendUrl();
-        const sv = await ensureValidBackendSession(backendUrl);
-        if (!sv.ok) {
-          window.location.href = "./login.html?reason=" + encodeURIComponent(sv.message || sv.kind || "");
-          return;
-        }
         const accessToken = session.accessToken;
 
         function authHeaders(extra) {
@@ -200,9 +171,6 @@
         const maxFailuresEl = document.getElementById("maxFailures");
         const lastErrorRow = document.getElementById("lastErrorRow");
         const lastErrorText = document.getElementById("lastErrorText");
-        const diagHint = document.getElementById("diagHint");
-        const backendVersionText = document.getElementById("backendVersionText");
-        const kisFailureDetail = document.getElementById("kisFailureDetail");
         const riskOffPanel = document.getElementById("riskOffPanel");
         const riskResetBtn = document.getElementById("riskResetBtn");
         const pnlSummary = document.getElementById("pnlSummary");
@@ -211,7 +179,6 @@
         const logsList = document.getElementById("logsList");
         const chart = document.getElementById("chart");
         const startBtn = document.getElementById("startBtn");
-        const balanceCheckBtn = document.getElementById("balanceCheckBtn");
         const brokerGateEl = document.getElementById("brokerGate");
         const toastEl = document.getElementById("toast");
         let toastT = null;
@@ -261,93 +228,27 @@
               d.connection_message ||
               "연결 테스트에 성공한 뒤에만 시작할 수 있습니다. 브로커 설정에서 「연결 테스트」를 실행하세요.";
             return false;
-          } catch (e) {
+          } catch {
             startBtn.disabled = true;
             brokerGateEl.style.display = "block";
-            brokerGateEl.textContent =
-              "브로커 상태 확인 실패 — " +
-              (e && e.message ? e.message : "연결/방화벽/HTTPS를 확인하세요.");
+            brokerGateEl.textContent = "네트워크 오류로 브로커 상태를 확인하지 못했습니다.";
             return false;
           }
-        }
-
-        function paperFailureLabel(fk) {
-          if (fk === "rate_limit") return "[KIS 초당한도·백오프] ";
-          if (fk === "token_rate_limit") return "[KIS 토큰 1분제한] ";
-          if (fk === "token_failure") return "[토큰 실패] ";
-          if (fk === "kis_business_error") return "[KIS 업무오류] ";
-          if (fk === "kis_client_error") return "[KIS 클라이언트] ";
-          return fk ? "[" + fk + "] " : "";
-        }
-
-        function formatPaperStartError(data) {
-          var d = data && data.detail;
-          if (d && typeof d === "object" && d.message) {
-            var pre =
-              d.code === "TOKEN_RATE_LIMIT_WAIT"
-                ? "[토큰 1분제한] "
-                : d.code === "PAPER_TOKEN_NOT_READY"
-                  ? "[토큰 준비 안 됨] "
-                  : d.code === "PAPER_BALANCE_PREFLIGHT_FAILED"
-                    ? "[balance preflight] "
-                  : "";
-            var extra =
-              (d.path ? " · path=" + d.path : "") +
-              (d.tr_id ? " · tr_id=" + d.tr_id : "") +
-              (d.failure_kind ? " · kind=" + d.failure_kind : "");
-            return (
-              pre +
-              d.message +
-              (d.token_error_code ? " (" + d.token_error_code + ")" : "") +
-              extra
-            );
-          }
-          if (typeof d === "string") return d;
-          return "start failed";
-        }
-
-        async function parseJsonOrText(res) {
-          const rawText = await res.text();
-          var data = {};
-          if (rawText) {
-            try {
-              data = JSON.parse(rawText);
-            } catch (_e) {
-              data = {};
-            }
-          }
-          return { data: data || {}, rawText: rawText || "" };
         }
 
         async function refreshPaper() {
           await checkBrokerGate();
           try {
-            const [statusRes, posRes, pnlRes, logsRes, diagRes, verRes, runtimeRes] = await Promise.all([
+            const [statusRes, posRes, pnlRes, logsRes] = await Promise.all([
               fetch(backendUrl + "/api/paper-trading/status"),
               fetch(backendUrl + "/api/paper-trading/positions"),
               fetch(backendUrl + "/api/paper-trading/pnl"),
               fetch(backendUrl + "/api/paper-trading/logs"),
-              fetch(backendUrl + "/api/paper-trading/diagnostics", { headers: authHeaders() }),
-              fetch(backendUrl + "/api/version"),
-              fetch(backendUrl + "/api/debug/runtime-info"),
             ]);
-            const [statusData, posData, pnlData, logsData, diagData, verData, runtimeData] = await Promise.all([
-              statusRes.json().catch(function () {
-                return {};
-              }),
-              posRes.json().catch(function () {
-                return {};
-              }),
-              pnlRes.json().catch(function () {
-                return {};
-              }),
-              logsRes.json().catch(function () {
-                return { items: [] };
-              }),
-              diagRes.ok ? diagRes.json().catch(function () { return {}; }) : Promise.resolve({}),
-              verRes.ok ? verRes.json().catch(function () { return {}; }) : Promise.resolve({}),
-              runtimeRes.ok ? runtimeRes.json().catch(function () { return {}; }) : Promise.resolve({}),
-            ]);
+            const statusData = await statusRes.json();
+            const posData = await posRes.json();
+            const pnlData = await pnlRes.json();
+            const logsData = await logsRes.json();
             if (statusRes.ok) {
               var st = statusData.status || "stopped";
               statusText.innerText = st;
@@ -355,82 +256,14 @@
               lastTickEl.innerText = statusData.last_tick_at || "—";
               failureStreakEl.innerText = String(statusData.failure_streak != null ? statusData.failure_streak : 0);
               maxFailuresEl.innerText = String(statusData.max_failures != null ? statusData.max_failures : "—");
-              var dg = statusData.diagnostics || diagData || {};
-              var fk = dg.failure_kind || diagData.failure_kind || "";
               if (statusData.last_error) {
                 lastErrorRow.style.display = "block";
-                var ep = dg.last_failed_endpoint || diagData.last_failed_endpoint || "";
-                var tr = dg.last_failed_tr_id || diagData.last_failed_tr_id || "";
-                var extra = (ep ? " · path=" + ep : "") + (tr ? " · tr_id=" + tr : "");
-                var rls = dg.retry_after_sec != null ? " · retry_after≈" + dg.retry_after_sec + "s" : "";
-                lastErrorText.innerText =
-                  paperFailureLabel(fk) + (statusData.last_error || "") + extra + rls;
+                lastErrorText.innerText = statusData.last_error;
               } else {
                 lastErrorRow.style.display = "none";
                 lastErrorText.innerText = "";
               }
-              var tok = dg.token_source || diagData.token_source || "";
-              var bmode = dg.request_budget_mode || diagData.request_budget_mode || "";
-              var thr = dg.throttled_mode === true || diagData.throttled_mode === true;
-              var uhit = dg.universe_cache_hit;
-              var khit = dg.kospi_cache_hit;
-              var pskip = dg.positions_refresh_skipped;
-              var sskip = dg.portfolio_sync_skipped;
-              var tickIv = dg.paper_tick_interval_sec != null ? dg.paper_tick_interval_sec : diagData.paper_tick_interval_sec;
-              var hint =
-                (tok ? "토큰 출처: " + tok + " · " : "") +
-                (tickIv != null ? "Paper틱 " + tickIv + "s · " : "") +
-                (bmode ? "예산모드 " + bmode + " · " : "") +
-                (thr ? "KIS간격제한 ON · " : "") +
-                (typeof uhit === "boolean" ? "유니버스 " + (uhit ? "캐시HIT" : "캐시MISS") + " · " : "") +
-                (typeof khit === "boolean" ? "KOSPI " + (khit ? "캐시HIT" : "캐시MISS") + " · " : "") +
-                (typeof pskip === "boolean" ? "포지션스냅 " + (pskip ? "스킵" : "실행") + " · " : "") +
-                (typeof sskip === "boolean" ? "포폴sync " + (sskip ? "스킵" : "실행") + " · " : "") +
-                (dg.token_cache_source ? "토큰캐시 " + dg.token_cache_source + " · " : "") +
-                (dg.start_blocked_reason ? "시작차단 " + dg.start_blocked_reason + " · " : "") +
-                (dg.token_error_code ? "token_err " + dg.token_error_code + " · " : "") +
-                (fk === "rate_limit" || fk === "token_rate_limit" ? "[한도·토큰] " : "") +
-                (fk && !statusData.last_error ? "최근 실패유형: " + fk : "");
-              diagHint.innerText = hint.replace(/\s·\s$/, "");
-              var shaFull = dg.backend_git_sha || diagData.backend_git_sha || "";
-              var shaShort = shaFull ? shaFull.slice(0, 7) : "";
-              var verLine =
-                (verData.app_version || "?") +
-                " · git " +
-                (shaShort || (verData.git_sha || "").slice(0, 7) || "—") +
-                (dg.backend_build_time || diagData.backend_build_time
-                  ? " · build " + (dg.backend_build_time || diagData.backend_build_time)
-                  : verData.build_time
-                    ? " · build " + verData.build_time
-                    : "");
-              var files = runtimeData.module_files || {};
-              var kisMod = files["app.clients.kis_client"] || "";
-              if (kisMod) {
-                var name = String(kisMod).split(/[\\/]/).slice(-1)[0];
-                verLine += " · mod " + name;
-              }
-              backendVersionText.innerText = verLine;
-              var kisLines = [];
-              if (shaFull) kisLines.push("paper_diag.git_sha: " + shaFull);
-              if (runtimeData.backend_git_sha) kisLines.push("runtime.git_sha: " + runtimeData.backend_git_sha);
-              if (runtimeData.backend_build_time) kisLines.push("runtime.build_time: " + runtimeData.backend_build_time);
-              if (runtimeData.python_executable) kisLines.push("python: " + runtimeData.python_executable);
-              if (files["app.clients.kis_client"]) kisLines.push("module.kis_client: " + files["app.clients.kis_client"]);
-              if (files["backend.app.engine.user_paper_loop"]) kisLines.push("module.user_paper_loop: " + files["backend.app.engine.user_paper_loop"]);
-              if (files["app.brokers.kis_paper_broker"]) kisLines.push("module.kis_paper_broker: " + files["app.brokers.kis_paper_broker"]);
-              if (dg.last_failed_endpoint || diagData.last_failed_endpoint)
-                kisLines.push("path: " + (dg.last_failed_endpoint || diagData.last_failed_endpoint));
-              if (dg.last_failed_tr_id || diagData.last_failed_tr_id)
-                kisLines.push("tr_id: " + (dg.last_failed_tr_id || diagData.last_failed_tr_id));
-              var sp = dg.sanitized_params != null ? dg.sanitized_params : diagData.sanitized_params;
-              if (sp != null) kisLines.push("sanitized_params:\n" + JSON.stringify(sp, null, 2));
-              kisFailureDetail.style.display = kisLines.length ? "block" : "none";
-              kisFailureDetail.textContent = kisLines.length ? kisLines.join("\n") : "";
               riskOffPanel.style.display = st === "risk_off" ? "block" : "none";
-            } else {
-              if (verRes.ok && verData.git_sha)
-                backendVersionText.innerText =
-                  (verData.app_version || "?") + " · git " + (verData.git_sha || "").slice(0, 7);
             }
             if (pnlRes.ok) {
               var tc = Number(pnlData.today_return_pct != null ? pnlData.today_return_pct : 0);
@@ -458,18 +291,8 @@
               li.innerText = (ts ? "[" + ts + "] " : "") + (lv ? lv + ": " : "") + (l.message || "");
               logsList.appendChild(li);
             });
-            if (!statusRes.ok) {
-              message.innerText =
-                statusRes.status >= 500
-                  ? "Paper 상태: 서버 오류 HTTP " + statusRes.status
-                  : "Paper 상태 조회 실패 HTTP " + statusRes.status;
-            } else {
-              message.innerText = "";
-            }
-          } catch (e) {
-            message.innerText =
-              "Paper 화면 갱신 실패(네트워크/브라우저). 백엔드 URL·방화벽·HTTPS를 확인하세요. " +
-              (e && e.message ? "(" + e.message + ")" : "");
+          } catch {
+            message.innerText = "network error";
           }
         }
 
@@ -504,17 +327,11 @@
             headers: authHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify({ strategy_id: strategyId }),
           });
-          const parsed = await parseJsonOrText(res);
-          const data = parsed.data;
+          const data = await res.json().catch(function () {
+            return {};
+          });
           if (!res.ok) {
-            var detail = formatPaperStartError(data);
-            if (!detail || detail === "start failed") {
-              var d = data && data.detail;
-              if (typeof d === "string" && d.trim()) detail = d.trim();
-              else if (parsed.rawText && parsed.rawText.trim()) detail = parsed.rawText.trim().slice(0, 600);
-              else detail = "start failed";
-            }
-            detail = "HTTP " + res.status + " · " + detail;
+            const detail = typeof data.detail === "string" ? data.detail : "start failed";
             message.innerText = detail;
             toast("err", detail);
             return;
@@ -523,44 +340,6 @@
           message.innerText = "시작됨";
           toast("ok", "모의 자동매매를 시작했습니다.");
           refreshPaper();
-        });
-
-        balanceCheckBtn.addEventListener("click", async function () {
-          try {
-            const res = await fetch(backendUrl + "/api/debug/kis-balance-check", { headers: authHeaders() });
-            const parsed = await parseJsonOrText(res);
-            const body = parsed.data || {};
-            if (!res.ok) {
-              const line =
-                "HTTP " +
-                res.status +
-                " · " +
-                (typeof body.detail === "string"
-                  ? body.detail
-                  : parsed.rawText
-                    ? parsed.rawText.slice(0, 500)
-                    : "balance check failed");
-              message.innerText = line;
-              toast("err", line);
-              return;
-            }
-            var lines = [];
-            lines.push("ok: " + String(body.ok));
-            if (body.path) lines.push("path: " + body.path);
-            if (body.tr_id) lines.push("tr_id: " + body.tr_id);
-            if (body.failure_kind) lines.push("failure_kind: " + body.failure_kind);
-            if (body.error) lines.push("error: " + body.error);
-            if (body.sanitized_params != null) lines.push("sanitized_params:\n" + JSON.stringify(body.sanitized_params, null, 2));
-            if (body.summary != null) lines.push("summary:\n" + JSON.stringify(body.summary, null, 2));
-            kisFailureDetail.style.display = "block";
-            kisFailureDetail.textContent = lines.join("\n");
-            message.innerText = body.ok ? "잔고진단 성공" : "잔고진단 실패";
-            toast(body.ok ? "ok" : "err", message.innerText);
-          } catch (e) {
-            const line = "잔고진단 실패: " + (e && e.message ? e.message : "unknown");
-            message.innerText = line;
-            toast("err", line);
-          }
         });
 
         document.getElementById("stopBtn").addEventListener("click", async function () {

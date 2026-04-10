@@ -46,7 +46,6 @@ export default function DashboardScreen({ backendUrl, onOpenBrokerSettings }: Pr
   const [refreshing, setRefreshing] = useState(false);
   const [brokerLinked, setBrokerLinked] = useState<boolean | null>(null);
   const [initialLoad, setInitialLoad] = useState(true);
-  const [guideOpen, setGuideOpen] = useState(true);
   const mounted = useRef(true);
 
   const authHeaders = useCallback((): HeadersInit => {
@@ -228,31 +227,6 @@ export default function DashboardScreen({ backendUrl, onOpenBrokerSettings }: Pr
 
         {summary && tab === "overview" ? (
           <>
-            <View
-              style={{
-                ...cardStyle,
-                backgroundColor: "#eff6ff",
-                borderColor: "#93c5fd",
-              }}
-            >
-              <TouchableOpacity onPress={() => setGuideOpen((v) => !v)} activeOpacity={0.7}>
-                <Text style={{ fontWeight: "800", color: "#1e40af" }}>
-                  모의 투자 테스트 — 실행 순서 {guideOpen ? "▼" : "▶"}
-                </Text>
-              </TouchableOpacity>
-              {guideOpen ? (
-                <View style={{ marginTop: 8 }}>
-                  <Text style={{ fontSize: 12, color: "#1e3a5f", lineHeight: 18, marginBottom: 6 }}>
-                    1) 로그인 화면에서 서버 연결(health) 확인 · 2) Broker Settings에서 모의 계정 저장·연결 테스트 · 3) Paper Trading에서
-                    시작 · 4) 이 탭에서 모드·런타임·국면·후보·포지션·주문/체결 확인 · 5) Performance 탭에서 손익·지표
-                  </Text>
-                  <Text style={{ fontSize: 11, color: "#475569", lineHeight: 16 }}>
-                    탭: 개요(운영 상태) · 포지션 · 주문·체결 · 로그. 아래 카드가 갱신되면 파이프라인이 돌고 있는 것입니다.
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-
             <View style={{ ...cardStyle, backgroundColor: riskBg, borderColor: "#cbd5e1" }}>
               <Text style={{ fontWeight: "800" }}>[{summary.risk_banner?.level}] 운영 리스크</Text>
               <Text style={{ marginTop: 4 }}>{summary.risk_banner?.message}</Text>

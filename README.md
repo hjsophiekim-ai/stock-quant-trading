@@ -26,7 +26,9 @@
 
 ### mock/demo 성격이 남아 있는 기능 (명확 구분)
 
-- **Performance API**: `portfolio_data` 스냅샷·체결 이력 기반 집계이며, 일부 지표(월 수익률·승률 등)는 추정치일 수 있음(`data_quality` 필드 참고).
+- **Performance API(`backend/app/api/routes/performance.py`)**:
+  - 현재는 샘플/고정 데이터 응답 중심
+  - 실제 체결/손익 DB 기반 집계는 추가 개발 필요
 - **대시보드 일부 카드**:
   - 사용자별 실계좌와 1:1 완전 동기화가 아닌 스냅샷/집계 혼합 구간 존재
   - README 및 대시보드 TODO 메시지에서 한계를 명시
@@ -80,7 +82,7 @@
 
 모바일/데스크톱 공통으로 아래 순서대로 진행하면 바로 확인 가능합니다.
 
-1. **로컬 개발**이면 백엔드를 먼저 실행합니다 (기본 주소 `http://127.0.0.1:8000` — 데스크톱/모바일 **개발 모드** 기본값). **스토어·설치 배포본**은 기본으로 `https://stock-quant-backend.onrender.com` 을 가리키며, 다른 서버를 쓰려면 빌드 시 `BACKEND_URL` / `EXPO_PUBLIC_BACKEND_URL` 로 지정합니다.
+1. 백엔드를 먼저 실행합니다 (기본 주소 `http://127.0.0.1:8000` — 앱에 기본값으로 들어 있어 URL을 매번 입력하지 않아도 됩니다).
 2. **첫 실행**이면 짧은 온보딩(설정 마법사) 후 로그인 화면으로 이동합니다.
 3. Login 화면에서 `Register (First Run)` / `회원가입`으로 계정 생성 후 로그인합니다. **로그인 유지**를 켜면 다음 실행 시 자동 로그인을 시도합니다 (`/api/auth/me` · refresh).
 4. 로그인 성공 후 **대시보드로 자동 진입**합니다.
@@ -107,8 +109,7 @@ Mock/실제 연동 구분:
 
 - `docs/product_architecture.md` : **일반 사용자 설치형 제품** 기준 아키텍처 (Win 설치본·Android·JWT·서버 번들)
 - `docs/user_flow.md` : 실행→로그인→대시보드·자동 로그인·API 목록
-- `Docs/today_run_checklist.md` : **오늘 바로 실행** (Windows·Python 3.11·`.env`·Swagger 순서)
-- `Docs/quickstart_real_mock_trading.md` : 모의투자·백엔드·Swagger·체크리스트 (초보자)
+- `docs/quickstart_real_mock_trading.md` : 모의투자·백엔드·Swagger·체크리스트 (초보자)
 - `docs/e2e_mock_trading.md` : Swagger 11단계 end-to-end 점검 가이드
 - `docs/quickstart_user_desktop.md` : 일반 사용자용 Windows 빠른 시작
 - `docs/quickstart_user_android.md` : 일반 사용자용 Android 빠른 시작
@@ -138,7 +139,7 @@ Render Web Service 기준으로 바로 배포할 수 있도록 루트에 `render
 2. 생성된 서비스 `Environment`에 `APP_SECRET_KEY` 입력
 3. 브로커 연동까지 쓸 경우 `KIS_APP_KEY`, `KIS_APP_SECRET`도 입력
 4. 배포 후 `https://<service>.onrender.com/api/health` 확인
-5. 다른 Render 서비스나 자체 도메인을 쓸 때만 URL을 빌드에 넣기 (저장소 기본은 이미 `https://stock-quant-backend.onrender.com`):
+5. 앱에는 공용 URL만 넣기:
    - 모바일: `EXPO_PUBLIC_BACKEND_URL=https://<service>.onrender.com`
    - 데스크톱: `BACKEND_URL=https://<service>.onrender.com`
 
@@ -155,8 +156,7 @@ Render Web Service 기준으로 바로 배포할 수 있도록 루트에 `render
 
 **한국투자 모의계좌부터 Swagger·브로커 등록·paper·손익 확인까지** 하려면 아래 문서를 따르세요.
 
-- **[Docs/today_run_checklist.md](Docs/today_run_checklist.md)** — 오늘 실행 최소 체크리스트(Swagger API 순서 포함)
-- **[Docs/quickstart_real_mock_trading.md](Docs/quickstart_real_mock_trading.md)** — `.env.paper` → `.env`, 가상환경, 점검 스크립트, 10단계 체크리스트, 흔한 오류
+- **[docs/quickstart_real_mock_trading.md](docs/quickstart_real_mock_trading.md)** — `.env.paper` → `.env`, 가상환경, 점검 스크립트, 10단계 체크리스트, 흔한 오류
 
 요약 순서:
 
@@ -238,30 +238,24 @@ Render Web Service 기준으로 바로 배포할 수 있도록 루트에 `render
 
 Electron 기반 **NSIS 설치 프로그램**(`Stock Quant Desktop-Setup-*.exe`)을 빌드할 수 있습니다. 설치 후 **바탕화면·시작 메뉴 바로가기**로 실행하며, **production 빌드는 로그인 화면부터** 시작합니다(온보딩 생략).
 
-**백엔드는 앱에 포함되지 않습니다.** `BACKEND_URL` 없이 빌드하면 설치본 기본 API는 **`https://stock-quant-backend.onrender.com`** 입니다. 자체 서버를 쓰면 빌드 시 `BACKEND_URL`만 지정하면 됩니다.
+**백엔드는 앱에 포함되지 않습니다.** 일반 사용자가 로컬에서 Python을 실행하지 않게 하려면, 설치 파일을 만들 때 **`BACKEND_URL`을 이미 띄워 둔 원격 API(HTTPS 권장)** 로 지정하세요.
 
-**빌드 요약 (개발자)**
-
-- **Google Drive 등 동기화 폴더에서는 빌드하지 마세요.** 저장소를 **`C:\dev\...` 또는 `C:\temp\...`** 로 복사한 뒤 진행합니다.
-- 빌드 전 **`StockQuantDesktop.exe` / Electron** 프로세스를 종료하고, 잠긴 `apps\desktop\dist` 가 있으면 닫거나 삭제합니다.
-- 저장소 **루트**에서: `npm run desktop:install` → `npm run desktop:build:win` (`apps\desktop\package.json` 경로를 자동 검증).
-- 또는 `cd apps\desktop` 후 `npm install` → `npm run build:win`(Render 기본) / `npm run build:win:local`(로컬 백엔드용).
+빌드(개발자 PC):
 
 ```powershell
-# 예: 로컬 디스크에 복사한 저장소 루트에서 (설치본 → Render 기본)
-npm run desktop:install
-npm run desktop:build:win
-# 로컬 백엔드(127.0.0.1:8000)용 설치 파일은 apps\desktop 에서:
-# npm run build:win:local
+cd apps\desktop
+npm install
+# 같은 PC에서 백엔드를 127.0.0.1:8000 으로 띄우는 테스트용 설치 파일
+npm run build:win:local
+# 실제 배포: 운영 서버 URL로 교체
+npx cross-env APP_ENV=production BACKEND_URL=https://api.example.com npm run build:win
 ```
 
-산출물: **`apps/desktop/dist/Stock Quant Desktop-Setup-0.1.0.exe`** (기본 `version` 이 `0.1.0` 일 때; 버전은 `apps/desktop/package.json` 참고)
-
-**PC·폰에 나눠 줄 zip 패키지**: 빌드 후 루트에서 `npm run release:zip:clients` → `release/stock-quant-client-install.zip`, Android 전용 안내는 `npm run release:zip:android` → `release/stock-quant-android-install.zip`. README(KO/EN)는 **UTF-8 BOM**으로 넣어 메모장에서도 깨지지 않습니다. APK는 EAS(`eas login`) 후 빌드하고 `.\scripts\package-client-install-zip.ps1 -ApkPath "..."` 등으로 포함합니다. **배포 위치**는 [Docs/client_install_download.md](Docs/client_install_download.md) 참고.
+산출물: `apps/desktop/dist/Stock Quant Desktop-Setup-0.1.0.exe` (버전은 `apps/desktop/package.json` 참고)
 
 **사용자 최소 설정**: 설치 후 앱 실행 → 로그인(또는 회원가입). 서버 URL은 설치 파일에 포함된 기본값을 쓰며, 바꿀 때만 로그인 화면 **「고급: 서버 주소」**를 사용합니다. 상단 **서버 연결** 표시가 `GET /api/health` 기준으로 정상인지 보여 줍니다.
 
-초보자용 단계·잠금 해제·실패 5가지: **[Docs/deployment_desktop.md](Docs/deployment_desktop.md)**
+자세한 배포·CORS·코드 서명: **[docs/deployment_desktop.md](docs/deployment_desktop.md)**
 
 Backend URL 주입 요약:
 - 빌드 시 `scripts/build-win.js`가 임시로 `src/runtime-config.js`에 `BACKEND_URL`·`APP_ENV`를 쓰고, 패킹 후 **원래 개발용 파일로 복원**합니다.
@@ -270,7 +264,7 @@ Backend URL 주입 요약:
 ## Android 설치 파일 (일반 사용자)
 
 모바일 앱은 Expo/EAS 기반으로 배포하며, **앱에는 KIS 키를 저장하지 않고 로그인 후 백엔드 API만 사용**합니다.  
-일반 사용자 배포는 **프로덕션 빌드에서 `https://stock-quant-backend.onrender.com` 이 기본**이며, 다른 API를 쓸 때만 환경변수로 덮어씁니다. 로컬 개발(`expo start`)은 기본이 `http://127.0.0.1:8000` 입니다.
+일반 사용자 배포는 **클라우드 백엔드 URL이 기본 주입된 빌드**를 사용합니다.
 
 빌드(개발자 PC):
 
@@ -283,7 +277,7 @@ npm run build:android:apk
 npm run build:android:aab
 ```
 
-`apps/mobile/app.config.ts`에서 `APP_ENV`에 따라 위 기본값이 정해집니다. 다른 서버로 고정하려면:
+기본 백엔드 URL은 `apps/mobile/app.config.ts`에서 설정되며, 빌드 시 아래처럼 교체할 수 있습니다.
 
 ```bash
 EXPO_PUBLIC_BACKEND_URL=https://api.mycompany.com npx eas build --platform android --profile production

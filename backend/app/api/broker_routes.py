@@ -3,9 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Header, HTTPException, status
 
 from ..auth.kis_auth import issue_access_token, validate_kis_inputs
-from .auth_routes import get_current_user_from_auth_header
+from ..api.auth_routes import get_current_user_from_auth_header
 from ..core.config import get_backend_settings, resolved_kis_api_base_url
-from ..core.storage_paths import get_resolved_storage_paths
 from ..models.broker_account import (
     BrokerAccountResponse,
     BrokerAccountUpsertRequest,
@@ -16,22 +15,17 @@ from ..services.broker_secret_service import BrokerSecretService
 
 router = APIRouter(prefix="/broker-accounts", tags=["broker-accounts"])
 
-_broker_service: BrokerSecretService | None = None
+_settings = get_backend_settings()
+_broker_service = BrokerSecretService(
+    db_path="./backend_data/broker_accounts.db",
+    encryption_seed=_settings.app_secret_key or "dev-change-me",
+    kis_base_url=_settings.kis_base_url,
+    kis_mock_base_url=getattr(_settings, "kis_mock_base_url", "") or "https://openapivts.koreainvestment.com:29443",
+)
 
 
 def get_broker_service() -> BrokerSecretService:
     """다른 라우터(예: paper-trading)에서 동일 DB·암호화 설정으로 브로커 상태를 조회할 때 사용."""
-    global _broker_service
-    if _broker_service is None:
-        settings = get_backend_settings()
-        paths = get_resolved_storage_paths()
-        _broker_service = BrokerSecretService(
-            db_path=str(paths.broker_accounts_db_path),
-            encryption_seed=settings.app_secret_key or "dev-change-me",
-            kis_base_url=settings.kis_base_url,
-            kis_mock_base_url=getattr(settings, "kis_mock_base_url", "")
-            or "https://openapivts.koreainvestment.com:29443",
-        )
     return _broker_service
 
 
@@ -48,7 +42,7 @@ def _current_user(authorization: str | None) -> UserPublic:
 def get_my_broker_account(authorization: str | None = Header(default=None)) -> BrokerAccountResponse:
     user = _current_user(authorization)
     try:
-        return get_broker_service().get_account(user.id)
+        return _broker_service.get_account(user.id)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -63,7 +57,7 @@ def upsert_my_broker_account(
 ) -> BrokerAccountResponse:
     user = _current_user(authorization)
     try:
-        return get_broker_service().upsert_account(user.id, payload)
+        return _broker_service.upsert_account(user.id, payload)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -74,7 +68,7 @@ def upsert_my_broker_account(
 @router.delete("/me")
 def delete_my_broker_account(authorization: str | None = Header(default=None)) -> dict[str, str]:
     user = _current_user(authorization)
-    get_broker_service().delete_account(user.id)
+    _broker_service.delete_account(user.id)
     return {"status": "deleted"}
 
 
@@ -82,7 +76,7 @@ def delete_my_broker_account(authorization: str | None = Header(default=None)) -
 def test_my_connection(authorization: str | None = Header(default=None)) -> BrokerConnectionTestResponse:
     user = _current_user(authorization)
     try:
-        return get_broker_service().test_connection(user.id)
+        return _broker_service.test_connection(user.id)
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -94,7 +88,7 @@ def test_my_connection(authorization: str | None = Header(default=None)) -> Brok
 def get_my_broker_status(authorization: str | None = Header(default=None)) -> dict[str, str | bool | None]:
     user = _current_user(authorization)
     try:
-        account = get_broker_service().get_account(user.id)
+        account = _broker_service.get_account(user.id)
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

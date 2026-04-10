@@ -9,14 +9,16 @@
     "start": "electron .",
     "dev": "electron .",
     "run": "electron .",
-    "pack": "electron-builder --dir",
+    "pack": "npx electron-builder --dir",
     "build:win": "node scripts/build-win.js",
     "build:win:local": "cross-env APP_ENV=production BACKEND_URL=http://127.0.0.1:8000 node scripts/build-win.js"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
     "electron": "^31.0.0",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "jimp": "^0.22.12",
+    "to-ico": "^1.1.5"
   },
   "build": {
     "appId": "com.stockquant.desktop",
@@ -33,6 +35,7 @@
     "extraMetadata": {
       "backendConfigSource": "src/runtime-config.js"
     },
+    "forceCodeSigning": false,
     "win": {
       "target": [
         {
@@ -42,24 +45,22 @@
           ]
         }
       ],
+      "icon": "build/icons/icon.ico",
       "executableName": "StockQuantDesktop",
-      "icon": "build/icons/icon.png",
       "signAndEditExecutable": false,
-      "verifyUpdateCodeSignature": false
+      "signDlls": false
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
+      "oneClick": true,
+      "perMachine": false,
       "allowElevation": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Stock Quant Desktop",
-      "installerLanguages": [
-        "ko_KR",
-        "en_US"
-      ],
       "deleteAppDataOnUninstall": false,
-      "runAfterFinish": true
+      "runAfterFinish": true,
+      "installerIcon": "build/icons/icon.ico",
+      "uninstallerIcon": "build/icons/icon.ico"
     }
   }
 }

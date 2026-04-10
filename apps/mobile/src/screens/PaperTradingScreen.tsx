@@ -21,13 +21,6 @@ type StrategyOption = "swing_v1" | "bull_focus_v1" | "defensive_v1";
 
 type LogItem = { ts?: string; level?: string; message?: string };
 
-function formatFetchFailure(err: unknown): string {
-  if (err instanceof Error) {
-    return `연결/런타임 오류: ${err.message}`;
-  }
-  return "연결 실패(네트워크/DNS/SSL 등) — 서버 주소를 확인하세요.";
-}
-
 export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpenPerformance }: Props) {
   const [strategyId, setStrategyId] = useState<StrategyOption>("swing_v1");
   const [status, setStatus] = useState("stopped");
@@ -41,9 +34,6 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
   const [logs, setLogs] = useState<LogItem[]>([]);
   const [canStart, setCanStart] = useState(false);
   const [brokerHint, setBrokerHint] = useState("");
-  const [diagHint, setDiagHint] = useState("");
-  const [backendVerLine, setBackendVerLine] = useState("");
-  const [kisDetailBlock, setKisDetailBlock] = useState("");
 
   const authHeaders = useCallback((): HeadersInit => {
     const token = getAuthState().accessToken;
@@ -89,9 +79,9 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
             "연결 테스트에 성공한 뒤에만 시작할 수 있습니다. 브로커 설정에서 「연결 테스트」를 실행하세요.",
         );
       }
-    } catch (e) {
+    } catch {
       setCanStart(false);
-      setBrokerHint(`브로커 상태 확인 실패 — ${formatFetchFailure(e)}`);
+      setBrokerHint("네트워크 오류로 브로커 상태를 확인하지 못했습니다.");
     }
   }, [backendUrl]);
 
@@ -99,104 +89,23 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
     await checkBrokerGate();
     try {
       const headers = authHeaders();
-      const [statusRes, posRes, pnlRes, logsRes, diagRes, verRes, runtimeRes] = await Promise.all([
+      const [statusRes, posRes, pnlRes, logsRes] = await Promise.all([
         fetch(`${backendUrl}/api/paper-trading/status`),
         fetch(`${backendUrl}/api/paper-trading/positions`),
         fetch(`${backendUrl}/api/paper-trading/pnl`),
         fetch(`${backendUrl}/api/paper-trading/logs`),
-        fetch(`${backendUrl}/api/paper-trading/diagnostics`, { headers }),
-        fetch(`${backendUrl}/api/version`),
-        fetch(`${backendUrl}/api/debug/runtime-info`),
       ]);
       const statusData = await statusRes.json();
       const posData = await posRes.json();
       const pnlData = await pnlRes.json();
       const logsData = await logsRes.json();
-      const diagData = diagRes.ok ? await diagRes.json() : {};
-      const verData = verRes.ok ? await verRes.json() : {};
-      const runtimeData = runtimeRes.ok ? await runtimeRes.json() : {};
       if (statusRes.ok) {
         setStatus(statusData.status ?? "stopped");
         setStrategyRunning(statusData.strategy_id ?? null);
         setFailureStreak(Number(statusData.failure_streak ?? 0));
-        const dg = (statusData as { diagnostics?: Record<string, unknown> }).diagnostics ?? diagData;
-        const fk = String(dg.failure_kind ?? "");
-        const prefix =
-          fk === "rate_limit"
-            ? "[KIS 초당한도] "
-            : fk === "token_rate_limit"
-              ? "[KIS 토큰 1분제한] "
-              : fk === "token_failure"
-                ? "[토큰] "
-                : fk === "kis_business_error"
-                  ? "[KIS 업무] "
-                  : fk
-                    ? `[${fk}] `
-                    : "";
-        const ep = dg.last_failed_endpoint ? ` · path=${String(dg.last_failed_endpoint)}` : "";
-        const tr = dg.last_failed_tr_id ? ` · tr=${String(dg.last_failed_tr_id)}` : "";
-        const err = statusData.last_error != null ? String(statusData.last_error) : null;
-        setLastError(err ? `${prefix}${err}${ep}${tr}` : null);
+        setLastError(statusData.last_error ?? null);
         setLastTick(statusData.last_tick_at ?? null);
-        const tok = dg.token_source != null ? String(dg.token_source) : "";
-        const tickIv = dg.paper_tick_interval_sec != null ? `틱 ${String(dg.paper_tick_interval_sec)}s` : "";
-        const bmode = dg.request_budget_mode != null ? `예산 ${String(dg.request_budget_mode)}` : "";
-        const thr = dg.throttled_mode === true ? "KIS간격제한" : "";
-        const uhit =
-          typeof dg.universe_cache_hit === "boolean" ? (dg.universe_cache_hit ? "유니버스캐시HIT" : "유니버스캐시MISS") : "";
-        const khit =
-          typeof dg.kospi_cache_hit === "boolean" ? (dg.kospi_cache_hit ? "KOSPI캐시HIT" : "KOSPI캐시MISS") : "";
-        const pskip =
-          typeof dg.positions_refresh_skipped === "boolean"
-            ? dg.positions_refresh_skipped
-              ? "포지션스냅스킵"
-              : "포지션스냅실행"
-            : "";
-        const sskip =
-          typeof dg.portfolio_sync_skipped === "boolean"
-            ? dg.portfolio_sync_skipped
-              ? "포폴sync스킵"
-              : "포폴sync실행"
-            : "";
-        const rateHint = fk === "rate_limit" ? "초당한도·백오프 " : "";
-        const sb =
-          dg.start_blocked_reason != null && String(dg.start_blocked_reason).length > 0
-            ? `시작차단: ${String(dg.start_blocked_reason)}`
-            : "";
-        const tec = dg.token_error_code != null ? `token_err=${String(dg.token_error_code)}` : "";
-        const parts = [tok && `토큰: ${tok}`, tickIv, bmode, thr, uhit, khit, pskip, sskip, rateHint, sb, tec].filter(
-          Boolean,
-        );
-        setDiagHint(parts.join(" · "));
       }
-      const dgx = statusRes.ok
-        ? ((statusData as { diagnostics?: Record<string, unknown> }).diagnostics ?? diagData)
-        : diagData;
-      const shaFull = typeof dgx.backend_git_sha === "string" ? dgx.backend_git_sha : "";
-      const vApp = typeof verData.app_version === "string" ? verData.app_version : "?";
-      const vGit = typeof verData.git_sha === "string" ? verData.git_sha : "";
-      setBackendVerLine(
-        `${vApp} · git ${(shaFull || vGit).slice(0, 7) || "—"}` +
-          (dgx.backend_build_time != null && String(dgx.backend_build_time)
-            ? ` · build ${String(dgx.backend_build_time)}`
-            : ""),
-      );
-      const kl: string[] = [];
-      if (shaFull) kl.push(`paper_diag.git_sha: ${shaFull}`);
-      if (runtimeData.backend_git_sha) kl.push(`runtime.git_sha: ${String(runtimeData.backend_git_sha)}`);
-      if (runtimeData.backend_build_time) kl.push(`runtime.build_time: ${String(runtimeData.backend_build_time)}`);
-      if (runtimeData.python_executable) kl.push(`python: ${String(runtimeData.python_executable)}`);
-      const files = (runtimeData.module_files ?? {}) as Record<string, unknown>;
-      if (files["app.clients.kis_client"]) kl.push(`module.kis_client: ${String(files["app.clients.kis_client"])}`);
-      if (files["backend.app.engine.user_paper_loop"])
-        kl.push(`module.user_paper_loop: ${String(files["backend.app.engine.user_paper_loop"])}`);
-      if (files["app.brokers.kis_paper_broker"])
-        kl.push(`module.kis_paper_broker: ${String(files["app.brokers.kis_paper_broker"])}`);
-      if (dgx.last_failed_endpoint) kl.push(`path: ${String(dgx.last_failed_endpoint)}`);
-      if (dgx.last_failed_tr_id) kl.push(`tr_id: ${String(dgx.last_failed_tr_id)}`);
-      if (dgx.sanitized_params != null)
-        kl.push(`sanitized_params:\n${JSON.stringify(dgx.sanitized_params, null, 2)}`);
-      setKisDetailBlock(kl.join("\n"));
       if (posRes.ok) setPositions(posData.items ?? []);
       if (pnlRes.ok) {
         setPnlText(
@@ -204,17 +113,8 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
         );
       }
       if (logsRes.ok) setLogs((logsData.items ?? []) as LogItem[]);
-      if (!statusRes.ok) {
-        setMessage(
-          statusRes.status >= 500
-            ? `Paper 상태: 서버 오류 HTTP ${statusRes.status}`
-            : `Paper 상태 조회 실패 HTTP ${statusRes.status}`,
-        );
-      } else {
-        setMessage("");
-      }
-    } catch (e) {
-      setMessage(formatFetchFailure(e));
+    } catch {
+      setMessage("network error");
     }
   }, [authHeaders, backendUrl, checkBrokerGate]);
 
@@ -235,47 +135,13 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
       });
       const data = await res.json();
       if (!res.ok) {
-        const raw = data?.detail as
-          | string
-          | {
-              message?: string;
-              code?: string;
-              token_error_code?: string;
-              path?: string;
-              tr_id?: string;
-              failure_kind?: string;
-            }
-          | undefined;
-        let line = "";
-        if (raw && typeof raw === "object" && "message" in raw && raw.message) {
-          const pre =
-            raw.code === "TOKEN_RATE_LIMIT_WAIT"
-              ? "[토큰 1분제한] "
-              : raw.code === "PAPER_TOKEN_NOT_READY"
-                ? "[토큰 준비 안 됨] "
-                : raw.code === "PAPER_BALANCE_PREFLIGHT_FAILED"
-                  ? "[balance preflight] "
-                : "";
-          const extra =
-            (raw.path ? ` · path=${String(raw.path)}` : "") +
-            (raw.tr_id ? ` · tr_id=${String(raw.tr_id)}` : "") +
-            (raw.failure_kind ? ` · kind=${String(raw.failure_kind)}` : "");
-          line =
-            pre + String(raw.message) + (raw.token_error_code ? ` (${String(raw.token_error_code)})` : "") + extra;
-        } else if (typeof raw === "string") {
-          line = raw;
-        }
-        setMessage(
-          res.status >= 500
-            ? `서버 오류 HTTP ${res.status}${line ? " — " + line : ""}`
-            : line || `시작 실패 HTTP ${res.status}`,
-        );
+        setMessage(typeof data?.detail === "string" ? data.detail : "start failed");
         return;
       }
       setMessage("Paper 세션 시작됨 (KIS 모의 주문 루프). 첫 틱까지 수십 초 걸릴 수 있습니다.");
       await refresh();
-    } catch (e) {
-      setMessage(formatFetchFailure(e));
+    } catch {
+      setMessage("network error");
     }
   };
 
@@ -292,8 +158,8 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
       }
       setMessage("Paper 세션 중지됨.");
       await refresh();
-    } catch (e) {
-      setMessage(formatFetchFailure(e));
+    } catch {
+      setMessage("network error");
     }
   };
 
@@ -310,8 +176,8 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
       }
       setMessage("risk_off 해제됨. 루프가 재개됩니다.");
       await refresh();
-    } catch (e) {
-      setMessage(formatFetchFailure(e));
+    } catch {
+      setMessage("network error");
     }
   };
 
@@ -333,29 +199,6 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
             마지막 틱(UTC): {lastTick ?? "—"} · 실패 연속 {failureStreak}
           </Text>
           {lastError ? <Text style={{ fontSize: 12, color: "#b91c1c", marginTop: 6 }}>{lastError}</Text> : null}
-          {diagHint ? (
-            <Text style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>{diagHint}</Text>
-          ) : null}
-          {backendVerLine ? (
-            <Text style={{ fontSize: 10, color: "#64748b", marginTop: 6, fontFamily: "monospace" }}>
-              백엔드: {backendVerLine}
-            </Text>
-          ) : null}
-          {kisDetailBlock ? (
-            <Text
-              style={{
-                fontSize: 10,
-                color: "#0f172a",
-                marginTop: 6,
-                fontFamily: "monospace",
-                backgroundColor: "#f1f5f9",
-                padding: 8,
-                borderRadius: 6,
-              }}
-            >
-              {kisDetailBlock}
-            </Text>
-          ) : null}
         </View>
 
         {!canStart ? (

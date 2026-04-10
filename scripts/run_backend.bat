@@ -11,10 +11,8 @@ if exist ".venv\Scripts\python.exe" (
 )
 
 if not exist ".env" (
-  echo [WARN] .env not found.
-  echo        1^) Copy env.paper.example to .env.paper and fill KIS_APP_KEY, KIS_APP_SECRET, KIS_ACCOUNT_NO, etc.
-  echo        2^) Then:  copy /Y .env.paper .env
-  echo        See Docs\quickstart_real_mock_trading.md and Docs\today_run_checklist.md
+  echo [WARN] .env not found. Copy env.paper.example to .env.paper, fill values, then copy to .env
+  echo        See docs\quickstart_real_mock_trading.md
 )
 
 echo [backend] python=!PY!

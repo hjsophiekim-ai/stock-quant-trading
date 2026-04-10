@@ -3,6 +3,9 @@ node_modules/
 # Client install zip staging/output (npm run release:zip:clients)
 release/
 
+# Local runtime data (SQLite, state)
+backend_data/
+
 .env
 .env.*
 __pycache__/

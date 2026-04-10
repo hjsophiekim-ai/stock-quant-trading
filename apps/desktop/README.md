@@ -39,4 +39,6 @@ npx cross-env APP_ENV=production BACKEND_URL=https://api.example.com npm run bui
 
 결과: `dist/Stock Quant Desktop-Setup-<version>.exe` (기본 `0.1.0` 이면 `Stock Quant Desktop-Setup-0.1.0.exe`)
 
+저장소 루트에서 ZIP까지 한 번에(동기화 폴더 대신 `%TEMP%` 빌드): `npm run release:build:zips` → `release/Stock-Quant-Desktop-Windows-<version>.zip` (내부에 `INSTALL-DESKTOP.bat` + 설치 `.exe`).
+
 상세: [Docs/deployment_desktop.md](../../Docs/deployment_desktop.md)
