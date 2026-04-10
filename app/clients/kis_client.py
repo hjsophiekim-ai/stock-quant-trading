@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 import logging
+import threading
 import time
 from datetime import datetime
 from typing import Any, Callable
@@ -9,7 +10,22 @@ from typing import Any, Callable
 import requests
 
 from app.clients.kis_contract import DomesticStockPaths, DomesticTrIds, is_paper_host, pick_tr
-from app.clients.kis_parsers import business_error_detail, rt_cd_ok
+from app.clients.kis_parsers import business_error_detail, is_kis_rate_limit, rt_cd_ok
+
+# 호스트(모의/실전 base URL)별 최소 요청 간격 — KIS EGW00201(초당 거래건수) 완화
+_host_next_allowed: dict[str, float] = {}
+_host_throttle_lock = threading.Lock()
+
+
+def _throttle_kis_host(host_key: str, min_interval_sec: float) -> None:
+    if min_interval_sec <= 0:
+        return
+    with _host_throttle_lock:
+        now = time.monotonic()
+        earliest = _host_next_allowed.get(host_key, 0.0)
+        if now < earliest:
+            time.sleep(earliest - now)
+        _host_next_allowed[host_key] = time.monotonic() + min_interval_sec
 
 
 def sanitize_kis_params_for_log(params: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -75,6 +91,12 @@ class KISClient:
     timeout_sec: int = 10
     max_retries: int = 2
     retry_backoff_sec: float = 0.4
+    """동일 호스트로 연속 요청 시 최소 간격(ms). 0이면 스로틀 없음."""
+    kis_min_request_interval_ms: int = 250
+    """EGW00201 등 rate limit 응답 시 추가 재시도 상한(지수 백오프)."""
+    kis_rate_limit_max_retries: int = 6
+    kis_rate_limit_backoff_base_sec: float = 0.5
+    kis_rate_limit_backoff_cap_sec: float = 30.0
     token_provider: Callable[[], str] | None = None
     app_key: str | None = None
     app_secret: str | None = None
@@ -114,6 +136,19 @@ class KISClient:
     def _resolve_tr_id(self, *, paper_tr_id: str, live_tr_id: str) -> str:
         return pick_tr(paper=paper_tr_id, live=live_tr_id, base_url=self.base_url)
 
+    def _host_throttle_key(self) -> str:
+        return self.base_url.rstrip("/").lower()
+
+    @staticmethod
+    def _response_json_object(response: requests.Response) -> dict[str, Any] | None:
+        try:
+            if not response.content:
+                return None
+            payload = response.json()
+            return payload if isinstance(payload, dict) else None
+        except ValueError:
+            return None
+
     def _request(
         self,
         method: str,
@@ -127,9 +162,16 @@ class KISClient:
     ) -> dict[str, Any]:
         url = f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
         headers = self._build_headers(tr_id=tr_id, bearer_token=bearer_token, extra_headers=extra_headers)
-        last_error: Exception | None = None
+        min_int_sec = max(0.0, float(self.kis_min_request_interval_ms) / 1000.0)
+        max_total = max(
+            20,
+            (self.max_retries + 1) + max(8, self.kis_rate_limit_max_retries + 4),
+        )
+        last_net_error: Exception | None = None
+        rate_backoff_idx = 0
 
-        for attempt in range(self.max_retries + 1):
+        for attempt in range(max_total):
+            _throttle_kis_host(self._host_throttle_key(), min_int_sec)
             try:
                 response = self.session.request(
                     method=method,
@@ -139,28 +181,118 @@ class KISClient:
                     headers=headers,
                     timeout=self.timeout_sec,
                 )
-                self._raise_for_status(
-                    response,
-                    method=method,
-                    url=url,
-                    path=path,
-                    tr_id=tr_id,
-                    params=params,
-                    data=data,
-                )
-                return self._safe_json(response)
             except (requests.Timeout, requests.ConnectionError) as exc:
-                last_error = exc
-                if attempt >= self.max_retries:
+                last_net_error = exc
+                if attempt >= max_total - 1:
                     break
-                sleep_s = self.retry_backoff_sec * (2**attempt)
+                sleep_s = self.retry_backoff_sec * (2 ** min(attempt, 6))
                 self.logger.warning(
                     "KIS request retrying due to network/timeout",
                     extra={"method": method, "path": path, "attempt": attempt + 1},
                 )
                 time.sleep(sleep_s)
-            except KISClientError:
-                raise
+                continue
+
+            text = response.text or ""
+            payload = self._response_json_object(response)
+
+            if response.status_code >= 400:
+                if is_kis_rate_limit(payload=payload, http_body=text, http_status=response.status_code):
+                    sleep_s = min(
+                        float(self.kis_rate_limit_backoff_cap_sec),
+                        float(self.kis_rate_limit_backoff_base_sec) * (2 ** min(rate_backoff_idx, 8)),
+                    )
+                    rate_backoff_idx += 1
+                    rl_ctx: dict[str, Any] = {
+                        "rate_limit": True,
+                        "retry_after_sec": sleep_s,
+                        "method": method,
+                        "path": path,
+                        "tr_id": tr_id,
+                        "params": sanitize_kis_params_for_log(params if method == "GET" else None),
+                        "body_keys": sorted(data.keys()) if isinstance(data, dict) else None,
+                        "http_status": response.status_code,
+                    }
+                    self.logger.warning(
+                        "KIS rate limit (HTTP %s), backoff %.2fs path=%s",
+                        response.status_code,
+                        sleep_s,
+                        path,
+                    )
+                    time.sleep(sleep_s)
+                    if rate_backoff_idx > max(3, self.kis_rate_limit_max_retries):
+                        raise KISClientError(
+                            f"KIS rate limit persists after retries: HTTP {response.status_code} path={path}",
+                            kis_context=rl_ctx,
+                        )
+                    continue
+                ctx = {
+                    "method": method,
+                    "path": path,
+                    "tr_id": tr_id,
+                    "params": sanitize_kis_params_for_log(params if method == "GET" else None),
+                    "body_keys": sorted(data.keys()) if isinstance(data, dict) else None,
+                    "http_status": response.status_code,
+                    "rate_limit": False,
+                }
+                self.logger.error(
+                    "KIS HTTP error",
+                    extra={
+                        "status_code": response.status_code,
+                        "method": method,
+                        "url": url.split("?")[0],
+                        "tr_id": tr_id,
+                    },
+                )
+                body_preview = text[:400] if text else ""
+                raise KISClientError(
+                    f"KIS HTTP {response.status_code} {method} — 응답 본문 일부: {body_preview}",
+                    kis_context=ctx,
+                )
+
+            if payload is None:
+                raise KISClientError("KIS response is not valid JSON object")
+
+            if not rt_cd_ok(payload):
+                if is_kis_rate_limit(payload=payload, http_body=text):
+                    sleep_s = min(
+                        float(self.kis_rate_limit_backoff_cap_sec),
+                        float(self.kis_rate_limit_backoff_base_sec) * (2 ** min(rate_backoff_idx, 8)),
+                    )
+                    rate_backoff_idx += 1
+                    rl_ctx2: dict[str, Any] = {
+                        "rate_limit": True,
+                        "retry_after_sec": sleep_s,
+                        "method": method,
+                        "path": path,
+                        "tr_id": tr_id,
+                        "params": sanitize_kis_params_for_log(params if method == "GET" else None),
+                        "body_keys": sorted(data.keys()) if isinstance(data, dict) else None,
+                        "http_status": response.status_code,
+                    }
+                    self.logger.warning(
+                        "KIS business rate limit (rt_cd≠0), backoff %.2fs path=%s detail=%s",
+                        sleep_s,
+                        path,
+                        business_error_detail(payload)[:200],
+                    )
+                    time.sleep(sleep_s)
+                    if rate_backoff_idx > max(3, self.kis_rate_limit_max_retries):
+                        raise KISClientError(
+                            f"KIS rate limit persists after retries: path={path}",
+                            kis_context=rl_ctx2,
+                        )
+                    continue
+                self._validate_kis_business_success(
+                    payload,
+                    method=method,
+                    path=path,
+                    tr_id=tr_id,
+                    params=params,
+                    data=data,
+                )
+
+            return payload
 
         ctx = {
             "method": method,
@@ -168,16 +300,17 @@ class KISClient:
             "tr_id": tr_id,
             "params": sanitize_kis_params_for_log(params if method == "GET" else None),
             "body_keys": sorted(data.keys()) if isinstance(data, dict) else None,
-            "error_type": type(last_error).__name__ if last_error else "unknown",
+            "error_type": type(last_net_error).__name__ if last_net_error else "unknown",
+            "rate_limit": False,
         }
         self.logger.error(
             "KIS request exhausted retries",
             extra={"method": method, "path": path, "tr_id": tr_id},
         )
         raise KISClientError(
-            f"KIS request failed after {self.max_retries + 1} attempts: method={method} path={path}",
+            f"KIS request failed after retries: method={method} path={path}",
             kis_context=ctx,
-        ) from last_error
+        ) from last_net_error
 
     def _get(
         self,
@@ -278,6 +411,7 @@ class KISClient:
             "tr_id": tr_id,
             "params": sanitize_kis_params_for_log(params_for_log),
             "data_keys": sorted(data.keys()) if isinstance(data, dict) else None,
+            "rate_limit": False,
         }
         self.logger.error(
             "KIS business error",

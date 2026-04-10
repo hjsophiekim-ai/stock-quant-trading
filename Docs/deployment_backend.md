@@ -78,6 +78,15 @@ Cloud provider에서 **헬스 체크 URL**로 `/api/health` 또는 `/api/ready` 
   - (선택, 명시 분리 시) `AUTH_USERS_PATH`, `AUTH_REVOKED_TOKENS_PATH`, `BROKER_ACCOUNTS_DB_PATH` — 미설정이면 `BACKEND_DATA_DIR` 아래 기본 파일명 사용
   - (선택) `DATABASE_URL` — SQLite 파일도 가능한 한 동일 디스크(`/var/data/...`)에 두면 재배포 후에도 유지
   - 나머지 `.env` 값들 (KIS 키 포함) Render 환경 변수로 설정
+- Paper / KIS 모의 API **초당 호출 한도(EGW00201)** 완화 권장(초보자·Render 기본 묶음):
+  - `PAPER_TRADING_INTERVAL_SEC=600` — **백엔드 Paper 세션** 틱 간격(앱 `Settings`)
+  - `RUNTIME_LOOP_INTERVAL_SEC=600` — 전역 런타임 엔진 루프(선택; Paper와 맞추고 싶을 때)
+  - `KIS_MIN_REQUEST_INTERVAL_MS=300` 내외 (동일 호스트 연속 호출 간격)
+  - `PAPER_TRADING_SYMBOLS=005930,000660` (기본 2종목)
+  - `PAPER_KIS_CHART_LOOKBACK_DAYS=60`
+  - `PAPER_UNIVERSE_CACHE_TTL_SEC=300`, `PAPER_KOSPI_CACHE_TTL_SEC=300` (`PAPER_KIS_*` 별칭과 동일)
+  - `PAPER_POSITIONS_REFRESH_INTERVAL_SEC=900`, `PAPER_PORTFOLIO_SYNC_INTERVAL_SEC=1800` (틱마다 스냅샷·동기화하지 않음)
+  - 스모크·부하 최소: `PAPER_SMOKE_MODE=true` (1종목·룩백 상한 60일)
 - 포트: 8000 (Render가 자동으로 외부 포트에 매핑)
 - Health check: `/api/health` (HEAD 요청도 200 응답하도록 라우트 설정 유지)
 - 주의: Disk를 붙이지 않으면 재배포/재시작 시 로컬 파일 기반 사용자·브로커 정보가 초기화될 수 있습니다.

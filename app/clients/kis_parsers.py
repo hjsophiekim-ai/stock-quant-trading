@@ -20,6 +20,39 @@ def business_error_detail(payload: dict[str, Any]) -> str:
     return " | ".join(p for p in parts if p).strip() or "Unknown KIS business error"
 
 
+def is_kis_rate_limit(
+    *,
+    payload: dict[str, Any] | None = None,
+    http_body: str = "",
+    http_status: int = 0,
+) -> bool:
+    """
+    EGW00201(초당 거래건수 초과) 등 rate limit 패턴.
+    HTTP 500이어도 본문에 동일 코드가 올 수 있음.
+    """
+    chunks: list[str] = []
+    if payload:
+        chunks.extend(
+            [
+                str(payload.get("msg_cd") or ""),
+                str(payload.get("msg1") or ""),
+                str(payload.get("msg2") or ""),
+                str(payload.get("rt_cd") or ""),
+            ]
+        )
+    chunks.append(http_body or "")
+    blob = " ".join(chunks).upper()
+    if "EGW00201" in blob:
+        return True
+    low = " ".join(chunks).lower()
+    if "초당" in low and ("거래" in low or "건수" in low):
+        return True
+    if "RATE LIMIT" in blob or "TOO MANY" in blob:
+        return True
+    _ = http_status  # 향후 특정 status 전용 분기용
+    return False
+
+
 def output1_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
     raw = payload.get("output1")
     if raw is None:

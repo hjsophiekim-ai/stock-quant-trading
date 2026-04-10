@@ -112,6 +112,9 @@
           <div id="lastErrorRow" style="margin-top: 6px; font-size: 0.85rem; color: #b91c1c; display: none">
             마지막 오류: <span id="lastErrorText"></span>
           </div>
+          <div id="diagRow" style="margin-top: 6px; font-size: 0.78rem; color: #475569; line-height: 1.4">
+            <span id="diagHint"></span>
+          </div>
         </div>
         <div id="riskOffPanel" class="panel" style="display: none; background: #fef2f2; border-color: #fecaca">
           <b>risk_off</b> — 연속 실패 한도에 도달했습니다. 원인을 확인한 뒤 아래에서 해제하거나 중지하세요.
@@ -176,6 +179,7 @@
         const maxFailuresEl = document.getElementById("maxFailures");
         const lastErrorRow = document.getElementById("lastErrorRow");
         const lastErrorText = document.getElementById("lastErrorText");
+        const diagHint = document.getElementById("diagHint");
         const riskOffPanel = document.getElementById("riskOffPanel");
         const riskResetBtn = document.getElementById("riskResetBtn");
         const pnlSummary = document.getElementById("pnlSummary");
@@ -233,27 +237,49 @@
               d.connection_message ||
               "연결 테스트에 성공한 뒤에만 시작할 수 있습니다. 브로커 설정에서 「연결 테스트」를 실행하세요.";
             return false;
-          } catch {
+          } catch (e) {
             startBtn.disabled = true;
             brokerGateEl.style.display = "block";
-            brokerGateEl.textContent = "네트워크 오류로 브로커 상태를 확인하지 못했습니다.";
+            brokerGateEl.textContent =
+              "브로커 상태 확인 실패 — " +
+              (e && e.message ? e.message : "연결/방화벽/HTTPS를 확인하세요.");
             return false;
           }
+        }
+
+        function paperFailureLabel(fk) {
+          if (fk === "rate_limit") return "[KIS 초당한도·백오프] ";
+          if (fk === "token_failure") return "[토큰 실패] ";
+          if (fk === "kis_business_error") return "[KIS 업무오류] ";
+          if (fk === "kis_client_error") return "[KIS 클라이언트] ";
+          return fk ? "[" + fk + "] " : "";
         }
 
         async function refreshPaper() {
           await checkBrokerGate();
           try {
-            const [statusRes, posRes, pnlRes, logsRes] = await Promise.all([
+            const [statusRes, posRes, pnlRes, logsRes, diagRes] = await Promise.all([
               fetch(backendUrl + "/api/paper-trading/status"),
               fetch(backendUrl + "/api/paper-trading/positions"),
               fetch(backendUrl + "/api/paper-trading/pnl"),
               fetch(backendUrl + "/api/paper-trading/logs"),
+              fetch(backendUrl + "/api/paper-trading/diagnostics", { headers: authHeaders() }),
             ]);
-            const statusData = await statusRes.json();
-            const posData = await posRes.json();
-            const pnlData = await pnlRes.json();
-            const logsData = await logsRes.json();
+            const [statusData, posData, pnlData, logsData, diagData] = await Promise.all([
+              statusRes.json().catch(function () {
+                return {};
+              }),
+              posRes.json().catch(function () {
+                return {};
+              }),
+              pnlRes.json().catch(function () {
+                return {};
+              }),
+              logsRes.json().catch(function () {
+                return { items: [] };
+              }),
+              diagRes.ok ? diagRes.json().catch(function () { return {}; }) : Promise.resolve({}),
+            ]);
             if (statusRes.ok) {
               var st = statusData.status || "stopped";
               statusText.innerText = st;
@@ -261,13 +287,40 @@
               lastTickEl.innerText = statusData.last_tick_at || "—";
               failureStreakEl.innerText = String(statusData.failure_streak != null ? statusData.failure_streak : 0);
               maxFailuresEl.innerText = String(statusData.max_failures != null ? statusData.max_failures : "—");
+              var dg = statusData.diagnostics || diagData || {};
+              var fk = dg.failure_kind || diagData.failure_kind || "";
               if (statusData.last_error) {
                 lastErrorRow.style.display = "block";
-                lastErrorText.innerText = statusData.last_error;
+                var ep = dg.last_failed_endpoint || diagData.last_failed_endpoint || "";
+                var tr = dg.last_failed_tr_id || diagData.last_failed_tr_id || "";
+                var extra = (ep ? " · path=" + ep : "") + (tr ? " · tr_id=" + tr : "");
+                var rls = dg.retry_after_sec != null ? " · retry_after≈" + dg.retry_after_sec + "s" : "";
+                lastErrorText.innerText =
+                  paperFailureLabel(fk) + (statusData.last_error || "") + extra + rls;
               } else {
                 lastErrorRow.style.display = "none";
                 lastErrorText.innerText = "";
               }
+              var tok = dg.token_source || diagData.token_source || "";
+              var bmode = dg.request_budget_mode || diagData.request_budget_mode || "";
+              var thr = dg.throttled_mode === true || diagData.throttled_mode === true;
+              var uhit = dg.universe_cache_hit;
+              var khit = dg.kospi_cache_hit;
+              var pskip = dg.positions_refresh_skipped;
+              var sskip = dg.portfolio_sync_skipped;
+              var tickIv = dg.paper_tick_interval_sec != null ? dg.paper_tick_interval_sec : diagData.paper_tick_interval_sec;
+              var hint =
+                (tok ? "토큰 출처: " + tok + " · " : "") +
+                (tickIv != null ? "Paper틱 " + tickIv + "s · " : "") +
+                (bmode ? "예산모드 " + bmode + " · " : "") +
+                (thr ? "KIS간격제한 ON · " : "") +
+                (typeof uhit === "boolean" ? "유니버스 " + (uhit ? "캐시HIT" : "캐시MISS") + " · " : "") +
+                (typeof khit === "boolean" ? "KOSPI " + (khit ? "캐시HIT" : "캐시MISS") + " · " : "") +
+                (typeof pskip === "boolean" ? "포지션스냅 " + (pskip ? "스킵" : "실행") + " · " : "") +
+                (typeof sskip === "boolean" ? "포폴sync " + (sskip ? "스킵" : "실행") + " · " : "") +
+                (fk === "rate_limit" ? "[초당한도·백오프] " : "") +
+                (fk && !statusData.last_error ? "최근 실패유형: " + fk : "");
+              diagHint.innerText = hint.replace(/\s·\s$/, "");
               riskOffPanel.style.display = st === "risk_off" ? "block" : "none";
             }
             if (pnlRes.ok) {

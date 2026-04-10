@@ -15,9 +15,24 @@ from typing import Any
 from backend.app.api.broker_routes import get_broker_service
 from backend.app.core.config import get_backend_settings
 from backend.app.engine.user_paper_loop import UserPaperTradingLoop
+from app.config import get_settings as app_get_settings
 from backend.app.portfolio.sync_engine import run_portfolio_sync
 
 logger = logging.getLogger("backend.app.engine.paper_session_controller")
+
+
+def paper_positions_refresh_due(now_mono: float, last_at: float, interval_sec: float) -> bool:
+    """interval_sec<=0 이면 매 틱 스냅샷(호출 많음)."""
+    if interval_sec <= 0.0:
+        return True
+    return last_at == 0.0 or (now_mono - last_at) >= interval_sec
+
+
+def paper_portfolio_sync_due(now_mono: float, last_at: float, interval_sec: float) -> bool:
+    """interval_sec<=0 이면 sync 비활성."""
+    if interval_sec <= 0.0:
+        return False
+    return last_at == 0.0 or (now_mono - last_at) >= interval_sec
 
 
 class PaperSessionController:
@@ -37,12 +52,16 @@ class PaperSessionController:
         self._user_loop: UserPaperTradingLoop | None = None
         self._user_loop_identity: tuple[str, ...] | None = None
         self._paper_diagnostics: dict[str, Any] = {}
+        self._last_positions_refresh_at: float = 0.0
+        self._last_paper_portfolio_sync_at: float = 0.0
 
     def _max_failures(self) -> int:
         return max(1, int(get_backend_settings().runtime_max_consecutive_failures))
 
     def _interval_sec(self) -> int:
-        return max(25, int(get_backend_settings().runtime_loop_interval_sec))
+        # Paper 세션 틱 간격은 앱 Settings 의 PAPER_TRADING_INTERVAL_SEC (KIS mock 부하·rate limit 완화).
+        acfg = app_get_settings()
+        return max(25, int(acfg.paper_trading_interval_sec))
 
     def _append_log(self, level: str, msg: str) -> None:
         entry = {"ts": datetime.now(timezone.utc).isoformat(), "level": level, "message": msg[:2000]}
@@ -50,9 +69,18 @@ class PaperSessionController:
         self._logs = self._logs[:100]
 
     def _apply_paper_tick_diagnostics(self, out: dict[str, Any]) -> None:
-        """틱 결과에서 KIS 실패 맥락·토큰 출처를 누적(진단 API용)."""
+        """틱 결과에서 KIS 실패 맥락·토큰 출처·호출 예산(캐시 히트 등)을 누적(진단 API용)."""
         ok = bool(out.get("ok"))
         kis_ctx = out.get("kis_context") if isinstance(out.get("kis_context"), dict) else {}
+        budget_base = {
+            "universe_cache_hit": out.get("universe_cache_hit"),
+            "kospi_cache_hit": out.get("kospi_cache_hit"),
+            "request_budget_mode": out.get("request_budget_mode"),
+            "throttled_mode": out.get("throttled_mode"),
+            "paper_tick_interval_sec": out.get("paper_tick_interval_sec"),
+            "positions_refresh_skipped": None,
+            "portfolio_sync_skipped": None,
+        }
         if ok:
             self._paper_diagnostics = {
                 "last_error": None,
@@ -62,6 +90,10 @@ class PaperSessionController:
                 "sanitized_params": None,
                 "token_source": out.get("token_source"),
                 "failure_kind": None,
+                "rate_limit": None,
+                "retry_after_sec": None,
+                "http_status": None,
+                **budget_base,
             }
             return
         self._paper_diagnostics = {
@@ -72,6 +104,10 @@ class PaperSessionController:
             "sanitized_params": kis_ctx.get("params"),
             "token_source": out.get("token_source"),
             "failure_kind": out.get("failure_kind"),
+            "rate_limit": kis_ctx.get("rate_limit"),
+            "retry_after_sec": kis_ctx.get("retry_after_sec"),
+            "http_status": kis_ctx.get("http_status"),
+            **budget_base,
         }
 
     def _loop(self) -> None:
@@ -132,10 +168,19 @@ class PaperSessionController:
                 self._last_error = None
                 rep = out.get("report")
                 self._last_report = rep if isinstance(rep, dict) else {}
-                try:
-                    self._last_positions = loop.snapshot_positions()
-                except Exception as snap_e:
-                    self._append_log("warning", f"positions snapshot: {snap_e}")
+                acfg = app_get_settings()
+                now_mono = time.monotonic()
+                pos_iv = float(acfg.paper_positions_refresh_interval_sec)
+                pos_due = paper_positions_refresh_due(now_mono, self._last_positions_refresh_at, pos_iv)
+                if pos_due:
+                    self._paper_diagnostics["positions_refresh_skipped"] = False
+                    try:
+                        self._last_positions = loop.snapshot_positions()
+                        self._last_positions_refresh_at = now_mono
+                    except Exception as snap_e:
+                        self._append_log("warning", f"positions snapshot: {snap_e}")
+                else:
+                    self._paper_diagnostics["positions_refresh_skipped"] = True
                 acc_n = self._last_report.get("accepted_orders")
                 rej_n = self._last_report.get("rejected_orders")
                 self._append_log("info", f"tick ok accepted={acc_n} rejected={rej_n}")
@@ -144,10 +189,17 @@ class PaperSessionController:
                         "warning",
                         f"cycle halted kill={self._last_report.get('kill_state')} reason={self._last_report.get('reason')}",
                     )
-                try:
-                    run_portfolio_sync(backfill_days=settings.portfolio_sync_backfill_days, settings=settings)
-                except Exception as sync_e:
-                    self._append_log("warning", f"portfolio sync: {sync_e}")
+                sync_iv = float(acfg.paper_portfolio_sync_interval_sec)
+                sync_due = paper_portfolio_sync_due(now_mono, self._last_paper_portfolio_sync_at, sync_iv)
+                if sync_due:
+                    self._paper_diagnostics["portfolio_sync_skipped"] = False
+                    try:
+                        run_portfolio_sync(backfill_days=settings.portfolio_sync_backfill_days, settings=settings)
+                        self._last_paper_portfolio_sync_at = time.monotonic()
+                    except Exception as sync_e:
+                        self._append_log("warning", f"portfolio sync: {sync_e}")
+                else:
+                    self._paper_diagnostics["portfolio_sync_skipped"] = True
             except Exception as exc:
                 self._failure_streak += 1
                 self._last_error = str(exc)
@@ -186,6 +238,8 @@ class PaperSessionController:
             self._status = "running"
             self._user_loop = None
             self._user_loop_identity = None
+            self._last_positions_refresh_at = 0.0
+            self._last_paper_portfolio_sync_at = 0.0
             self._run_flag = True
             self._thread = threading.Thread(target=self._loop, name="paper-user-session", daemon=True)
             self._thread.start()

@@ -41,6 +41,7 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
   const [logs, setLogs] = useState<LogItem[]>([]);
   const [canStart, setCanStart] = useState(false);
   const [brokerHint, setBrokerHint] = useState("");
+  const [diagHint, setDiagHint] = useState("");
 
   const authHeaders = useCallback((): HeadersInit => {
     const token = getAuthState().accessToken;
@@ -96,22 +97,62 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
     await checkBrokerGate();
     try {
       const headers = authHeaders();
-      const [statusRes, posRes, pnlRes, logsRes] = await Promise.all([
+      const [statusRes, posRes, pnlRes, logsRes, diagRes] = await Promise.all([
         fetch(`${backendUrl}/api/paper-trading/status`),
         fetch(`${backendUrl}/api/paper-trading/positions`),
         fetch(`${backendUrl}/api/paper-trading/pnl`),
         fetch(`${backendUrl}/api/paper-trading/logs`),
+        fetch(`${backendUrl}/api/paper-trading/diagnostics`, { headers }),
       ]);
       const statusData = await statusRes.json();
       const posData = await posRes.json();
       const pnlData = await pnlRes.json();
       const logsData = await logsRes.json();
+      const diagData = diagRes.ok ? await diagRes.json() : {};
       if (statusRes.ok) {
         setStatus(statusData.status ?? "stopped");
         setStrategyRunning(statusData.strategy_id ?? null);
         setFailureStreak(Number(statusData.failure_streak ?? 0));
-        setLastError(statusData.last_error ?? null);
+        const dg = (statusData as { diagnostics?: Record<string, unknown> }).diagnostics ?? diagData;
+        const fk = String(dg.failure_kind ?? "");
+        const prefix =
+          fk === "rate_limit"
+            ? "[KIS 초당한도] "
+            : fk === "token_failure"
+              ? "[토큰] "
+              : fk === "kis_business_error"
+                ? "[KIS 업무] "
+                : fk
+                  ? `[${fk}] `
+                  : "";
+        const ep = dg.last_failed_endpoint ? ` · path=${String(dg.last_failed_endpoint)}` : "";
+        const tr = dg.last_failed_tr_id ? ` · tr=${String(dg.last_failed_tr_id)}` : "";
+        const err = statusData.last_error != null ? String(statusData.last_error) : null;
+        setLastError(err ? `${prefix}${err}${ep}${tr}` : null);
         setLastTick(statusData.last_tick_at ?? null);
+        const tok = dg.token_source != null ? String(dg.token_source) : "";
+        const tickIv = dg.paper_tick_interval_sec != null ? `틱 ${String(dg.paper_tick_interval_sec)}s` : "";
+        const bmode = dg.request_budget_mode != null ? `예산 ${String(dg.request_budget_mode)}` : "";
+        const thr = dg.throttled_mode === true ? "KIS간격제한" : "";
+        const uhit =
+          typeof dg.universe_cache_hit === "boolean" ? (dg.universe_cache_hit ? "유니버스캐시HIT" : "유니버스캐시MISS") : "";
+        const khit =
+          typeof dg.kospi_cache_hit === "boolean" ? (dg.kospi_cache_hit ? "KOSPI캐시HIT" : "KOSPI캐시MISS") : "";
+        const pskip =
+          typeof dg.positions_refresh_skipped === "boolean"
+            ? dg.positions_refresh_skipped
+              ? "포지션스냅스킵"
+              : "포지션스냅실행"
+            : "";
+        const sskip =
+          typeof dg.portfolio_sync_skipped === "boolean"
+            ? dg.portfolio_sync_skipped
+              ? "포폴sync스킵"
+              : "포폴sync실행"
+            : "";
+        const rateHint = fk === "rate_limit" ? "초당한도·백오프 " : "";
+        const parts = [tok && `토큰: ${tok}`, tickIv, bmode, thr, uhit, khit, pskip, sskip, rateHint].filter(Boolean);
+        setDiagHint(parts.join(" · "));
       }
       if (posRes.ok) setPositions(posData.items ?? []);
       if (pnlRes.ok) {
@@ -220,6 +261,9 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
             마지막 틱(UTC): {lastTick ?? "—"} · 실패 연속 {failureStreak}
           </Text>
           {lastError ? <Text style={{ fontSize: 12, color: "#b91c1c", marginTop: 6 }}>{lastError}</Text> : null}
+          {diagHint ? (
+            <Text style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>{diagHint}</Text>
+          ) : null}
         </View>
 
         {!canStart ? (

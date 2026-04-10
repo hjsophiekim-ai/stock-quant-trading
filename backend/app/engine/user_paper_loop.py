@@ -56,6 +56,12 @@ class UserPaperTradingLoop:
         self._access_token: str | None = initial_access_token
         self._token_monotonic: float = time.monotonic() if initial_access_token else 0.0
         self._token_issued_locally: bool = False
+        self._univ_sig: str | None = None
+        self._univ_ts: float = 0.0
+        self._univ_df: Any = None
+        self._kospi_sig: str | None = None
+        self._kospi_ts: float = 0.0
+        self._kospi_df: Any = None
 
     def _issue_token(self) -> str:
         tr = issue_access_token(
@@ -141,20 +147,57 @@ class UserPaperTradingLoop:
                     "token_source": self.token_source_for_diagnostics(),
                     "failure_kind": "config",
                 }
+            if cfg.paper_smoke_mode:
+                symbols = symbols[:1]
+                lookback = min(60, int(cfg.paper_kis_chart_lookback_days))
+            else:
+                lookback = max(int(cfg.paper_kis_chart_lookback_days), 60)
 
+            now_m = time.monotonic()
+            ttl_u = int(cfg.paper_kis_universe_cache_ttl_sec)
+            univ_key = f"{','.join(symbols)}|{lookback}"
             failed_step = "kis_universe"
-            universe = build_kis_stock_universe(
-                client,
-                symbols,
-                lookback_calendar_days=max(cfg.paper_kis_chart_lookback_days, 60),
-                logger=logger,
-            )
+            universe_cache_hit = False
+            if (
+                ttl_u > 0
+                and self._univ_df is not None
+                and self._univ_sig == univ_key
+                and (now_m - self._univ_ts) < float(ttl_u)
+            ):
+                universe = self._univ_df
+                universe_cache_hit = True
+            else:
+                universe = build_kis_stock_universe(
+                    client,
+                    symbols,
+                    lookback_calendar_days=lookback,
+                    logger=logger,
+                )
+                self._univ_sig = univ_key
+                self._univ_ts = time.monotonic()
+                self._univ_df = universe
+
             failed_step = "kospi_series"
-            kospi = build_kospi_index_series(
-                client,
-                lookback_calendar_days=max(cfg.paper_kis_chart_lookback_days, 60),
-                logger=logger,
-            )
+            ttl_k = int(cfg.paper_kis_kospi_cache_ttl_sec)
+            kospi_key = str(lookback)
+            kospi_cache_hit = False
+            if (
+                ttl_k > 0
+                and self._kospi_df is not None
+                and self._kospi_sig == kospi_key
+                and (now_m - self._kospi_ts) < float(ttl_k)
+            ):
+                kospi = self._kospi_df
+                kospi_cache_hit = True
+            else:
+                kospi = build_kospi_index_series(
+                    client,
+                    lookback_calendar_days=lookback,
+                    logger=logger,
+                )
+                self._kospi_sig = kospi_key
+                self._kospi_ts = time.monotonic()
+                self._kospi_df = kospi
             failed_step = "daily_cycle"
             sp500 = build_mock_sp500_proxy_from_kospi(kospi)
             report = jobs.run_daily_cycle(universe=universe, kospi_index=kospi, sp500_index=sp500)
@@ -178,14 +221,25 @@ class UserPaperTradingLoop:
                 "ok": True,
                 "report": report,
                 "token_source": self.token_source_for_diagnostics(),
+                "universe_cache_hit": universe_cache_hit,
+                "kospi_cache_hit": kospi_cache_hit,
+                "request_budget_mode": "paper_conserve",
+                "throttled_mode": int(cfg.kis_min_request_interval_ms) > 0,
+                "paper_tick_interval_sec": int(cfg.paper_trading_interval_sec),
             }
         except KISClientError as exc:
-            fk = "kis_business_error" if "business error" in str(exc).lower() else "kis_client_error"
+            ctx = getattr(exc, "kis_context", {}) or {}
+            if ctx.get("rate_limit"):
+                fk = "rate_limit"
+            elif "business error" in str(exc).lower():
+                fk = "kis_business_error"
+            else:
+                fk = "kis_client_error"
             return {
                 "ok": False,
                 "error": str(exc),
                 "failed_step": failed_step,
-                "kis_context": getattr(exc, "kis_context", {}),
+                "kis_context": ctx,
                 "token_source": self.token_source_for_diagnostics(),
                 "failure_kind": fk,
             }
