@@ -42,6 +42,8 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
   const [canStart, setCanStart] = useState(false);
   const [brokerHint, setBrokerHint] = useState("");
   const [diagHint, setDiagHint] = useState("");
+  const [backendVerLine, setBackendVerLine] = useState("");
+  const [kisDetailBlock, setKisDetailBlock] = useState("");
 
   const authHeaders = useCallback((): HeadersInit => {
     const token = getAuthState().accessToken;
@@ -97,18 +99,20 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
     await checkBrokerGate();
     try {
       const headers = authHeaders();
-      const [statusRes, posRes, pnlRes, logsRes, diagRes] = await Promise.all([
+      const [statusRes, posRes, pnlRes, logsRes, diagRes, verRes] = await Promise.all([
         fetch(`${backendUrl}/api/paper-trading/status`),
         fetch(`${backendUrl}/api/paper-trading/positions`),
         fetch(`${backendUrl}/api/paper-trading/pnl`),
         fetch(`${backendUrl}/api/paper-trading/logs`),
         fetch(`${backendUrl}/api/paper-trading/diagnostics`, { headers }),
+        fetch(`${backendUrl}/api/version`),
       ]);
       const statusData = await statusRes.json();
       const posData = await posRes.json();
       const pnlData = await pnlRes.json();
       const logsData = await logsRes.json();
       const diagData = diagRes.ok ? await diagRes.json() : {};
+      const verData = verRes.ok ? await verRes.json() : {};
       if (statusRes.ok) {
         setStatus(statusData.status ?? "stopped");
         setStrategyRunning(statusData.strategy_id ?? null);
@@ -163,6 +167,25 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
         );
         setDiagHint(parts.join(" · "));
       }
+      const dgx = statusRes.ok
+        ? ((statusData as { diagnostics?: Record<string, unknown> }).diagnostics ?? diagData)
+        : diagData;
+      const shaFull = typeof dgx.backend_git_sha === "string" ? dgx.backend_git_sha : "";
+      const vApp = typeof verData.app_version === "string" ? verData.app_version : "?";
+      const vGit = typeof verData.git_sha === "string" ? verData.git_sha : "";
+      setBackendVerLine(
+        `${vApp} · git ${(shaFull || vGit).slice(0, 7) || "—"}` +
+          (dgx.backend_build_time != null && String(dgx.backend_build_time)
+            ? ` · build ${String(dgx.backend_build_time)}`
+            : ""),
+      );
+      const kl: string[] = [];
+      if (shaFull) kl.push(`paper_diag.git_sha: ${shaFull}`);
+      if (dgx.last_failed_endpoint) kl.push(`path: ${String(dgx.last_failed_endpoint)}`);
+      if (dgx.last_failed_tr_id) kl.push(`tr_id: ${String(dgx.last_failed_tr_id)}`);
+      if (dgx.sanitized_params != null)
+        kl.push(`sanitized_params:\n${JSON.stringify(dgx.sanitized_params, null, 2)}`);
+      setKisDetailBlock(kl.join("\n"));
       if (posRes.ok) setPositions(posData.items ?? []);
       if (pnlRes.ok) {
         setPnlText(
@@ -284,6 +307,26 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
           {lastError ? <Text style={{ fontSize: 12, color: "#b91c1c", marginTop: 6 }}>{lastError}</Text> : null}
           {diagHint ? (
             <Text style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>{diagHint}</Text>
+          ) : null}
+          {backendVerLine ? (
+            <Text style={{ fontSize: 10, color: "#64748b", marginTop: 6, fontFamily: "monospace" }}>
+              백엔드: {backendVerLine}
+            </Text>
+          ) : null}
+          {kisDetailBlock ? (
+            <Text
+              style={{
+                fontSize: 10,
+                color: "#0f172a",
+                marginTop: 6,
+                fontFamily: "monospace",
+                backgroundColor: "#f1f5f9",
+                padding: 8,
+                borderRadius: 6,
+              }}
+            >
+              {kisDetailBlock}
+            </Text>
           ) : null}
         </View>
 

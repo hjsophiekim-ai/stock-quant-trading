@@ -322,11 +322,17 @@ class PaperSessionController:
             }
 
     def diagnostics_payload(self) -> dict[str, Any]:
+        from backend.app.core.version_info import get_backend_version_payload
+
         with self._lock:
             base = dict(self._paper_diagnostics)
             merged = {**self._paper_token_ensure_meta, **base}
             merged["session_last_error"] = self._last_error
             merged["session_status"] = self._status
+            ver = get_backend_version_payload()
+            merged["backend_git_sha"] = ver.get("git_sha", "")
+            merged["backend_build_time"] = ver.get("build_time", "")
+            merged["backend_app_version"] = ver.get("app_version", "")
             return merged
 
     def paper_token_ensure_snapshot(self) -> dict[str, Any]:

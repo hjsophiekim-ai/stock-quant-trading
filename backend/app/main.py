@@ -13,6 +13,7 @@ from .api.screening_routes import router as screening_router
 from .api.strategy_signal_routes import router as strategy_signal_router
 from .api.routes.dashboard import router as dashboard_router
 from .api.debug_routes import router as debug_router
+from .api.version_routes import router as version_router
 from .api.routes.health import router as health_router
 from .api.routes.performance import router as performance_router
 from .api.routes.portfolio import router as portfolio_router
@@ -68,6 +69,7 @@ def _install_risk_audit() -> None:
 
 
 app.include_router(health_router, prefix="/api")
+app.include_router(version_router, prefix="/api")
 app.include_router(debug_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(broker_router, prefix="/api")

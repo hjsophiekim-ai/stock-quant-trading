@@ -115,6 +115,26 @@
           <div id="diagRow" style="margin-top: 6px; font-size: 0.78rem; color: #475569; line-height: 1.4">
             <span id="diagHint"></span>
           </div>
+          <div
+            id="backendVersionRow"
+            style="margin-top: 8px; font-size: 0.72rem; color: #64748b; font-family: ui-monospace, monospace"
+          >
+            <b>백엔드 버전:</b> <span id="backendVersionText">조회 중…</span>
+          </div>
+          <div
+            id="kisFailureDetail"
+            style="
+              margin-top: 6px;
+              font-size: 0.72rem;
+              color: #0f172a;
+              font-family: ui-monospace, monospace;
+              white-space: pre-wrap;
+              background: #f1f5f9;
+              padding: 8px;
+              border-radius: 6px;
+              display: none;
+            "
+          ></div>
         </div>
         <div id="riskOffPanel" class="panel" style="display: none; background: #fef2f2; border-color: #fecaca">
           <b>risk_off</b> — 연속 실패 한도에 도달했습니다. 원인을 확인한 뒤 아래에서 해제하거나 중지하세요.
@@ -180,6 +200,8 @@
         const lastErrorRow = document.getElementById("lastErrorRow");
         const lastErrorText = document.getElementById("lastErrorText");
         const diagHint = document.getElementById("diagHint");
+        const backendVersionText = document.getElementById("backendVersionText");
+        const kisFailureDetail = document.getElementById("kisFailureDetail");
         const riskOffPanel = document.getElementById("riskOffPanel");
         const riskResetBtn = document.getElementById("riskResetBtn");
         const pnlSummary = document.getElementById("pnlSummary");
@@ -278,14 +300,15 @@
         async function refreshPaper() {
           await checkBrokerGate();
           try {
-            const [statusRes, posRes, pnlRes, logsRes, diagRes] = await Promise.all([
+            const [statusRes, posRes, pnlRes, logsRes, diagRes, verRes] = await Promise.all([
               fetch(backendUrl + "/api/paper-trading/status"),
               fetch(backendUrl + "/api/paper-trading/positions"),
               fetch(backendUrl + "/api/paper-trading/pnl"),
               fetch(backendUrl + "/api/paper-trading/logs"),
               fetch(backendUrl + "/api/paper-trading/diagnostics", { headers: authHeaders() }),
+              fetch(backendUrl + "/api/version"),
             ]);
-            const [statusData, posData, pnlData, logsData, diagData] = await Promise.all([
+            const [statusData, posData, pnlData, logsData, diagData, verData] = await Promise.all([
               statusRes.json().catch(function () {
                 return {};
               }),
@@ -299,6 +322,7 @@
                 return { items: [] };
               }),
               diagRes.ok ? diagRes.json().catch(function () { return {}; }) : Promise.resolve({}),
+              verRes.ok ? verRes.json().catch(function () { return {}; }) : Promise.resolve({}),
             ]);
             if (statusRes.ok) {
               var st = statusData.status || "stopped";
@@ -344,7 +368,33 @@
                 (fk === "rate_limit" || fk === "token_rate_limit" ? "[한도·토큰] " : "") +
                 (fk && !statusData.last_error ? "최근 실패유형: " + fk : "");
               diagHint.innerText = hint.replace(/\s·\s$/, "");
+              var shaFull = dg.backend_git_sha || diagData.backend_git_sha || "";
+              var shaShort = shaFull ? shaFull.slice(0, 7) : "";
+              var verLine =
+                (verData.app_version || "?") +
+                " · git " +
+                (shaShort || (verData.git_sha || "").slice(0, 7) || "—") +
+                (dg.backend_build_time || diagData.backend_build_time
+                  ? " · build " + (dg.backend_build_time || diagData.backend_build_time)
+                  : verData.build_time
+                    ? " · build " + verData.build_time
+                    : "");
+              backendVersionText.innerText = verLine;
+              var kisLines = [];
+              if (shaFull) kisLines.push("paper_diag.git_sha: " + shaFull);
+              if (dg.last_failed_endpoint || diagData.last_failed_endpoint)
+                kisLines.push("path: " + (dg.last_failed_endpoint || diagData.last_failed_endpoint));
+              if (dg.last_failed_tr_id || diagData.last_failed_tr_id)
+                kisLines.push("tr_id: " + (dg.last_failed_tr_id || diagData.last_failed_tr_id));
+              var sp = dg.sanitized_params != null ? dg.sanitized_params : diagData.sanitized_params;
+              if (sp != null) kisLines.push("sanitized_params:\n" + JSON.stringify(sp, null, 2));
+              kisFailureDetail.style.display = kisLines.length ? "block" : "none";
+              kisFailureDetail.textContent = kisLines.length ? kisLines.join("\n") : "";
               riskOffPanel.style.display = st === "risk_off" ? "block" : "none";
+            } else {
+              if (verRes.ok && verData.git_sha)
+                backendVersionText.innerText =
+                  (verData.app_version || "?") + " · git " + (verData.git_sha || "").slice(0, 7);
             }
             if (pnlRes.ok) {
               var tc = Number(pnlData.today_return_pct != null ? pnlData.today_return_pct : 0);

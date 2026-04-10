@@ -45,18 +45,46 @@ def sanitize_kis_params_for_log(params: dict[str, Any] | None) -> dict[str, Any]
     return out
 
 
-def omit_empty_ctx_params(params: dict[str, Any] | None) -> dict[str, Any] | None:
-    """첫 페이지 조회 시 빈 CTX_AREA_* 는 전송하지 않음(OPSQ2001 INPUT_FIELD_NAME 등 예방)."""
-    if not params:
-        return params
-    out = dict(params)
-    for key in ("CTX_AREA_FK100", "CTX_AREA_NK100"):
-        if key not in out:
+def prune_empty_get_params(
+    params: dict[str, Any] | None,
+    *,
+    keep_zero: bool = True,
+    allow_empty_keys: frozenset[str] | set[str] | None = None,
+) -> dict[str, Any] | None:
+    """
+    KIS GET 쿼리 정리: None·빈 문자열·공백만 있는 문자열은 제외(OPSQ2001 등 예방).
+    숫자 0·문자열 '0'·'00' 은 유효 값으로 유지.
+    allow_empty_keys: 특정 키만 빈 문자열도 그대로 보내야 할 때(드묾).
+    """
+    if params is None:
+        return None
+    allow = allow_empty_keys or frozenset()
+    out: dict[str, Any] = {}
+    for k, v in params.items():
+        if k in allow:
+            out[k] = v
             continue
-        val = out[key]
-        if val is None or (isinstance(val, str) and not str(val).strip()):
-            del out[key]
+        if v is None:
+            continue
+        if isinstance(v, str):
+            if not v.strip():
+                continue
+            out[k] = v
+            continue
+        if isinstance(v, bool):
+            out[k] = v
+            continue
+        if isinstance(v, (int, float)):
+            if keep_zero or v != 0:
+                out[k] = v
+            continue
+        out[k] = v
     return out
+
+
+def omit_empty_ctx_params(params: dict[str, Any] | None) -> dict[str, Any] | None:
+    """하위 호환: 전체 GET 파라미터 prune 과 동일(CTX 포함)."""
+    return prune_empty_get_params(params)
 
 
 class KISClientError(RuntimeError):
@@ -321,7 +349,7 @@ class KISClient:
         bearer_token: str | None = None,
         extra_headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        q = omit_empty_ctx_params(params)
+        q = prune_empty_get_params(params)
         return self._request(
             "GET",
             path,
@@ -404,7 +432,7 @@ class KISClient:
         if rt_cd_ok(payload):
             return
         detail = business_error_detail(payload)
-        params_for_log = omit_empty_ctx_params(dict(params)) if params else None
+        params_for_log = prune_empty_get_params(dict(params)) if params else None
         ctx: dict[str, Any] = {
             "method": method,
             "path": path,
@@ -436,11 +464,11 @@ class KISClient:
     # --- 조회 ---
 
     def get_balance(self, account_no: str, account_product_code: str) -> dict[str, Any]:
+        # OFL_YN 등 빈 기본값은 넣지 않음 — prune으로 제거되나 아예 생략이 명확함
         params = {
             "CANO": account_no,
             "ACNT_PRDT_CD": account_product_code,
             "AFHR_FLPR_YN": "N",
-            "OFL_YN": "",
             "INQR_DVSN": "02",
             "UNPR_DVSN": "01",
             "FUND_STTL_ICLD_YN": "N",
@@ -488,18 +516,19 @@ class KISClient:
     ) -> dict[str, Any]:
         """
         매수가능조회 (주문가능현금·가능수량 등).
-        ORD_DVSN: 00 지정가, 01 시장가 — 시장가 조회 시 ORD_UNPR 는 공란.
+        ORD_DVSN: 00 지정가, 01 시장가.
+        - 시장가(01): ORD_UNPR 키 자체를 보내지 않음(빈 문자열 GET 금지).
+        - 지정가(00): ORD_UNPR 에 가격 문자열 전송.
+        - 첫 페이지: CTX_AREA_* 키 없음(연속조회 시에만 API 응답 ctx로 채움).
         """
-        ord_unpr = "" if order_div == "01" or order_price is None else str(int(order_price))
         params: dict[str, Any] = {
             "CANO": account_no,
             "ACNT_PRDT_CD": account_product_code,
             "PDNO": symbol,
-            "ORD_UNPR": ord_unpr,
             "ORD_DVSN": order_div,
-            "CTX_AREA_FK100": "",
-            "CTX_AREA_NK100": "",
         }
+        if order_div != "01" and order_price is not None:
+            params["ORD_UNPR"] = str(int(order_price))
         tr_id = self._resolve_tr_id(paper_tr_id=self.tr_ids.psbl_order_paper, live_tr_id=self.tr_ids.psbl_order_live)
         payload = self._get(self.endpoints.inquire_psbl_order, params=params, tr_id=tr_id)
         self._validate_kis_business_success(
@@ -507,7 +536,7 @@ class KISClient:
             method="GET",
             path=self.endpoints.inquire_psbl_order,
             tr_id=tr_id,
-            params=params,
+            params=prune_empty_get_params(params),
         )
         return payload
 
@@ -518,17 +547,19 @@ class KISClient:
         account_product_code: str,
         symbol: str = "",
     ) -> dict[str, Any]:
-        """미체결 내역 조회."""
-        params = {
+        """
+        미체결 내역 조회.
+        - PDNO: 종목 지정 시만 전송(전체 조회는 키 생략).
+        - ORD_GNO_BRNO/ODNO: 특정 주문 조회 시에만; 첫 페이지는 미전송.
+        - CTX_AREA_*: 연속조회 시에만; 첫 페이지는 미전송.
+        """
+        params: dict[str, Any] = {
             "CANO": account_no,
             "ACNT_PRDT_CD": account_product_code,
             "INQR_DVSN": "00",
-            "PDNO": symbol,
-            "ORD_GNO_BRNO": "",
-            "ODNO": "",
-            "CTX_AREA_FK100": "",
-            "CTX_AREA_NK100": "",
         }
+        if symbol and str(symbol).strip():
+            params["PDNO"] = str(symbol).strip()
         tr_id = self._resolve_tr_id(paper_tr_id=self.tr_ids.nccs_paper, live_tr_id=self.tr_ids.nccs_live)
         payload = self._get(self.endpoints.inquire_nccs, params=params, tr_id=tr_id)
         self._validate_kis_business_success(
@@ -536,7 +567,7 @@ class KISClient:
             method="GET",
             path=self.endpoints.inquire_nccs,
             tr_id=tr_id,
-            params=params,
+            params=prune_empty_get_params(params),
         )
         return payload
 
@@ -555,27 +586,25 @@ class KISClient:
         주식일별주문체결조회 (당일·기간 체결/미체결 포함).
         SLL_BUY_DVSN_CD: 00 전체, 01 매도, 02 매수
         CCLD_DVSN: 00 전체, 01 체결, 02 미체결
+        INQR_DVSN_3: 스펙상 구분값(00) 전송.
+        INQR_DVSN_1/2·빈 ORD_*·CTX: 첫 페이지는 전송하지 않음(모의 OPSQ2001 예방).
+        PDNO: 종목 지정 시만 전송.
         """
         today = datetime.now().strftime("%Y%m%d")
         start = start_yyyymmdd or today
         end = end_yyyymmdd or today
-        params = {
+        params: dict[str, Any] = {
             "CANO": account_no,
             "ACNT_PRDT_CD": account_product_code,
             "INQR_STRT_DT": start,
             "INQR_END_DT": end,
             "SLL_BUY_DVSN_CD": sell_buy_code,
             "INQR_DVSN": "00",
-            "PDNO": symbol,
             "CCLD_DVSN": ccld_div,
-            "ORD_GNO_BRNO": "",
-            "ODNO": "",
             "INQR_DVSN_3": "00",
-            "INQR_DVSN_1": "",
-            "INQR_DVSN_2": "",
-            "CTX_AREA_FK100": "",
-            "CTX_AREA_NK100": "",
         }
+        if symbol and str(symbol).strip():
+            params["PDNO"] = str(symbol).strip()
         tr_id = self._resolve_tr_id(paper_tr_id=self.tr_ids.daily_ccld_paper, live_tr_id=self.tr_ids.daily_ccld_live)
         payload = self._get(self.endpoints.inquire_daily_ccld, params=params, tr_id=tr_id)
         self._validate_kis_business_success(
@@ -583,7 +612,7 @@ class KISClient:
             method="GET",
             path=self.endpoints.inquire_daily_ccld,
             tr_id=tr_id,
-            params=params,
+            params=prune_empty_get_params(params),
         )
         return payload
 

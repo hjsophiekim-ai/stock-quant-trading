@@ -13,6 +13,9 @@ def test_diagnostics_includes_failure_fields() -> None:
     body = r.json()
     assert "session_status" in body
     assert "failure_kind" in body or body.get("failure_kind") is None
+    assert "backend_git_sha" in body
+    assert "backend_build_time" in body
+    assert "backend_app_version" in body
 
 
 def test_apply_tick_diagnostics_includes_budget_fields() -> None:
