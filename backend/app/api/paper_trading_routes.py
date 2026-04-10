@@ -5,6 +5,8 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
+from app.clients.kis_client import KISClientError, sanitize_kis_params_for_log
+from backend.app.clients.kis_client import build_kis_client_for_paper_user
 from backend.app.engine.runtime_engine import get_runtime_engine
 from backend.app.engine.paper_session_controller import get_paper_session_controller
 
@@ -39,6 +41,63 @@ def _require_broker_ready_for_start(user_id: str) -> None:
         )
 
 
+def _run_balance_preflight(user_id: str) -> dict[str, object]:
+    svc = get_broker_service()
+    app_key, app_secret, account_no, product_code, trading_mode = svc.get_plain_credentials(user_id)
+    api_base = svc._resolve_kis_api_base(trading_mode)
+    if "openapivts" not in (api_base or ""):
+        return {
+            "ok": False,
+            "failure_kind": "invalid_mode",
+            "error": "paper 모드(openapivts)만 허용됩니다.",
+        }
+    tok = svc.ensure_cached_token_for_paper_start(user_id)
+    if not tok.ok or not tok.access_token:
+        return {
+            "ok": False,
+            "failure_kind": "token_not_ready",
+            "error": tok.message,
+            "token_error_code": tok.token_error_code,
+        }
+    client = build_kis_client_for_paper_user(
+        base_url=api_base,
+        access_token=tok.access_token,
+        app_key=app_key,
+        app_secret=app_secret,
+    )
+    req_params = {
+        "CANO": account_no,
+        "ACNT_PRDT_CD": product_code,
+        "AFHR_FLPR_YN": "N",
+        "INQR_DVSN": "02",
+        "UNPR_DVSN": "01",
+        "FUND_STTL_ICLD_YN": "N",
+        "FNCG_AMT_AUTO_RDPT_YN": "N",
+        "PRCS_DVSN": "01",
+    }
+    tr_id = client._resolve_tr_id(paper_tr_id=client.tr_ids.balance_paper, live_tr_id=client.tr_ids.balance_live)
+    path = client.endpoints.get_balance
+    try:
+        client.get_balance(account_no=account_no, account_product_code=product_code)
+        return {
+            "ok": True,
+            "path": path,
+            "tr_id": tr_id,
+            "sanitized_params": sanitize_kis_params_for_log(req_params),
+        }
+    except KISClientError as exc:
+        ctx = getattr(exc, "kis_context", {}) or {}
+        return {
+            "ok": False,
+            "failure_kind": "kis_error",
+            "error": str(exc),
+            "path": ctx.get("path") or path,
+            "tr_id": ctx.get("tr_id") or tr_id,
+            "sanitized_params": ctx.get("params") or sanitize_kis_params_for_log(req_params),
+            "http_status": ctx.get("http_status"),
+        }
+
+
 class StartPaperTradingRequest(BaseModel):
     strategy_id: str = Field(min_length=2, max_length=64)
     link_runtime_engine: bool = Field(
@@ -58,6 +117,20 @@ def start_paper_trading(
     """
     user = _paper_user(authorization)
     _require_broker_ready_for_start(user.id)
+    preflight = _run_balance_preflight(user.id)
+    if not preflight.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "PAPER_BALANCE_PREFLIGHT_FAILED",
+                "message": preflight.get("error") or "balance preflight failed",
+                "failure_kind": preflight.get("failure_kind"),
+                "path": preflight.get("path"),
+                "tr_id": preflight.get("tr_id"),
+                "sanitized_params": preflight.get("sanitized_params"),
+                "http_status": preflight.get("http_status"),
+            },
+        )
     sid = payload.strategy_id.lower().strip()
     if sid == "live":
         raise HTTPException(status_code=400, detail="strategy_id 'live' 는 사용할 수 없습니다 (live 차단).")

@@ -300,15 +300,16 @@
         async function refreshPaper() {
           await checkBrokerGate();
           try {
-            const [statusRes, posRes, pnlRes, logsRes, diagRes, verRes] = await Promise.all([
+            const [statusRes, posRes, pnlRes, logsRes, diagRes, verRes, runtimeRes] = await Promise.all([
               fetch(backendUrl + "/api/paper-trading/status"),
               fetch(backendUrl + "/api/paper-trading/positions"),
               fetch(backendUrl + "/api/paper-trading/pnl"),
               fetch(backendUrl + "/api/paper-trading/logs"),
               fetch(backendUrl + "/api/paper-trading/diagnostics", { headers: authHeaders() }),
               fetch(backendUrl + "/api/version"),
+              fetch(backendUrl + "/api/debug/runtime-info"),
             ]);
-            const [statusData, posData, pnlData, logsData, diagData, verData] = await Promise.all([
+            const [statusData, posData, pnlData, logsData, diagData, verData, runtimeData] = await Promise.all([
               statusRes.json().catch(function () {
                 return {};
               }),
@@ -323,6 +324,7 @@
               }),
               diagRes.ok ? diagRes.json().catch(function () { return {}; }) : Promise.resolve({}),
               verRes.ok ? verRes.json().catch(function () { return {}; }) : Promise.resolve({}),
+              runtimeRes.ok ? runtimeRes.json().catch(function () { return {}; }) : Promise.resolve({}),
             ]);
             if (statusRes.ok) {
               var st = statusData.status || "stopped";
@@ -379,9 +381,21 @@
                   : verData.build_time
                     ? " · build " + verData.build_time
                     : "");
+              var files = runtimeData.module_files || {};
+              var kisMod = files["app.clients.kis_client"] || "";
+              if (kisMod) {
+                var name = String(kisMod).split(/[\\/]/).slice(-1)[0];
+                verLine += " · mod " + name;
+              }
               backendVersionText.innerText = verLine;
               var kisLines = [];
               if (shaFull) kisLines.push("paper_diag.git_sha: " + shaFull);
+              if (runtimeData.backend_git_sha) kisLines.push("runtime.git_sha: " + runtimeData.backend_git_sha);
+              if (runtimeData.backend_build_time) kisLines.push("runtime.build_time: " + runtimeData.backend_build_time);
+              if (runtimeData.python_executable) kisLines.push("python: " + runtimeData.python_executable);
+              if (files["app.clients.kis_client"]) kisLines.push("module.kis_client: " + files["app.clients.kis_client"]);
+              if (files["backend.app.engine.user_paper_loop"]) kisLines.push("module.user_paper_loop: " + files["backend.app.engine.user_paper_loop"]);
+              if (files["app.brokers.kis_paper_broker"]) kisLines.push("module.kis_paper_broker: " + files["app.brokers.kis_paper_broker"]);
               if (dg.last_failed_endpoint || diagData.last_failed_endpoint)
                 kisLines.push("path: " + (dg.last_failed_endpoint || diagData.last_failed_endpoint));
               if (dg.last_failed_tr_id || diagData.last_failed_tr_id)

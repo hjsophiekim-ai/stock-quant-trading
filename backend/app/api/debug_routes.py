@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import logging
+import sys
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header, HTTPException, status
 
+from app.clients.kis_client import KISClientError, sanitize_kis_params_for_log
+from backend.app.api.auth_routes import get_current_user_from_auth_header
+from backend.app.api.broker_routes import get_broker_service
+from backend.app.clients.kis_client import build_kis_client_for_paper_user
 from backend.app.core.config import get_backend_settings
+from backend.app.core.version_info import get_backend_version_payload
 from backend.app.core.storage_paths import (
     directory_is_writable,
     get_resolved_storage_paths,
@@ -56,3 +62,106 @@ def storage_paths() -> dict[str, object]:
     }
     _logger.debug("storage-paths diagnostic requested")
     return out
+
+
+def _debug_user(authorization: str | None):
+    try:
+        return get_current_user_from_auth_header(authorization)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+
+def _balance_params(account_no: str, product_code: str) -> dict[str, str]:
+    return {
+        "CANO": account_no,
+        "ACNT_PRDT_CD": product_code,
+        "AFHR_FLPR_YN": "N",
+        "INQR_DVSN": "02",
+        "UNPR_DVSN": "01",
+        "FUND_STTL_ICLD_YN": "N",
+        "FNCG_AMT_AUTO_RDPT_YN": "N",
+        "PRCS_DVSN": "01",
+    }
+
+
+@router.get("/runtime-info")
+def runtime_info() -> dict[str, object]:
+    import app.brokers.kis_paper_broker as kis_paper_broker_mod
+    import app.clients.kis_client as kis_client_mod
+    import backend.app.engine.user_paper_loop as user_paper_loop_mod
+
+    ver = get_backend_version_payload()
+    return {
+        "backend_git_sha": ver.get("git_sha", ""),
+        "backend_build_time": ver.get("build_time", ""),
+        "backend_app_version": ver.get("app_version", ""),
+        "python_executable": sys.executable,
+        "module_files": {
+            "app.clients.kis_client": getattr(kis_client_mod, "__file__", ""),
+            "backend.app.engine.user_paper_loop": getattr(user_paper_loop_mod, "__file__", ""),
+            "app.brokers.kis_paper_broker": getattr(kis_paper_broker_mod, "__file__", ""),
+        },
+    }
+
+
+@router.get("/kis-balance-check")
+def kis_balance_check(authorization: str | None = Header(default=None)) -> dict[str, object]:
+    user = _debug_user(authorization)
+    svc = get_broker_service()
+    app_key, app_secret, account_no, product_code, trading_mode = svc.get_plain_credentials(user.id)
+    api_base = svc._resolve_kis_api_base(trading_mode)
+    if "openapivts" not in (api_base or ""):
+        return {
+            "ok": False,
+            "failure_kind": "invalid_mode",
+            "error": "paper 모드(openapivts)만 진단 가능합니다.",
+            "trading_mode": trading_mode,
+            "api_base": api_base,
+        }
+
+    tok = svc.ensure_cached_token_for_paper_start(user.id)
+    if not tok.ok or not tok.access_token:
+        return {
+            "ok": False,
+            "failure_kind": "token_not_ready",
+            "error": tok.message,
+            "token_error_code": tok.token_error_code,
+            "token_cache_source": tok.token_cache_source,
+        }
+
+    client = build_kis_client_for_paper_user(
+        base_url=api_base,
+        access_token=tok.access_token,
+        app_key=app_key,
+        app_secret=app_secret,
+    )
+    req_params = _balance_params(account_no, product_code)
+    tr_id = client._resolve_tr_id(paper_tr_id=client.tr_ids.balance_paper, live_tr_id=client.tr_ids.balance_live)
+    path = client.endpoints.get_balance
+    sanitized = sanitize_kis_params_for_log(req_params)
+    try:
+        payload = client.get_balance(account_no=account_no, account_product_code=product_code)
+        out = payload.get("output2")
+        sample = out[0] if isinstance(out, list) and out else out if isinstance(out, dict) else {}
+        return {
+            "ok": True,
+            "path": path,
+            "tr_id": tr_id,
+            "sanitized_params": sanitized,
+            "summary": {
+                "ord_psbl_cash": sample.get("ord_psbl_cash") if isinstance(sample, dict) else None,
+                "dnca_tot_amt": sample.get("dnca_tot_amt") if isinstance(sample, dict) else None,
+                "tot_evlu_amt": sample.get("tot_evlu_amt") if isinstance(sample, dict) else None,
+            },
+        }
+    except KISClientError as exc:
+        ctx = getattr(exc, "kis_context", {}) or {}
+        return {
+            "ok": False,
+            "failure_kind": "kis_error",
+            "error": str(exc),
+            "path": ctx.get("path") or path,
+            "tr_id": ctx.get("tr_id") or tr_id,
+            "sanitized_params": ctx.get("params") or sanitized,
+            "http_status": ctx.get("http_status"),
+        }

@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+import sys
 
 from .api.order_engine_routes import router as order_engine_router
 from .api.risk_routes import router as risk_router
@@ -49,8 +50,12 @@ async def _validation_exception_handler(_request, exc: RequestValidationError) -
 @app.on_event("startup")
 def _install_risk_audit() -> None:
     import logging
+    import app.brokers.kis_paper_broker as kis_paper_broker_mod
+    import app.clients.kis_client as kis_client_mod
+    import backend.app.engine.user_paper_loop as user_paper_loop_mod
 
     from backend.app.risk.service import install_risk_audit_from_settings
+    from backend.app.core.version_info import get_backend_version_payload
 
     install_risk_audit_from_settings()
     install_portfolio_sync_background(settings)
@@ -65,6 +70,16 @@ def _install_risk_audit() -> None:
         paths.broker_accounts_db_path,
         trade_sql or "(non-sqlite or memory)",
         settings.database_url.split("@")[-1] if "@" in settings.database_url else settings.database_url,
+    )
+    ver = get_backend_version_payload(app_version=app.version)
+    log.info(
+        "runtime info: git_sha=%s build_time=%s python=%s kis_client=%s user_paper_loop=%s kis_paper_broker=%s",
+        ver.get("git_sha", ""),
+        ver.get("build_time", ""),
+        sys.executable,
+        getattr(kis_client_mod, "__file__", ""),
+        getattr(user_paper_loop_mod, "__file__", ""),
+        getattr(kis_paper_broker_mod, "__file__", ""),
     )
 
 
