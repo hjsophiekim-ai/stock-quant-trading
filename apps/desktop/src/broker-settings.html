@@ -222,6 +222,16 @@
         color: var(--muted);
         font-size: 0.8rem;
       }
+      .discovery-pre {
+        margin-top: 10px;
+        white-space: pre-wrap;
+        font-size: 0.78rem;
+        background: #f8fafc;
+        padding: 10px;
+        border-radius: 8px;
+        max-height: 240px;
+        overflow: auto;
+      }
     </style>
   </head>
   <body>
@@ -271,7 +281,44 @@
       </div>
 
       <button type="button" class="btn btn-primary" id="saveBtn">저장</button>
-      <button type="button" class="btn btn-teal" id="testBtn">연결 테스트 (토큰 발급)</button>
+      <button type="button" class="btn btn-teal" id="testBtn">연결 테스트 (토큰 + 잔고)</button>
+      <div class="card hint-box" style="margin-bottom: 14px">
+        <h2 style="margin-top: 0">① 종목명 검색 (앱 안 목록)</h2>
+        <p class="muted" style="margin: 0 0 10px">
+          <b>한글 이름</b>으로 찾습니다 (예: 삼성전자, 하이닉스). 한투 공식 검색이 아니라 서버 JSON 목록만 검색합니다.
+        </p>
+        <input id="searchByNameQ" type="text" placeholder="예: 삼성, 하이닉스" autocomplete="off" />
+        <button type="button" class="btn btn-muted" id="searchByNameBtn" style="margin-top: 10px">종목명 검색</button>
+        <pre
+          id="searchByNameOut"
+          class="discovery-pre"
+        ></pre>
+      </div>
+
+      <div class="card hint-box" style="margin-bottom: 14px">
+        <h2 style="margin-top: 0">② 심볼(종목코드) 검색 (앱 안 목록)</h2>
+        <p class="muted" style="margin: 0 0 10px"><b>숫자 6자리 코드</b>로 찾습니다 (예: 005930). 접두만 넣어도 됩니다.</p>
+        <input id="searchBySymbolQ" type="text" inputmode="numeric" placeholder="예: 005930, 00066" autocomplete="off" />
+        <button type="button" class="btn btn-muted" id="searchBySymbolBtn" style="margin-top: 10px">심볼 검색</button>
+        <pre
+          id="searchBySymbolOut"
+          class="discovery-pre"
+        ></pre>
+      </div>
+
+      <div class="card hint-box" style="margin-bottom: 14px">
+        <h2 style="margin-top: 0">③ 전략 후보 (swing_v1)</h2>
+        <p class="muted" style="margin: 0 0 10px">
+          스크리너가 고른 후보 + 스윙 신호 엔진 상태입니다. 위 ①②와 <b>다른 데이터</b>입니다. 먼저 서버에서 스크리너/신호를 돌린
+          적이 있어야 합니다.
+        </p>
+        <button type="button" class="btn btn-muted" id="strategyCandidatesBtn">전략 후보 불러오기</button>
+        <pre
+          id="strategyCandidatesOut"
+          class="discovery-pre"
+        ></pre>
+      </div>
+
       <button type="button" class="btn btn-muted" id="refreshBtn">상태 새로고침</button>
       <button type="button" class="btn btn-danger-text" id="deleteBtn" style="display: none">저장된 브로커 정보 삭제</button>
       <button type="button" class="btn btn-link" id="backBtn">← 대시보드로</button>
@@ -491,7 +538,13 @@
             }
             lastTestResult = data.ok ? "ok" : "fail";
             renderTestBadge();
-            toast(data.ok ? "ok" : "err", data.message || (data.ok ? "연결 성공" : "연결 실패"));
+            var extra =
+              data.balance_check_ok === true
+                ? " (잔고조회 OK" + (data.balance_cash_hint ? ": " + data.balance_cash_hint : "") + ")"
+                : data.balance_check_ok === false
+                  ? " (잔고조회 실패)"
+                  : "";
+            toast(data.ok ? "ok" : "err", (data.message || (data.ok ? "연결 성공" : "연결 실패")) + extra);
             updateConnUI(data.status, data.message, null);
             await refreshStatus();
           } catch {
@@ -499,6 +552,54 @@
             renderTestBadge();
             toast("err", "네트워크 오류");
           }
+        });
+
+        async function fetchJson(url, outEl) {
+          outEl.textContent = "불러오는 중…";
+          try {
+            const res = await fetch(url, { headers: authHeaders() });
+            const data = await res.json();
+            if (!res.ok) {
+              outEl.textContent = parseDetail(data);
+              return;
+            }
+            outEl.textContent = JSON.stringify(data, null, 2);
+          } catch (e) {
+            outEl.textContent = String(e);
+          }
+        }
+
+        document.getElementById("searchByNameBtn").addEventListener("click", async function () {
+          const q = document.getElementById("searchByNameQ").value.trim();
+          const out = document.getElementById("searchByNameOut");
+          if (!q) {
+            out.textContent = "종목명 일부를 입력하세요.";
+            return;
+          }
+          const u = new URL(backendUrl + "/api/stocks/search-by-name");
+          u.searchParams.set("q", q);
+          u.searchParams.set("limit", "30");
+          await fetchJson(u.toString(), out);
+        });
+
+        document.getElementById("searchBySymbolBtn").addEventListener("click", async function () {
+          const q = document.getElementById("searchBySymbolQ").value.trim();
+          const out = document.getElementById("searchBySymbolOut");
+          if (!q) {
+            out.textContent = "종목코드(숫자)를 입력하세요.";
+            return;
+          }
+          const u = new URL(backendUrl + "/api/stocks/search-by-symbol");
+          u.searchParams.set("q", q);
+          u.searchParams.set("limit", "30");
+          await fetchJson(u.toString(), out);
+        });
+
+        document.getElementById("strategyCandidatesBtn").addEventListener("click", async function () {
+          const out = document.getElementById("strategyCandidatesOut");
+          const u = new URL(backendUrl + "/api/stocks/strategy-candidates");
+          u.searchParams.set("strategy_id", "swing_v1");
+          await fetchJson(u.toString(), out);
         });
 
         document.getElementById("refreshBtn").addEventListener("click", function () {
