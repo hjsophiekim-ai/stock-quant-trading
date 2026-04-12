@@ -27,4 +27,7 @@ export interface BrokerConnectionTestResponse {
   ok: boolean;
   status: BrokerConnectionStatus;
   message: string;
+  balance_check_ok?: boolean | null;
+  balance_rt_cd?: string | null;
+  balance_cash_hint?: string | null;
 }

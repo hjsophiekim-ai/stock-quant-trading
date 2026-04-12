@@ -10,11 +10,15 @@ from uuid import uuid4
 
 from cryptography.fernet import Fernet
 
+from app.clients.kis_client import KISClient, KISClientError
+from app.clients.kis_parsers import balance_cash_summary, rt_cd_ok
+
 from ..auth.kis_auth import issue_access_token, validate_kis_inputs
 from ..models.broker_account import (
     BrokerAccountResponse,
     BrokerAccountUpsertRequest,
     BrokerConnectionTestResponse,
+    ConnectionStatus,
 )
 
 
@@ -194,9 +198,12 @@ class BrokerSecretService:
         account_product_code = self._decrypt(row["kis_account_product_code_enc"])
         api_base = self._resolve_kis_api_base(str(row["trading_mode"]))
 
-        status = "failed"
+        status: ConnectionStatus = "failed"
         message = "토큰 발급 실패"
         ok = False
+        balance_check_ok: bool | None = None
+        balance_rt_cd: str | None = None
+        balance_cash_hint: str | None = None
         validation_issues = validate_kis_inputs(
             app_key=app_key,
             app_secret=app_secret,
@@ -213,12 +220,36 @@ class BrokerSecretService:
                 base_url=api_base,
                 timeout_sec=self.timeout_sec,
             )
-            if token_result.ok:
-                ok = True
-                status = "success"
-                message = "토큰 발급 성공 및 연결 확인 완료"
-            else:
+            if not token_result.ok or not token_result.access_token:
                 message = token_result.message
+            else:
+                client = KISClient(
+                    base_url=api_base,
+                    timeout_sec=self.timeout_sec,
+                    max_retries=2,
+                    token_provider=lambda: token_result.access_token or "",
+                    app_key=app_key,
+                    app_secret=app_secret,
+                    live_execution_unlocked=False,
+                )
+                try:
+                    bal = client.get_balance(account_no, account_product_code)
+                except KISClientError as exc:
+                    message = f"토큰은 성공했으나 잔고조회 실패: {exc}"
+                    balance_check_ok = False
+                else:
+                    balance_rt_cd = str(bal.get("rt_cd", ""))
+                    if rt_cd_ok(bal):
+                        balance_check_ok = True
+                        snap = balance_cash_summary(bal)
+                        cash_bits = [f"{k}={v}" for k, v in snap.items() if v is not None and str(v).strip() != ""]
+                        balance_cash_hint = ", ".join(cash_bits[:4]) if cash_bits else "(요약 필드 없음)"
+                        ok = True
+                        status = "success"
+                        message = f"토큰·잔고조회 성공 — {balance_cash_hint}"
+                    else:
+                        balance_check_ok = False
+                        message = f"잔고조회 비정상 응답(rt_cd={balance_rt_cd}). 키·계좌·모의/실전 호스트를 확인하세요."
 
         now = _utc_now_iso()
         with self._connect() as conn:
@@ -234,4 +265,11 @@ class BrokerSecretService:
                 (status, message, now, now, user_id),
             )
             conn.commit()
-        return BrokerConnectionTestResponse(ok=ok, status=status, message=message)
+        return BrokerConnectionTestResponse(
+            ok=ok,
+            status=status,
+            message=message,
+            balance_check_ok=balance_check_ok,
+            balance_rt_cd=balance_rt_cd,
+            balance_cash_hint=balance_cash_hint,
+        )

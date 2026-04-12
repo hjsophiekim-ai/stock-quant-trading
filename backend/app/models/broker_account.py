@@ -35,3 +35,6 @@ class BrokerConnectionTestResponse(BaseModel):
     ok: bool
     status: ConnectionStatus
     message: str
+    balance_check_ok: bool | None = None
+    balance_rt_cd: str | None = None
+    balance_cash_hint: str | None = None

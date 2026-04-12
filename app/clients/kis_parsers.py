@@ -8,6 +8,16 @@ from typing import Any
 from app.brokers.base_broker import OpenOrder
 
 
+def parse_kis_ord_datetime_to_utc(ord_dt: str, ord_tmd: str) -> datetime:
+    """KIS 일별체결 행의 ord_dt(YYYYMMDD) + ord_tmd(HHMMSS…) → UTC datetime (파싱 실패 시 now)."""
+    try:
+        if len(ord_dt) == 8 and len(ord_tmd) >= 6:
+            return datetime.strptime(ord_dt + ord_tmd[:6], "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        pass
+    return datetime.now(timezone.utc)
+
+
 def rt_cd_ok(payload: dict[str, Any]) -> bool:
     return str(payload.get("rt_cd", "0")) in {"0", ""}
 

@@ -5,8 +5,32 @@ const path = require("node:path");
 const Jimp = require("jimp");
 const toIco = require("to-ico");
 
-const backendUrl = process.env.BACKEND_URL || "http://127.0.0.1:8000";
 const appEnv = process.env.APP_ENV || "production";
+const rawBackendUrl = process.env.BACKEND_URL;
+const allowLocalBackend =
+  process.env.ALLOW_LOCAL_BACKEND === "1" || /^true$/i.test(process.env.ALLOW_LOCAL_BACKEND || "");
+
+function resolveBackendUrl() {
+  const trimmed = typeof rawBackendUrl === "string" ? rawBackendUrl.trim() : "";
+  if (appEnv === "production") {
+    if (!trimmed) {
+      console.error(
+        "[desktop-build] APP_ENV=production 빌드에는 BACKEND_URL 환경변수가 필수입니다. 예: BACKEND_URL=https://your-api.example.com",
+      );
+      process.exit(1);
+    }
+    if (/127\.0\.0\.1|localhost/i.test(trimmed) && !allowLocalBackend) {
+      console.error(
+        "[desktop-build] APP_ENV=production 빌드에서는 BACKEND_URL에 localhost/127.0.0.1 을 사용할 수 없습니다. 로컬 백엔드용 설치 파일만 만들 때는 ALLOW_LOCAL_BACKEND=1 을 함께 설정하세요.",
+      );
+      process.exit(1);
+    }
+    return trimmed;
+  }
+  return trimmed || "http://127.0.0.1:8000";
+}
+
+const backendUrl = resolveBackendUrl();
 const iconDir = path.join(__dirname, "..", "build", "icons");
 const iconPath = path.join(iconDir, "icon.ico");
 
@@ -38,12 +62,6 @@ async function ensureBuildIcon() {
 }
 
 (async () => {
-  if (appEnv === "production" && /127\.0\.0\.1|localhost/i.test(backendUrl)) {
-    console.warn(
-      "[desktop-build] BACKEND_URL이 로컬입니다. 일반 사용자 배포는 운영 서버 URL(예: https://api.example.com)로 다시 빌드하세요.",
-    );
-  }
-
   await ensureBuildIcon();
   console.log(`[desktop-build] APP_ENV=${appEnv} BACKEND_URL=${backendUrl}`);
 

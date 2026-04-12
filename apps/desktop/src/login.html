@@ -116,7 +116,9 @@
         } catch {
           conn.className = "conn-bad";
           conn.innerText =
-            "서버 연결: 실패 — 주소·방화벽·HTTPS 인증서를 확인하세요. (로컬 개발이면 백엔드를 먼저 실행)";
+            "서버 연결: 실패 — 대상 URL: " +
+            base +
+            " — 주소·방화벽·HTTPS 인증서를 확인하세요. (로컬 개발이면 백엔드를 먼저 실행)";
         }
       }
       document.getElementById("backendLine").innerText = "기본 서버(URL): " + defaultBackend;

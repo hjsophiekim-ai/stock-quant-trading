@@ -9,7 +9,7 @@
 #   .\scripts\build-release-zips.ps1 -DesktopExePath "C:\path\Stock Quant Desktop-Setup-0.1.0.exe" -ApkPath "C:\path\app.apk"
 
 param(
-  [string]$BackendUrl = "http://127.0.0.1:8000",
+  [string]$BackendUrl = "https://stock-quant-backend.onrender.com",
   [string]$AppEnv = "production",
   [string]$DesktopExePath = "",
   [string]$ApkPath = ""
@@ -68,7 +68,13 @@ if ($DesktopExePath -and (Test-Path -LiteralPath $DesktopExePath)) {
     npm run build:win
     $candidates = @(Get-ChildItem -Path (Join-Path $work "dist") -Filter "*Setup*.exe" -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike "*uninstall*" })
     if ($candidates.Count -lt 1) { throw "No *Setup*.exe found under dist after build." }
-    $setupExe = $candidates[0]
+    # 임시 작업 폴더 삭제 전에 저장소 dist로 복사 (finally에서 $work 가 지워지면 exe 경로가 무효화됨)
+    $distLocalEarly = Join-Path $root "apps\desktop\dist"
+    New-Item -ItemType Directory -Force -Path $distLocalEarly | Out-Null
+    $copiedSetup = Join-Path $distLocalEarly $candidates[0].Name
+    Copy-Item -LiteralPath $candidates[0].FullName -Destination $copiedSetup -Force
+    $setupExe = Get-Item -LiteralPath $copiedSetup
+    Write-Host "[release] saved installer to $($setupExe.FullName)" -ForegroundColor Cyan
   } finally {
     Pop-Location
     if ($work -and (Test-Path $work)) {
@@ -118,8 +124,11 @@ Write-Host "[release] created $deskZip" -ForegroundColor Green
 $distLocal = Join-Path $root "apps\desktop\dist"
 try {
   New-Item -ItemType Directory -Force -Path $distLocal | Out-Null
-  Copy-Item -LiteralPath $setupExe.FullName -Destination $distLocal -Force
-  Write-Host "[release] copied installer to $distLocal" -ForegroundColor DarkGray
+  $distResolved = (Resolve-Path -LiteralPath $distLocal).Path
+  if ($setupExe.DirectoryName -ne $distResolved) {
+    Copy-Item -LiteralPath $setupExe.FullName -Destination $distLocal -Force
+    Write-Host "[release] copied installer to $distLocal" -ForegroundColor DarkGray
+  }
 } catch {
   Write-Warning "[release] could not copy installer to apps/desktop/dist (sync folder?): $($_.Exception.Message)"
 }

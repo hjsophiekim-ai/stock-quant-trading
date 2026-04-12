@@ -1,9 +1,14 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 from typing import Any
 
 from app.brokers.base_broker import BaseBroker, Fill, OpenOrder, PositionView
-from app.clients.kis_client import KISClient
+from app.clients.kis_client import KISClient, KISClientError
+from app.clients.kis_parsers import (
+    normalized_fills_from_ccld_payload,
+    open_orders_from_nccs_payload,
+    parse_kis_ord_datetime_to_utc,
+)
 from app.config import Settings, get_settings
 from app.orders.models import OrderRequest, OrderResult
 
@@ -21,6 +26,7 @@ class LiveBroker(BaseBroker):
     logger: logging.Logger = logging.getLogger("app.brokers.live_broker")
     startup_safety_passed: bool = False
     startup_safety_reason: str = "Startup safety validation not executed"
+    _order_symbols: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_env(cls, kis_client: KISClient, account_no: str, account_product_code: str, settings: Settings | None = None) -> "LiveBroker":
@@ -87,12 +93,51 @@ class LiveBroker(BaseBroker):
         return OrderResult(order_id=canceled_order_id, accepted=True, message="Live order cancel submitted")
 
     def get_open_orders(self) -> list[OpenOrder]:
-        # KIS open-order endpoint wiring can be added in KISClient later.
-        return []
+        try:
+            payload = self.kis_client.inquire_nccs(
+                account_no=self.account_no,
+                account_product_code=self.account_product_code,
+                symbol="",
+            )
+        except KISClientError as exc:
+            self.logger.warning("live inquire_nccs (open orders) failed: %s", exc)
+            return []
+        orders = open_orders_from_nccs_payload(payload)
+        for o in orders:
+            self._order_symbols[o.order_id] = o.symbol
+        return orders
 
     def get_fills(self) -> list[Fill]:
-        # KIS fill-history endpoint wiring can be added in KISClient later.
-        return []
+        try:
+            payload = self.kis_client.inquire_daily_ccld(
+                account_no=self.account_no,
+                account_product_code=self.account_product_code,
+                symbol="",
+                sell_buy_code="00",
+                ccld_div="01",
+            )
+        except KISClientError as exc:
+            self.logger.warning("live inquire_daily_ccld (fills) failed: %s", exc)
+            return []
+        rows = normalized_fills_from_ccld_payload(payload)
+        out: list[Fill] = []
+        for r in rows:
+            odt = str(r.get("ord_dt") or "")
+            otm = str(r.get("ord_tmd") or "")
+            filled_at = parse_kis_ord_datetime_to_utc(odt, otm)
+            oid = str(r.get("order_no") or "")
+            out.append(
+                Fill(
+                    fill_id=str(r.get("exec_id") or oid),
+                    order_id=oid,
+                    symbol=str(r.get("symbol") or ""),
+                    side="sell" if str(r.get("side")) == "sell" else "buy",
+                    quantity=int(r.get("quantity") or 0),
+                    fill_price=float(r.get("price") or 0.0),
+                    filled_at=filled_at,
+                )
+            )
+        return out
 
     @staticmethod
     def _extract_cash(payload: dict[str, Any]) -> float:

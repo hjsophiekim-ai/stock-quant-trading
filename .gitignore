@@ -10,6 +10,9 @@ backend_data/
 .env.*
 __pycache__/
 .venv/
+.venv-*/
+
+stock_quant_trading.egg-info/
 
 error.log
 *.log

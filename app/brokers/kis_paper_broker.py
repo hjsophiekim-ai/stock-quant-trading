@@ -7,7 +7,11 @@ from typing import Any
 
 from app.brokers.base_broker import BaseBroker, Fill, OpenOrder, PositionView
 from app.clients.kis_client import KISClient, KISClientError
-from app.clients.kis_parsers import normalized_fills_from_ccld_payload, open_orders_from_nccs_payload
+from app.clients.kis_parsers import (
+    normalized_fills_from_ccld_payload,
+    open_orders_from_nccs_payload,
+    parse_kis_ord_datetime_to_utc,
+)
 from app.clients.kis_mask import format_masked_payload_json
 from app.orders.models import OrderRequest, OrderResult, OrderStatus
 
@@ -141,7 +145,7 @@ class KisPaperBroker(BaseBroker):
         for r in rows:
             odt = str(r.get("ord_dt") or "")
             otm = str(r.get("ord_tmd") or "")
-            filled_at = _parse_kis_fill_dt(odt, otm)
+            filled_at = parse_kis_ord_datetime_to_utc(odt, otm)
             oid = str(r.get("order_no") or "")
             out.append(
                 Fill(
@@ -155,15 +159,6 @@ class KisPaperBroker(BaseBroker):
                 )
             )
         return out
-
-
-def _parse_kis_fill_dt(ord_dt: str, ord_tmd: str) -> datetime:
-    try:
-        if len(ord_dt) == 8 and len(ord_tmd) >= 6:
-            return datetime.strptime(ord_dt + ord_tmd[:6], "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
-    except ValueError:
-        pass
-    return datetime.now(timezone.utc)
 
 
 def _format_composite_order_id(payload: dict[str, Any]) -> str:

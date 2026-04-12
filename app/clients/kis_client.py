@@ -348,8 +348,9 @@ class KISClient:
         tr_id: str | None = None,
         bearer_token: str | None = None,
         extra_headers: dict[str, str] | None = None,
+        allow_empty_param_keys: frozenset[str] | None = None,
     ) -> dict[str, Any]:
-        q = prune_empty_get_params(params)
+        q = prune_empty_get_params(params, allow_empty_keys=allow_empty_param_keys)
         return self._request(
             "GET",
             path,
@@ -464,19 +465,28 @@ class KISClient:
     # --- 조회 ---
 
     def get_balance(self, account_no: str, account_product_code: str) -> dict[str, Any]:
-        # OFL_YN 등 빈 기본값은 넣지 않음 — prune으로 제거되나 아예 생략이 명확함
+        # OFL_YN: KIS 잔고조회(OPSQ2001) 필수 — 미전송 시 INPUT_FIELD_NAME OFL_YN 오류
         params = {
             "CANO": account_no,
             "ACNT_PRDT_CD": account_product_code,
+            "OFL_YN": "N",
             "AFHR_FLPR_YN": "N",
             "INQR_DVSN": "02",
             "UNPR_DVSN": "01",
             "FUND_STTL_ICLD_YN": "N",
             "FNCG_AMT_AUTO_RDPT_YN": "N",
             "PRCS_DVSN": "01",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
         }
         tr_id = self._resolve_tr_id(paper_tr_id=self.tr_ids.balance_paper, live_tr_id=self.tr_ids.balance_live)
-        payload = self._get(self.endpoints.get_balance, params=params, tr_id=tr_id)
+        ctx_keys = frozenset({"CTX_AREA_FK100", "CTX_AREA_NK100"})
+        payload = self._get(
+            self.endpoints.get_balance,
+            params=params,
+            tr_id=tr_id,
+            allow_empty_param_keys=ctx_keys,
+        )
         self._validate_kis_business_success(
             payload,
             method="GET",

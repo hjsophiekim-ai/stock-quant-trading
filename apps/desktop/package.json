@@ -11,7 +11,7 @@
     "run": "electron .",
     "pack": "npx electron-builder --dir",
     "build:win": "node scripts/build-win.js",
-    "build:win:local": "cross-env APP_ENV=production BACKEND_URL=http://127.0.0.1:8000 node scripts/build-win.js"
+    "build:win:local": "cross-env APP_ENV=production ALLOW_LOCAL_BACKEND=1 BACKEND_URL=http://127.0.0.1:8000 node scripts/build-win.js"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
