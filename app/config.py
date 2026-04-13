@@ -1,11 +1,16 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        populate_by_name=True,
+    )
 
     kis_app_key: str = Field(default="", alias="KIS_APP_KEY")
     kis_app_secret: str = Field(default="", alias="KIS_APP_SECRET")
@@ -33,10 +38,37 @@ class Settings(BaseSettings):
     # KIS 모의투자 자동 paper trading (실주문 경로와 분리; openapivts 전용 브로커 사용)
     paper_use_kis_execution: bool = Field(default=False, alias="PAPER_USE_KIS_EXECUTION")
     paper_trading_loop: bool = Field(default=False, alias="PAPER_TRADING_LOOP")
-    paper_trading_interval_sec: int = Field(default=300, ge=30, alias="PAPER_TRADING_INTERVAL_SEC")
-    paper_trading_symbols: str = Field(default="005930,000660,035420", alias="PAPER_TRADING_SYMBOLS")
+    paper_trading_interval_sec: int = Field(default=600, ge=30, alias="PAPER_TRADING_INTERVAL_SEC")
+    paper_trading_symbols: str = Field(default="005930,000660", alias="PAPER_TRADING_SYMBOLS")
     paper_session_state_path: str = Field(default="data/paper_trading_session.json", alias="PAPER_SESSION_STATE_PATH")
-    paper_kis_chart_lookback_days: int = Field(default=120, ge=20, alias="PAPER_KIS_CHART_LOOKBACK_DAYS")
+    paper_kis_chart_lookback_days: int = Field(default=60, ge=20, alias="PAPER_KIS_CHART_LOOKBACK_DAYS")
+    paper_smoke_mode: bool = Field(default=False, alias="PAPER_SMOKE_MODE")
+    paper_kis_universe_cache_ttl_sec: int = Field(
+        default=300,
+        ge=0,
+        validation_alias=AliasChoices(
+            "PAPER_KIS_UNIVERSE_CACHE_TTL_SEC",
+            "PAPER_UNIVERSE_CACHE_TTL_SEC",
+        ),
+    )
+    paper_kis_kospi_cache_ttl_sec: int = Field(
+        default=300,
+        ge=0,
+        validation_alias=AliasChoices(
+            "PAPER_KIS_KOSPI_CACHE_TTL_SEC",
+            "PAPER_KOSPI_CACHE_TTL_SEC",
+        ),
+    )
+    paper_positions_refresh_interval_sec: int = Field(
+        default=900,
+        ge=0,
+        alias="PAPER_POSITIONS_REFRESH_INTERVAL_SEC",
+    )
+    paper_portfolio_sync_interval_sec: int = Field(
+        default=1800,
+        ge=0,
+        alias="PAPER_PORTFOLIO_SYNC_INTERVAL_SEC",
+    )
 
     # KISClient rate-limit / throttle (백엔드 Paper 경로가 app Settings 를 읽음)
     kis_min_request_interval_ms: int = Field(default=250, ge=0, alias="KIS_MIN_REQUEST_INTERVAL_MS")

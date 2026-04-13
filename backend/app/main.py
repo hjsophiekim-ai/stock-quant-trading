@@ -55,6 +55,11 @@ def _install_risk_audit() -> None:
     import app.clients.kis_client as kis_client_mod
     import backend.app.engine.user_paper_loop as user_paper_loop_mod
 
+    from app.config import get_settings as get_app_settings
+
+    # 프로세스 재시작 시 .env 변경이 lru_cache 에 남지 않도록 비움 후 로드
+    get_app_settings.cache_clear()
+
     from backend.app.risk.service import install_risk_audit_from_settings
     from backend.app.core.version_info import get_backend_version_payload
 
