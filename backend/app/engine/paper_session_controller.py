@@ -84,6 +84,10 @@ class PaperSessionController:
             "portfolio_sync_skipped": None,
             "token_cache_source": out.get("token_cache_source"),
             "token_error_code": out.get("token_error_code"),
+            "fresh_issue": out.get("paper_loop_fresh_issue"),
+            "last_kis_token_failure_at_utc": out.get("paper_loop_last_token_failure_at"),
+            "last_kis_token_error_code": out.get("paper_loop_last_token_error_code"),
+            "last_kis_token_http_status": out.get("paper_loop_last_token_http_status"),
         }
         if ok:
             self._paper_diagnostics = {
@@ -97,7 +101,6 @@ class PaperSessionController:
                 "rate_limit": None,
                 "retry_after_sec": None,
                 "http_status": None,
-                "token_error_code": None,
                 **budget_base,
             }
             return
@@ -306,6 +309,7 @@ class PaperSessionController:
             return {
                 "mode": "paper",
                 "status": self._status,
+                "session_user_id": self._user_id,
                 "strategy_id": self._strategy_id,
                 "user_session_active": bool(self._run_flag and self._thread and self._thread.is_alive()),
                 "failure_streak": self._failure_streak,
@@ -342,6 +346,75 @@ class PaperSessionController:
 
     def get_positions(self) -> list[dict[str, Any]]:
         return list(self._last_positions)
+
+    def get_open_orders(self, user_id: str | None = None) -> dict[str, Any]:
+        """사용자 Paper 계정 기준 미체결. 세션 없거나 소유자가 아니면 error."""
+        with self._lock:
+            if not self._user_loop or self._status not in ("running", "risk_off"):
+                return {"items": [], "error": None}
+            if user_id and self._user_id != user_id:
+                return {"items": [], "error": "NOT_OWNER"}
+            loop = self._user_loop
+        return loop.fetch_open_orders_payload()
+
+    def get_recent_fills(self, user_id: str | None = None, *, limit: int = 20) -> dict[str, Any]:
+        with self._lock:
+            if not self._user_loop or self._status not in ("running", "risk_off"):
+                return {"items": [], "error": None}
+            if user_id and self._user_id != user_id:
+                return {"items": [], "error": "NOT_OWNER"}
+            loop = self._user_loop
+        return loop.fetch_recent_fills_payload(limit=limit)
+
+    def get_dashboard_payload(self, user_id: str) -> dict[str, Any]:
+        """Paper 세션 틱 리포트 + 포지션/미체결/체결 + 진단(온디맨드 KIS 조회 포함)."""
+        with self._lock:
+            if self._user_id != user_id:
+                return {"ok": False, "error": "NOT_OWNER_OR_NO_SESSION"}
+            if self._status not in ("running", "risk_off"):
+                return {"ok": False, "error": "PAPER_SESSION_NOT_ACTIVE"}
+            st = self.status_payload()
+            rep = dict(self._last_report)
+            loop = self._user_loop
+        if loop is None:
+            return {"ok": False, "error": "PAPER_LOOP_NOT_READY"}
+
+        oo = loop.fetch_open_orders_payload()
+        rf = loop.fetch_recent_fills_payload(limit=20)
+        pos = self.get_positions()
+
+        cand = rep.get("candidate_count")
+        if cand is None:
+            cand = len(rep.get("candidates") or [])
+        gen_ct = rep.get("generated_order_count")
+        if gen_ct is None:
+            gen_ct = len(rep.get("generated_orders") or [])
+
+        return {
+            "ok": True,
+            "status": st.get("status"),
+            "strategy_id": st.get("strategy_id"),
+            "failure_streak": st.get("failure_streak"),
+            "last_error": st.get("last_error"),
+            "last_tick_at": st.get("last_tick_at"),
+            "last_tick_summary": st.get("last_tick_summary") or {},
+            "positions": pos,
+            "open_orders": oo.get("items") or [],
+            "open_orders_error": oo.get("error"),
+            "recent_fills": rf.get("items") or [],
+            "recent_fills_error": rf.get("error"),
+            "diagnostics": st.get("diagnostics") or {},
+            "candidate_count": cand,
+            "ranking": rep.get("ranking") or [],
+            "generated_order_count": gen_ct,
+            "generated_orders": rep.get("generated_orders") or [],
+            "accepted_orders": rep.get("accepted_orders"),
+            "rejected_orders": rep.get("rejected_orders"),
+            "no_order_reason": rep.get("no_order_reason") or "",
+            "regime": rep.get("regime"),
+            "last_diagnostics": rep.get("last_diagnostics") or [],
+            "candidates": rep.get("candidates") or [],
+        }
 
     def get_logs(self) -> list[dict[str, str]]:
         return list(self._logs)

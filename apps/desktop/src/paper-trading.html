@@ -143,6 +143,17 @@
           <h3>Positions</h3>
           <ul id="positionsList"></ul>
         </div>
+        <div class="panel" id="paperDashPanel" style="display: none">
+          <h3>Paper 틱 요약 (앱 모의 계정)</h3>
+          <p id="paperDashReason" style="margin: 0 0 8px; font-size: 0.9rem; color: #334155"></p>
+          <p id="paperDashOrders" style="margin: 0 0 8px; font-size: 0.88rem; color: #475569"></p>
+          <h4 style="margin: 10px 0 4px; font-size: 0.95rem">랭킹 후보</h4>
+          <ul id="paperRankingList" style="margin: 0; padding-left: 1.1rem"></ul>
+          <h4 style="margin: 10px 0 4px; font-size: 0.95rem">최근 체결 (당일)</h4>
+          <ul id="paperFillsList"></ul>
+          <h4 style="margin: 10px 0 4px; font-size: 0.95rem">미체결</h4>
+          <ul id="paperOpenOrdersList"></ul>
+        </div>
         <div class="panel">
           <h3>Return Chart (틱 요약 시각화)</h3>
           <div id="chart" class="chart"></div>
@@ -320,19 +331,30 @@
           }
         }
 
+        const paperDashPanel = document.getElementById("paperDashPanel");
+        const paperDashReason = document.getElementById("paperDashReason");
+        const paperDashOrders = document.getElementById("paperDashOrders");
+        const paperRankingList = document.getElementById("paperRankingList");
+        const paperFillsList = document.getElementById("paperFillsList");
+        const paperOpenOrdersList = document.getElementById("paperOpenOrdersList");
+
         async function refreshPaper() {
           await checkBrokerGate();
           try {
-            const [statusRes, posRes, pnlRes, logsRes] = await Promise.all([
+            const [statusRes, posRes, pnlRes, logsRes, dashRes] = await Promise.all([
               fetch(backendUrl + "/api/paper-trading/status"),
               fetch(backendUrl + "/api/paper-trading/positions"),
               fetch(backendUrl + "/api/paper-trading/pnl"),
               fetch(backendUrl + "/api/paper-trading/logs"),
+              fetch(backendUrl + "/api/paper-trading/dashboard-data", { headers: authHeaders() }),
             ]);
             const statusData = await statusRes.json();
             const posData = await posRes.json();
             const pnlData = await pnlRes.json();
             const logsData = await logsRes.json();
+            const dashData = await dashRes.json().catch(function () {
+              return {};
+            });
             if (statusRes.ok) {
               var st = statusData.status || "stopped";
               statusText.innerText = st;
@@ -375,6 +397,71 @@
               li.innerText = (ts ? "[" + ts + "] " : "") + (lv ? lv + ": " : "") + (l.message || "");
               logsList.appendChild(li);
             });
+
+            var stOk = statusData.status === "running" || statusData.status === "risk_off";
+            if (dashData && dashData.ok && stOk) {
+              paperDashPanel.style.display = "block";
+              var nor = dashData.no_order_reason || "";
+              var goc = dashData.generated_order_count != null ? dashData.generated_order_count : "—";
+              paperDashReason.innerText = nor
+                ? "주문 미생성 사유: " + nor
+                : "주문 미생성 사유: (해당 없음 — 틱에서 신규 주문이 없었습니다)";
+              var acc = dashData.accepted_orders != null ? dashData.accepted_orders : "—";
+              var rej = dashData.rejected_orders != null ? dashData.rejected_orders : "—";
+              paperDashOrders.innerText =
+                "이번 틱 생성 주문 수: " +
+                goc +
+                " · 리스크 수락 " +
+                acc +
+                " / 거부 " +
+                rej +
+                " (거부=리스크 거절; 0/0 이면 전략이 신규 주문을 만들지 않은 경우가 많습니다)";
+              paperRankingList.innerHTML = "";
+              (dashData.ranking || []).slice(0, 8).forEach(function (r) {
+                var li = document.createElement("li");
+                li.innerText =
+                  (r.symbol || "") + " · score " + (r.score != null ? r.score : "") + " · " + ((r.reasons || []).join(", ") || "");
+                paperRankingList.appendChild(li);
+              });
+              paperFillsList.innerHTML = "";
+              (dashData.recent_fills || []).slice(0, 12).forEach(function (f) {
+                var li = document.createElement("li");
+                li.innerText =
+                  (f.symbol || "") +
+                  " " +
+                  (f.side || "") +
+                  " " +
+                  (f.quantity || "") +
+                  " @" +
+                  (f.price || "") +
+                  " · " +
+                  (f.filled_at || "");
+                paperFillsList.appendChild(li);
+              });
+              paperOpenOrdersList.innerHTML = "";
+              (dashData.open_orders || []).slice(0, 12).forEach(function (o) {
+                var li = document.createElement("li");
+                li.innerText =
+                  (o.symbol || "") +
+                  " " +
+                  (o.side || "") +
+                  " rem " +
+                  (o.remaining_quantity || "") +
+                  "/" +
+                  (o.quantity || "") +
+                  " · " +
+                  (o.order_id || "").slice(0, 14);
+                paperOpenOrdersList.appendChild(li);
+              });
+              if (dashData.open_orders_error)
+                paperOpenOrdersList.innerHTML +=
+                  '<li style="color:#b45309">미체결 조회 오류: ' + String(dashData.open_orders_error) + "</li>";
+              if (dashData.recent_fills_error)
+                paperFillsList.innerHTML +=
+                  '<li style="color:#b45309">체결 조회 오류: ' + String(dashData.recent_fills_error) + "</li>";
+            } else {
+              paperDashPanel.style.display = "none";
+            }
           } catch {
             message.innerText = "network error";
           }

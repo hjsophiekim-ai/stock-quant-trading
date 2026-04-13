@@ -72,9 +72,8 @@ def _broker_chain_ok(broker_probe: dict[str, Any], user_snap: dict[str, Any] | N
 def _dashboard_todos() -> list[str]:
     """UI에 그대로 노출 가능한 미구현·한계 설명."""
     return [
-        "open_orders: KIS broker 미체결 조회 기반. 현재 서버 런타임 계정 기준이며 앱 사용자별 1:1 미체결 동기화는 TODO.",
-        "recent_fills·손익 카드: portfolio_data 마지막 sync 스냅샷 및 fills.jsonl. 서버 .env KIS가 앱 모의 계정과 다르면 대시보드 정합이 어긋날 수 있음(TODO: 사용자별 sync).",
-        "paper_trading: 앱 Paper 세션은 사용자 모의 자격으로 KIS 주문 — 전역 /api/runtime-engine 과 별도. 단일 세션(한 사용자만 동시 실행).",
+        "Paper 세션 실행 중에는 미체결·최근체결·포지션·랭킹 후보가 사용자 모의 계정(/api/paper-trading/dashboard-data)과 동일 소스입니다.",
+        "손익 카드·월간 수익률 등 일부 지표는 여전히 서버 포트폴리오 sync·성과 집계 기준일 수 있습니다(계정 불일치 시 별도 안내).",
         "monthly_return_pct: performance_aggregate 와 /api/performance 동일(equity 곡선, UTC 월앵커).",
     ]
 
@@ -214,6 +213,49 @@ def _risk_banner_from_aggregate(
     return {"level": "info", "message": "리스크·연결 상태 양호 (최근 치명 이벤트 없음)"}
 
 
+def _server_runtime_banner(broker_probe: dict[str, Any], user_broker_snap: dict[str, Any] | None) -> dict[str, str]:
+    ok = _broker_chain_ok(broker_probe, user_broker_snap)
+    if ok:
+        return {
+            "level": "info",
+            "title": "서버 런타임(.env) 상태",
+            "message": "KIS 토큰·프로브 정상(서버 운영·포트폴리오 sync 기준).",
+        }
+    msg = str(broker_probe.get("message") or broker_probe.get("status") or "오류")
+    return {
+        "level": "critical",
+        "title": "서버 런타임(.env) 상태",
+        "message": f"토큰/설정 문제: {msg} — 앱 Paper 세션과는 별도 계정입니다.",
+    }
+
+
+def _user_paper_banner(paper_st: dict[str, Any], psd: dict[str, Any] | None) -> dict[str, str]:
+    if paper_st.get("status") not in ("running", "risk_off") or not paper_st.get("user_session_active"):
+        return {
+            "level": "info",
+            "title": "사용자 Paper 세션 상태",
+            "message": "Paper 세션 미실행 — 미체결/체결/포지션은 서버 sync 기준으로 표시될 수 있습니다.",
+        }
+    err = str(paper_st.get("last_error") or "").strip()
+    if err:
+        return {
+            "level": "critical",
+            "title": "사용자 Paper 세션 상태",
+            "message": f"틱 오류: {err}",
+        }
+    if psd and int(psd.get("failure_streak") or 0) > 0:
+        return {
+            "level": "warning",
+            "title": "사용자 Paper 세션 상태",
+            "message": f"실패 연속 {psd.get('failure_streak')} (서버 .env 실패와 무관)",
+        }
+    return {
+        "level": "info",
+        "title": "사용자 Paper 세션 상태",
+        "message": "세션 실행 중 — 미체결·체결·포지션·후보는 앱 모의 계정 기준입니다.",
+    }
+
+
 def _recent_logs_aggregate(cfg: BackendSettings) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for line in _tail_text_lines(Path(cfg.runtime_error_log_path), max_lines=25):
@@ -317,12 +359,6 @@ def dashboard_summary(authorization: str | None = Header(default=None)) -> dict[
     position_count = int(portfolio.get("position_count") or 0) if portfolio else 0
     positions = list(portfolio.get("positions") or []) if portfolio else []
 
-    open_orders, orders_err = _safe_open_orders()
-    recent_fills, fills_err = _safe_recent_fills(cfg, limit=15)
-
-    store = TrackedOrderStore(cfg.order_tracked_store_json)
-    tracked_active = len(filter_active_submitted(store.list_all()))
-
     sig_snap = get_swing_signal_engine().get_snapshot()
     strategy_block: dict[str, Any]
     if sig_snap is None:
@@ -342,10 +378,55 @@ def dashboard_summary(authorization: str | None = Header(default=None)) -> dict[
             "top_signals": (j.get("signals") or [])[:5],
         }
 
+    open_orders, orders_err = _safe_open_orders()
+    recent_fills, fills_err = _safe_recent_fills(cfg, limit=15)
+
+    paper_trading_status = _paper_trading_status()
+    paper_session_dashboard: dict[str, Any] | None = None
+    use_paper_dashboard = bool(
+        user
+        and str(paper_trading_status.get("session_user_id") or "") == user.id
+        and paper_trading_status.get("status") == "running"
+        and paper_trading_status.get("user_session_active")
+    )
+    if use_paper_dashboard:
+        try:
+            from backend.app.engine.paper_session_controller import get_paper_session_controller
+
+            paper_session_dashboard = get_paper_session_controller().get_dashboard_payload(user.id)
+        except Exception as exc:
+            paper_session_dashboard = {"ok": False, "error": str(exc)}
+    psd = paper_session_dashboard if isinstance(paper_session_dashboard, dict) and paper_session_dashboard.get("ok") else None
+
+    if psd:
+        open_orders = list(psd.get("open_orders") or [])
+        orders_err = psd.get("open_orders_error")
+        recent_fills = list(psd.get("recent_fills") or [])
+        fills_err = psd.get("recent_fills_error")
+        positions = list(psd.get("positions") or [])
+        position_count = len(positions)
+        screener_dash = dict(screener_dash)
+        ranking_rows = psd.get("ranking") or []
+        screener_dash["candidates"] = [
+            {"symbol": r.get("symbol"), "total_score": r.get("score"), "reasons": list(r.get("reasons") or [])}
+            for r in ranking_rows
+        ]
+        if psd.get("regime"):
+            screener_dash["regime"] = psd.get("regime")
+        strategy_block = dict(strategy_block)
+        if psd.get("regime"):
+            strategy_block["market_regime"] = psd.get("regime")
+        strategy_block["paper_no_order_reason"] = psd.get("no_order_reason")
+        strategy_block["paper_generated_order_count"] = psd.get("generated_order_count")
+
+    store = TrackedOrderStore(cfg.order_tracked_store_json)
+    tracked_active = len(filter_active_submitted(store.list_all()))
+
     persisted = rt.get("persisted") or {}
     last_hb = persisted.get("heartbeat_at") or (rt.get("volatile_summary") or {}).get("last_loop_at")
 
-    paper_trading_status = _paper_trading_status()
+    server_rt_banner = _server_runtime_banner(broker_probe, user_broker_snap)
+    paper_usr_banner = _user_paper_banner(paper_trading_status, psd)
 
     return {
         "updated_at_utc": now_iso,
@@ -422,6 +503,13 @@ def dashboard_summary(authorization: str | None = Header(default=None)) -> dict[
             ),
         },
         "user_broker_account": user_broker_snap,
+        "server_runtime_banner": server_rt_banner,
+        "user_paper_banner": paper_usr_banner,
+        "paper_session_dashboard": paper_session_dashboard,
+        "dashboard_scope": {
+            "positions_open_orders_fills": "user_paper_session" if psd else "server_env",
+            "paper_active": bool(psd),
+        },
         "value_sources": {
             "today_return_pct": "performance_aggregate.build_dashboard_performance_block (pnl_history, /performance 동일)",
             "monthly_return_pct": "performance_aggregate (equity curve, /performance 동일)",
@@ -429,20 +517,28 @@ def dashboard_summary(authorization: str | None = Header(default=None)) -> dict[
             "performance_aligned": "fills FIFO + KIS/KRX 비율·체결 컬럼, pnl_history 수익률",
             "realized_pnl": "portfolio_snapshot.realized_pnl",
             "unrealized_pnl": "portfolio_snapshot.unrealized_pnl",
-            "current_positions": "portfolio_snapshot.positions (KIS balance + fills replay merge)",
-            "open_orders": "kis_broker_get_open_orders_via_order_engine (server runtime account)",
-            "recent_fills": "portfolio_data/fills.jsonl",
+            "current_positions": (
+                "paper_session_user_kis (GET /api/paper-trading/dashboard-data)"
+                if psd
+                else "portfolio_snapshot.positions (KIS balance + fills replay merge)"
+            ),
+            "open_orders": (
+                "paper_session_user_kis" if psd else "kis_broker_get_open_orders_via_order_engine (server runtime account)"
+            ),
+            "recent_fills": "paper_session_user_kis" if psd else "portfolio_data/fills.jsonl",
             "broker_connection_status": "broker_probe(server_env) + user_broker_account(connection_status)",
             "runtime_engine_status": "runtime_engine.status()",
             "risk_status": "risk.service.build_public_risk_status()",
-            "selected_candidates": "screener_engine.latest_snapshot.candidates",
+            "selected_candidates": (
+                "paper_tick_ranking" if psd else "screener_engine.latest_snapshot.candidates"
+            ),
             "current_market_regime": "strategy_signal_snapshot.market_regime + screener_snapshot.regime",
         },
         "data_quality": {
-            "open_orders_user_scoped": False,
-            "recent_fills_user_scoped": False,
+            "open_orders_user_scoped": bool(psd),
+            "recent_fills_user_scoped": bool(psd),
             "monthly_return_estimated": False,
-            "regime_dual_source": True,
+            "regime_dual_source": not bool(psd),
         },
         "dashboard_todos": _dashboard_todos(),
         "paper_trading": paper_trading_status,
@@ -458,8 +554,8 @@ def dashboard_summary(authorization: str | None = Header(default=None)) -> dict[
                 and not broker_probe.get("token_ok")
             ),
             "paper_dashboard_note": (
-                "Paper 자동매매는 앱에 저장한 모의 자격만 사용합니다. "
-                "서버 .env KIS와 다르면 런타임/오픈오더·포트폴리오 sync 표시가 앱 계정과 어긋날 수 있습니다."
+                "Paper 세션 실행 중에는 미체결·체결·포지션·랭킹 후보가 사용자 모의 계정 기준으로 표시됩니다. "
+                "서버 .env 토큰 실패는 Paper 틱과 별개일 수 있습니다."
             ),
         },
     }

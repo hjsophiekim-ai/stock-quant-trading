@@ -9,7 +9,7 @@ import pandas as pd
 
 from app.brokers.base_broker import BaseBroker
 from app.brokers.paper_broker import PaperBroker
-from app.orders.models import OrderSignal
+from app.orders.models import OrderRequest, OrderSignal
 from app.orders.order_manager import OrderManager
 from app.portfolio.pnl import compute_cumulative_return_pct, compute_daily_return_pct
 from app.risk.kill_switch import KillSwitch
@@ -18,7 +18,41 @@ from app.scheduler.equity_tracker import EquityTracker
 from app.strategy.base_strategy import StrategyContext
 from app.scheduler.kis_universe import build_mock_volatility_series
 from app.strategy.filters import filter_quality_swing_candidates
+from app.strategy.market_regime import MarketRegimeConfig, MarketRegimeInputs, classify_market_regime
 from app.strategy.swing_strategy import SwingStrategy
+
+
+def _order_request_to_dict(order: OrderRequest) -> dict[str, object]:
+    return {
+        "symbol": order.symbol,
+        "side": order.side,
+        "quantity": order.quantity,
+        "price": order.price,
+        "stop_loss_pct": order.stop_loss_pct,
+        "strategy_id": order.strategy_id,
+    }
+
+
+def _no_order_reason(
+    *,
+    halted: bool,
+    halt_message: str | None,
+    candidate_count: int,
+    generated_order_count: int,
+    regime: str | None,
+    position_count: int,
+) -> str:
+    if halted:
+        return (halt_message or "").strip() or "사이클 중단"
+    if candidate_count == 0:
+        return "후보 종목 없음"
+    if regime == "high_volatility_risk" and generated_order_count == 0:
+        return "고변동 리스크 국면으로 신규 진입 차단"
+    if generated_order_count == 0 and position_count > 0:
+        return "기존 포지션 보유 중이며 추가 진입 없음(청산·홀드만 해당할 수 있음)"
+    if generated_order_count == 0:
+        return "후보는 있으나 전략 진입 조건 미충족"
+    return ""
 
 
 @dataclass
@@ -41,7 +75,33 @@ class SchedulerJobs:
         universe = universe if universe is not None else self._build_mock_universe()
         if universe.empty:
             self.logger.error("[ABORT] Empty price universe; skip cycle")
-            return {"halted": True, "reason": "EMPTY_UNIVERSE", "message": "No OHLC data for configured symbols"}
+            return {
+                "halted": True,
+                "reason": "EMPTY_UNIVERSE",
+                "message": "No OHLC data for configured symbols",
+                "candidate_count": 0,
+                "candidates": [],
+                "generated_order_count": 0,
+                "generated_orders": [],
+                "regime": None,
+                "no_order_reason": "유니버스 가격 데이터 없음",
+                "last_diagnostics": [],
+            }
+
+        kospi = kospi_index if kospi_index is not None else self._build_mock_index("KOSPI")
+        sp500 = sp500_index if sp500_index is not None else self._build_mock_index("SP500")
+        vol = build_mock_volatility_series(kospi)
+        rcfg = getattr(self.strategy, "regime_config", MarketRegimeConfig())
+        regime_snap = classify_market_regime(
+            MarketRegimeInputs(kospi=kospi, sp500=sp500, volatility=vol),
+            rcfg,
+        )
+        regime_label = regime_snap.regime
+
+        candidates = filter_quality_swing_candidates(universe)
+        candidate_count = len(candidates)
+        candidates_sorted = sorted(list(candidates))
+        self.logger.info("[PRE-MARKET] Candidate count=%s symbols=%s", candidate_count, candidates_sorted)
 
         snapshot_gate = self._build_risk_snapshot(universe)
         if self.kill_switch is not None:
@@ -57,6 +117,8 @@ class SchedulerJobs:
                 self.kill_switch.state,
                 self.kill_switch.last_reason,
             )
+            pos_n = len(self.broker.get_positions())
+            halt_msg = f"킬스위치 활성 — {self.kill_switch.last_reason}"
             return {
                 "halted": True,
                 "kill_state": self.kill_switch.state,
@@ -64,16 +126,23 @@ class SchedulerJobs:
                 "equity": snapshot_gate.equity,
                 "daily_pnl_pct": snapshot_gate.daily_pnl_pct,
                 "total_pnl_pct": snapshot_gate.total_pnl_pct,
+                "candidate_count": candidate_count,
+                "candidates": candidates_sorted,
+                "generated_order_count": 0,
+                "generated_orders": [],
+                "regime": regime_label,
+                "no_order_reason": _no_order_reason(
+                    halted=True,
+                    halt_message=halt_msg,
+                    candidate_count=candidate_count,
+                    generated_order_count=0,
+                    regime=regime_label,
+                    position_count=pos_n,
+                ),
+                "last_diagnostics": [],
             }
 
-        self.logger.info("[PRE-MARKET] Filtering quality swing candidates")
-        candidates = filter_quality_swing_candidates(universe)
-        self.logger.info("[PRE-MARKET] Candidate count=%s symbols=%s", len(candidates), candidates)
-
         self.logger.info("[INTRADAY] Price check and strategy signal generation")
-        kospi = kospi_index if kospi_index is not None else self._build_mock_index("KOSPI")
-        sp500 = sp500_index if sp500_index is not None else self._build_mock_index("SP500")
-        vol = build_mock_volatility_series(kospi)
         context = StrategyContext(
             prices=universe,
             kospi_index=kospi,
@@ -123,6 +192,21 @@ class SchedulerJobs:
             }
             for r in getattr(self.strategy, "last_ranking", [])
         ]
+        report["candidate_count"] = candidate_count
+        report["candidates"] = candidates_sorted
+        report["generated_order_count"] = len(strategy_orders)
+        report["generated_orders"] = [_order_request_to_dict(o) for o in strategy_orders]
+        report["regime"] = regime_label
+        report["last_diagnostics"] = list(getattr(self.strategy, "last_diagnostics", []) or [])
+        pos_n = len(self.broker.get_positions())
+        report["no_order_reason"] = _no_order_reason(
+            halted=False,
+            halt_message=None,
+            candidate_count=candidate_count,
+            generated_order_count=len(strategy_orders),
+            regime=regime_label,
+            position_count=pos_n,
+        )
         self.logger.info("[DONE] Daily cycle complete: %s", report)
         return report
 

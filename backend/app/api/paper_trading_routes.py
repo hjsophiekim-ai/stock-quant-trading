@@ -258,6 +258,13 @@ def get_paper_diagnostics() -> dict[str, object]:
     return get_paper_session_controller().diagnostics_payload()
 
 
+@router.get("/dashboard-data")
+def get_paper_dashboard_data(authorization: str | None = Header(default=None)) -> dict[str, object]:
+    """사용자 Paper 계정 기준 포지션·미체결·체결·틱 리포트(대시보드와 동일 소스)."""
+    user = _paper_user(authorization)
+    return get_paper_session_controller().get_dashboard_payload(user.id)
+
+
 @router.get("/logs")
 def get_paper_logs() -> dict[str, object]:
     ctrl = get_paper_session_controller()

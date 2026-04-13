@@ -30,4 +30,6 @@ export interface BrokerConnectionTestResponse {
   balance_check_ok?: boolean | null;
   balance_rt_cd?: string | null;
   balance_cash_hint?: string | null;
+  /** 연결 테스트 단계·API 베이스(mock/live)·토큰 HTTP 등 (앱 JWT와 구분용) */
+  debug?: Record<string, unknown> | null;
 }

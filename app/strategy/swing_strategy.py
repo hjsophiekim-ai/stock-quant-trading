@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 import pandas as pd
 
@@ -40,6 +41,8 @@ class SwingStrategy(BaseStrategy):
     sideways_strategy: SidewaysStrategy = field(default_factory=SidewaysStrategy)
     last_ranking: list[RankedCandidate] = field(default_factory=list)
     last_ranking_report: list[RankingReportRow] = field(default_factory=list)
+    last_regime_label: str | None = field(default=None, repr=False)
+    last_diagnostics: list[dict[str, Any]] = field(default_factory=list, repr=False)
 
     def generate_signals(self, context: StrategyContext) -> list[StrategySignal]:
         regime = classify_market_regime(
@@ -50,6 +53,7 @@ class SwingStrategy(BaseStrategy):
             ),
             self.regime_config,
         )
+        self.last_regime_label = regime.regime
         candidates = filter_quality_swing_candidates(context.prices)
         ranked = rank_candidates(
             prices_df=context.prices,
@@ -63,15 +67,68 @@ class SwingStrategy(BaseStrategy):
         reduced_context = _filter_context_by_candidates(context, top_symbols)
 
         if regime.regime == "bullish_trend":
-            return self.bull_strategy.generate_signals(reduced_context)
-        if regime.regime == "bearish_trend":
-            return self.bear_strategy.generate_signals(reduced_context)
-        if regime.regime == "sideways":
-            return self.sideways_strategy.generate_signals(reduced_context)
+            signals = self.bull_strategy.generate_signals(reduced_context)
+        elif regime.regime == "bearish_trend":
+            signals = self.bear_strategy.generate_signals(reduced_context)
+        elif regime.regime == "sideways":
+            signals = self.sideways_strategy.generate_signals(reduced_context)
+        else:
+            # high_volatility_risk: block new entries, only allow risk-reduction exits.
+            defensive = BearStrategy(config=BearStrategyConfig(allow_new_entries=False, order_quantity=0, stop_loss_pct=2.0))
+            signals = defensive.generate_signals(reduced_context)
 
-        # high_volatility_risk: block new entries, only allow risk-reduction exits.
-        defensive = BearStrategy(config=BearStrategyConfig(allow_new_entries=False, order_quantity=0, stop_loss_pct=2.0))
-        return defensive.generate_signals(reduced_context)
+        self._build_last_diagnostics(context, regime.regime, signals)
+        return signals
+
+    def _build_last_diagnostics(
+        self,
+        context: StrategyContext,
+        regime_str: str,
+        signals: list[StrategySignal],
+    ) -> None:
+        """랭킹 상위·후보 종목별 스윙 지표 스냅샷(진입 여부·차단 사유)."""
+        buy_syms = {s.symbol for s in signals if s.side == "buy"}
+        sym_list = [r.symbol for r in self.last_ranking]
+        if not sym_list:
+            cand = filter_quality_swing_candidates(context.prices)
+            sym_list = sorted(list(cand))[: max(5, self.config.ranking_top_n)]
+
+        rows: list[dict[str, Any]] = []
+        for sym in sym_list:
+            sdf = context.prices[context.prices["symbol"] == sym]
+            if sdf.empty:
+                continue
+            bs = build_symbol_signal(sdf)
+            entered = sym in buy_syms
+            blocked: str | None = None
+            if not entered:
+                if regime_str == "high_volatility_risk":
+                    blocked = "고변동 리스크 국면으로 신규 진입 차단"
+                elif not should_enter_long(bs):
+                    miss: list[str] = []
+                    if not bool(bs.get("ma20_gt_ma60")):
+                        miss.append("MA20≤MA60")
+                    if not bool(bs.get("drop_3d_in_range")):
+                        miss.append("3일수익률 -6~-3% 밖")
+                    if not bool(bs.get("rsi_lt_40")):
+                        miss.append("RSI≥40")
+                    if not bool(bs.get("bullish_reversal")):
+                        miss.append("역추세 반전 캔들 아님")
+                    blocked = "스윙 진입 조건 미충족: " + ", ".join(miss) if miss else "스윙 진입 조건 미충족"
+                else:
+                    blocked = "국면·전략 분기에서 매수 신호 없음"
+            rows.append(
+                {
+                    "symbol": sym,
+                    "ma20_gt_ma60": bool(bs.get("ma20_gt_ma60")),
+                    "drop_3d_in_range": bool(bs.get("drop_3d_in_range")),
+                    "rsi_lt_40": bool(bs.get("rsi_lt_40")),
+                    "bullish_reversal": bool(bs.get("bullish_reversal")),
+                    "entered": entered,
+                    "blocked_reason": blocked,
+                }
+            )
+        self.last_diagnostics = rows
 
     def generate_orders(self, context: StrategyContext) -> list[OrderRequest]:
         return super().generate_orders(context)

@@ -145,6 +145,8 @@
         </div>
         <p class="muted" id="updatedAt"></p>
         <div class="risk-banner" id="riskBanner">Risk alert loading...</div>
+        <div class="risk-banner info" id="serverRuntimeBanner" style="display: none"></div>
+        <div class="risk-banner info" id="userPaperBanner" style="display: none"></div>
         <div id="brokerGate" class="card" style="display: none; background: #fffbeb; border-color: #fbbf24; margin-bottom: 12px"></div>
         <div class="cards">
           <div class="card">
@@ -365,6 +367,23 @@
 
           setRiskBanner(summary.risk_banner?.level || "info", summary.risk_banner?.message || "");
 
+          function setScopeBanner(elId, b) {
+            const el = document.getElementById(elId);
+            if (!el) return;
+            if (!b || !b.message) {
+              el.style.display = "none";
+              el.innerText = "";
+              return;
+            }
+            el.style.display = "block";
+            el.className =
+              "risk-banner " +
+              (b.level === "critical" ? "critical" : b.level === "warning" ? "warning" : "info");
+            el.innerText = (b.title ? b.title + " — " : "") + b.message;
+          }
+          setScopeBanner("serverRuntimeBanner", summary.server_runtime_banner);
+          setScopeBanner("userPaperBanner", summary.user_paper_banner);
+
           document.getElementById("mode").innerText = summary.mode || "-";
           document.getElementById("liveArmed").innerText = summary.live_execution_armed
             ? "⚠ live 실행 다중 확인 완료"
@@ -464,7 +483,7 @@
                 "</td><td>" +
                 p.quantity +
                 "</td><td>" +
-                (p.average_price_kis ?? p.average_price_internal) +
+                (p.average_price_kis ?? p.average_price ?? p.average_price_internal) +
                 "</td><td>" +
                 (p.current_price ?? "-") +
                 "</td><td>" +

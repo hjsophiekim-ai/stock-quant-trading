@@ -150,31 +150,65 @@ class BrokerSecretService:
                     ),
                 )
             else:
-                conn.execute(
-                    """
-                    UPDATE broker_accounts
-                    SET kis_app_key_enc = ?,
-                        kis_app_secret_enc = ?,
-                        kis_account_no_enc = ?,
-                        kis_account_product_code_enc = ?,
-                        trading_mode = ?,
-                        connection_status = 'unknown',
-                        connection_message = NULL,
-                        cached_access_token_enc = NULL,
-                        cached_token_issued_at = NULL,
-                        updated_at = ?
-                    WHERE user_id = ?
-                    """,
-                    (
-                        self._encrypt(payload.kis_app_key),
-                        self._encrypt(payload.kis_app_secret),
-                        self._encrypt(payload.kis_account_no),
-                        self._encrypt(payload.kis_account_product_code),
-                        payload.trading_mode,
-                        now,
-                        user_id,
-                    ),
+                old_key = self._decrypt(row["kis_app_key_enc"])
+                old_secret = self._decrypt(row["kis_app_secret_enc"])
+                old_mode = str(row["trading_mode"] or "paper").strip().lower()
+                new_mode = str(payload.trading_mode or "paper").strip().lower()
+                invalidate_kis_oauth_cache = (
+                    old_key != payload.kis_app_key
+                    or old_secret != payload.kis_app_secret
+                    or old_mode != new_mode
                 )
+                if invalidate_kis_oauth_cache:
+                    conn.execute(
+                        """
+                        UPDATE broker_accounts
+                        SET kis_app_key_enc = ?,
+                            kis_app_secret_enc = ?,
+                            kis_account_no_enc = ?,
+                            kis_account_product_code_enc = ?,
+                            trading_mode = ?,
+                            connection_status = 'unknown',
+                            connection_message = NULL,
+                            cached_access_token_enc = NULL,
+                            cached_token_issued_at = NULL,
+                            updated_at = ?
+                        WHERE user_id = ?
+                        """,
+                        (
+                            self._encrypt(payload.kis_app_key),
+                            self._encrypt(payload.kis_app_secret),
+                            self._encrypt(payload.kis_account_no),
+                            self._encrypt(payload.kis_account_product_code),
+                            payload.trading_mode,
+                            now,
+                            user_id,
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE broker_accounts
+                        SET kis_app_key_enc = ?,
+                            kis_app_secret_enc = ?,
+                            kis_account_no_enc = ?,
+                            kis_account_product_code_enc = ?,
+                            trading_mode = ?,
+                            connection_status = 'unknown',
+                            connection_message = NULL,
+                            updated_at = ?
+                        WHERE user_id = ?
+                        """,
+                        (
+                            self._encrypt(payload.kis_app_key),
+                            self._encrypt(payload.kis_app_secret),
+                            self._encrypt(payload.kis_account_no),
+                            self._encrypt(payload.kis_account_product_code),
+                            payload.trading_mode,
+                            now,
+                            user_id,
+                        ),
+                    )
             conn.commit()
         return self.get_account(user_id)
 
@@ -334,13 +368,21 @@ class BrokerSecretService:
         account_no = self._decrypt(row["kis_account_no_enc"])
         account_product_code = self._decrypt(row["kis_account_product_code_enc"])
         api_base = self._resolve_kis_api_base(str(row["trading_mode"]))
+        api_kind = "mock" if "openapivts" in (api_base or "").lower() else "live"
 
         status: ConnectionStatus = "failed"
-        message = "토큰 발급 실패"
+        message = "알 수 없는 오류"
         ok = False
         balance_check_ok: bool | None = None
         balance_rt_cd: str | None = None
         balance_cash_hint: str | None = None
+        debug: dict[str, object] = {
+            "stage": "init",
+            "api_base_host": api_base,
+            "api_base_kind": api_kind,
+            "trading_mode": str(row["trading_mode"] or "paper"),
+        }
+
         validation_issues = validate_kis_inputs(
             app_key=app_key,
             app_secret=app_secret,
@@ -349,17 +391,27 @@ class BrokerSecretService:
             base_url=api_base,
         )
         if validation_issues:
-            message = " / ".join(validation_issues)
+            debug["stage"] = "validation_failed"
+            debug["validation_issues"] = validation_issues
+            message = "[입력 검증 실패] " + " / ".join(validation_issues)
         else:
+            debug["stage"] = "token_request"
             token_result = issue_access_token(
                 app_key=app_key,
                 app_secret=app_secret,
                 base_url=api_base,
                 timeout_sec=self.timeout_sec,
             )
+            debug["token_http_status"] = token_result.status_code
+            debug["token_error_code"] = token_result.error_code
             if not token_result.ok or not token_result.access_token:
-                message = token_result.message
+                debug["stage"] = "token_http_failed"
+                message = (
+                    f"[KIS OAuth 토큰 실패 · {api_kind}] HTTP={token_result.status_code or '—'} "
+                    f"code={token_result.error_code} — {token_result.message}"
+                )
             else:
+                debug["stage"] = "balance_request"
                 client = KISClient(
                     base_url=api_base,
                     timeout_sec=self.timeout_sec,
@@ -372,10 +424,16 @@ class BrokerSecretService:
                 try:
                     bal = client.get_balance(account_no, account_product_code)
                 except KISClientError as exc:
-                    message = f"토큰은 성공했으나 잔고조회 실패: {exc}"
+                    debug["stage"] = "balance_exception"
+                    debug["balance_error"] = str(exc)
+                    ctx = getattr(exc, "kis_context", {}) or {}
+                    if ctx:
+                        debug["kis_context"] = {k: ctx.get(k) for k in ("path", "tr_id", "http_status") if ctx.get(k)}
+                    message = f"[잔고조회 실패 · {api_kind}] 토큰은 성공했으나 잔고 API 오류: {exc}"
                     balance_check_ok = False
                 else:
                     balance_rt_cd = str(bal.get("rt_cd", ""))
+                    debug["balance_rt_cd"] = balance_rt_cd
                     if rt_cd_ok(bal):
                         balance_check_ok = True
                         snap = balance_cash_summary(bal)
@@ -383,12 +441,17 @@ class BrokerSecretService:
                         balance_cash_hint = ", ".join(cash_bits[:4]) if cash_bits else "(요약 필드 없음)"
                         ok = True
                         status = "success"
-                        message = f"토큰·잔고조회 성공 — {balance_cash_hint}"
+                        debug["stage"] = "success"
+                        message = f"[성공 · {api_kind}] 토큰·잔고조회 — {balance_cash_hint}"
                         if token_result.access_token:
                             self._persist_cached_token(user_id, token_result.access_token)
                     else:
                         balance_check_ok = False
-                        message = f"잔고조회 비정상 응답(rt_cd={balance_rt_cd}). 키·계좌·모의/실전 호스트를 확인하세요."
+                        debug["stage"] = "balance_rt_cd_failed"
+                        message = (
+                            f"[잔고 비정상 응답 · {api_kind}] rt_cd={balance_rt_cd}. "
+                            "키·계좌·모의/실전 호스트를 확인하세요."
+                        )
 
         now = _utc_now_iso()
         with self._connect() as conn:
@@ -411,4 +474,5 @@ class BrokerSecretService:
             balance_check_ok=balance_check_ok,
             balance_rt_cd=balance_rt_cd,
             balance_cash_hint=balance_cash_hint,
+            debug=debug,
         )

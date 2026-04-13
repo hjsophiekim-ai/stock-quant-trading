@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -38,3 +38,4 @@ class BrokerConnectionTestResponse(BaseModel):
     balance_check_ok: bool | None = None
     balance_rt_cd: str | None = None
     balance_cash_hint: str | None = None
+    debug: dict[str, Any] | None = None

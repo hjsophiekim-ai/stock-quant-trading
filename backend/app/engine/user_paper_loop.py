@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -64,6 +65,9 @@ class UserPaperTradingLoop:
         self._kospi_sig: str | None = None
         self._kospi_ts: float = 0.0
         self._kospi_df: Any = None
+        self._last_token_failure_at_iso: str | None = None
+        self._last_token_error_code: str | None = None
+        self._last_token_http_status: int | None = None
 
     def _issue_token(self) -> str:
         tr = issue_access_token(
@@ -72,12 +76,17 @@ class UserPaperTradingLoop:
             base_url=self._api_base,
             timeout_sec=12,
         )
+        self._last_token_http_status = tr.status_code
         if not tr.ok or not tr.access_token:
             code = tr.error_code or ""
+            self._last_token_failure_at_iso = datetime.now(timezone.utc).isoformat()
+            self._last_token_error_code = code or "TOKEN_FAILURE"
             msg = tr.message or "token_failed"
             if code == "TOKEN_RATE_LIMIT":
                 raise RuntimeError("TOKEN_RATE_LIMIT: " + msg)
             raise RuntimeError(msg)
+        self._last_token_failure_at_iso = None
+        self._last_token_error_code = None
         self._access_token = tr.access_token
         self._token_monotonic = time.monotonic()
         self._token_issued_locally = True
@@ -145,7 +154,10 @@ class UserPaperTradingLoop:
                     "kis_context": {},
                     "token_source": self.token_source_for_diagnostics(),
                     "failure_kind": fk,
-                    "token_error_code": "TOKEN_RATE_LIMIT" if is_rl else "TOKEN_FAILURE",
+                    "token_error_code": "TOKEN_RATE_LIMIT" if is_rl else (self._last_token_error_code or "TOKEN_FAILURE"),
+                    "paper_loop_fresh_issue": False,
+                    "paper_loop_last_token_failure_at": self._last_token_failure_at_iso,
+                    "paper_loop_last_token_http_status": self._last_token_http_status,
                 }
 
             failed_step = "build_jobs"
@@ -236,6 +248,11 @@ class UserPaperTradingLoop:
                 "report": report,
                 "token_source": self.token_source_for_diagnostics(),
                 "token_cache_source": self.token_source_for_diagnostics(),
+                "token_error_code": None,
+                "paper_loop_fresh_issue": self._token_issued_locally,
+                "paper_loop_last_token_failure_at": self._last_token_failure_at_iso,
+                "paper_loop_last_token_error_code": self._last_token_error_code,
+                "paper_loop_last_token_http_status": self._last_token_http_status,
                 "universe_cache_hit": universe_cache_hit,
                 "kospi_cache_hit": kospi_cache_hit,
                 "request_budget_mode": "paper_conserve",
@@ -280,3 +297,62 @@ class UserPaperTradingLoop:
             {"symbol": p.symbol, "quantity": p.quantity, "average_price": p.average_price}
             for p in broker.get_positions()
         ]
+
+    def _paper_broker(self) -> KisPaperBroker:
+        client = self._kis_client()
+        return KisPaperBroker(
+            kis_client=client,
+            account_no=self._account_no,
+            account_product_code=self._product_code,
+            logger=logger,
+        )
+
+    def fetch_open_orders_payload(self) -> dict[str, Any]:
+        """KIS 모의 미체결(nccs). 실패 시 error 문자열, items 는 항상 리스트."""
+        items: list[dict[str, Any]] = []
+        err: str | None = None
+        try:
+            for o in self._paper_broker().get_open_orders():
+                items.append(
+                    {
+                        "order_id": o.order_id,
+                        "symbol": o.symbol,
+                        "side": o.side,
+                        "quantity": o.quantity,
+                        "remaining_quantity": o.remaining_quantity,
+                        "price": o.price,
+                        "created_at": o.created_at.isoformat(),
+                    }
+                )
+        except Exception as exc:
+            err = f"{type(exc).__name__}: {exc}"
+            logger.warning("fetch_open_orders_payload failed: %s", err)
+        return {"items": items, "error": err}
+
+    def fetch_recent_fills_payload(self, *, limit: int = 20) -> dict[str, Any]:
+        """당일 체결(CCLD). 최신 순 최대 limit 건."""
+        items: list[dict[str, Any]] = []
+        err: str | None = None
+        try:
+            fills = self._paper_broker().get_fills()
+            sorted_fills = sorted(
+                fills,
+                key=lambda f: f.filled_at.timestamp() if f.filled_at else 0.0,
+                reverse=True,
+            )
+            for fl in sorted_fills[: max(0, limit)]:
+                items.append(
+                    {
+                        "fill_id": fl.fill_id,
+                        "order_id": fl.order_id,
+                        "symbol": fl.symbol,
+                        "side": fl.side,
+                        "quantity": fl.quantity,
+                        "price": fl.fill_price,
+                        "filled_at": fl.filled_at.isoformat() if fl.filled_at else None,
+                    }
+                )
+        except Exception as exc:
+            err = f"{type(exc).__name__}: {exc}"
+            logger.warning("fetch_recent_fills_payload failed: %s", err)
+        return {"items": items, "error": err}

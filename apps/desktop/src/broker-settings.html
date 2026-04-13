@@ -329,20 +329,67 @@
     <script src="./auth-session.js"></script>
     <script>
       (async function () {
+        const backendUrl = effectiveBackendUrl();
+
+        const pre = await ensureValidBackendSession(backendUrl);
+        if (!pre.ok) {
+          const toastEl0 = document.getElementById("toast");
+          toastEl0.textContent = "앱 로그인(JWT): " + (pre.message || "세션이 없습니다. 다시 로그인하세요.");
+          toastEl0.className = "toast show err";
+          setTimeout(function () {
+            window.location.href = "./login.html";
+          }, 1600);
+          return;
+        }
+
         const session = await resolveDesktopSession();
         if (!session || !session.accessToken) {
           window.location.href = "./login.html";
           return;
         }
-        const backendUrl = effectiveBackendUrl();
-        const accessToken = session.accessToken;
 
-        function authHeaders(extra) {
-          return { Authorization: "Bearer " + accessToken, ...(extra || {}) };
+        async function authHeaders(extra) {
+          const s = await resolveDesktopSession();
+          const t = s && s.accessToken ? s.accessToken : "";
+          return { Authorization: "Bearer " + t, ...(extra || {}) };
         }
 
-        function parseDetail(data) {
+        async function authFetch(url, options) {
+          const opt = options || {};
+          const hdrIn = opt.headers || {};
+          const s0 = await resolveDesktopSession();
+          const tok = s0 && s0.accessToken ? s0.accessToken : "";
+          const h0 = { ...hdrIn, Authorization: "Bearer " + tok };
+          let res = await fetch(url, { ...opt, headers: h0 });
+          if (res.status !== 401) return res;
+          const chk = await ensureValidBackendSession(backendUrl);
+          if (!chk.ok) {
+            await clearDesktopSession();
+            toast("err", "앱 JWT 만료/무효 — " + (chk.message || "다시 로그인하세요. (한투 API 오류와 별개입니다)"));
+            window.location.href = "./login.html";
+            throw new Error("session_expired");
+          }
+          const s1 = await resolveDesktopSession();
+          const t1 = s1 && s1.accessToken ? s1.accessToken : "";
+          const h1 = { ...hdrIn, Authorization: "Bearer " + t1 };
+          res = await fetch(url, { ...opt, headers: h1 });
+          if (res.status === 401) {
+            await clearDesktopSession();
+            toast("err", "앱 로그인이 거부되었습니다. 다시 로그인하세요.");
+            window.location.href = "./login.html";
+            throw new Error("session_expired");
+          }
+          return res;
+        }
+
+        function parseDetail(data, status) {
           const d = data && data.detail;
+          if (status === 401) {
+            var ds = typeof d === "string" ? d : "";
+            if (/invalid|expired|jwt|token/i.test(ds)) {
+              return "앱 로그인(JWT) 만료/무효 — 한국투자 토큰 오류가 아닙니다. 다시 로그인하세요.";
+            }
+          }
           if (typeof d === "string") return d;
           if (Array.isArray(d)) {
             return (
@@ -427,7 +474,7 @@
 
         async function refreshStatus() {
           try {
-            const res = await fetch(backendUrl + "/api/broker-accounts/me/status", { headers: authHeaders() });
+            const res = await authFetch(backendUrl + "/api/broker-accounts/me/status", { headers: await authHeaders() });
             if (res.status === 404) {
               maskedCard.style.display = "none";
               document.getElementById("deleteBtn").style.display = "none";
@@ -436,7 +483,7 @@
             }
             const data = await res.json();
             if (!res.ok) {
-              toast("err", parseDetail(data));
+              toast("err", parseDetail(data, res.status));
               return;
             }
             document.getElementById("deleteBtn").style.display = "block";
@@ -448,7 +495,7 @@
 
         async function loadAccount() {
           try {
-            const res = await fetch(backendUrl + "/api/broker-accounts/me", { headers: authHeaders() });
+            const res = await authFetch(backendUrl + "/api/broker-accounts/me", { headers: await authHeaders() });
             if (res.status === 404) {
               maskedCard.style.display = "none";
               document.getElementById("deleteBtn").style.display = "none";
@@ -458,7 +505,7 @@
             }
             const data = await res.json();
             if (!res.ok) {
-              toast("err", parseDetail(data));
+              toast("err", parseDetail(data, res.status));
               return;
             }
             maskedCard.style.display = "block";
@@ -501,14 +548,14 @@
             return;
           }
           try {
-            const res = await fetch(backendUrl + "/api/broker-accounts/me", {
+            const res = await authFetch(backendUrl + "/api/broker-accounts/me", {
               method: "POST",
-              headers: authHeaders({ "Content-Type": "application/json" }),
+              headers: await authHeaders({ "Content-Type": "application/json" }),
               body: JSON.stringify(form),
             });
             const data = await res.json();
             if (!res.ok) {
-              toast("err", parseDetail(data));
+              toast("err", parseDetail(data, res.status));
               return;
             }
             lastTestResult = "idle";
@@ -525,15 +572,15 @@
           lastTestResult = "idle";
           renderTestBadge();
           try {
-            const res = await fetch(backendUrl + "/api/broker-accounts/me/test-connection", {
+            const res = await authFetch(backendUrl + "/api/broker-accounts/me/test-connection", {
               method: "POST",
-              headers: authHeaders(),
+              headers: await authHeaders(),
             });
             const data = await res.json();
             if (!res.ok) {
               lastTestResult = "fail";
               renderTestBadge();
-              toast("err", parseDetail(data));
+              toast("err", parseDetail(data, res.status));
               return;
             }
             lastTestResult = data.ok ? "ok" : "fail";
@@ -544,7 +591,15 @@
                 : data.balance_check_ok === false
                   ? " (잔고조회 실패)"
                   : "";
-            toast(data.ok ? "ok" : "err", (data.message || (data.ok ? "연결 성공" : "연결 실패")) + extra);
+            var baseMsg = data.message || (data.ok ? "연결 성공" : "연결 실패");
+            if (data.debug) {
+              try {
+                baseMsg += "\n[진단] " + JSON.stringify(data.debug, null, 0);
+              } catch (e) {
+                /* ignore */
+              }
+            }
+            toast(data.ok ? "ok" : "err", baseMsg + extra);
             updateConnUI(data.status, data.message, null);
             await refreshStatus();
           } catch {
@@ -557,14 +612,18 @@
         async function fetchJson(url, outEl) {
           outEl.textContent = "불러오는 중…";
           try {
-            const res = await fetch(url, { headers: authHeaders() });
+            const res = await authFetch(url, { headers: await authHeaders() });
             const data = await res.json();
             if (!res.ok) {
-              outEl.textContent = parseDetail(data);
+              outEl.textContent = parseDetail(data, res.status);
               return;
             }
             outEl.textContent = JSON.stringify(data, null, 2);
           } catch (e) {
+            if (String(e && e.message) === "session_expired") {
+              outEl.textContent = "세션 만료 — 로그인 페이지로 이동합니다.";
+              return;
+            }
             outEl.textContent = String(e);
           }
         }
@@ -609,12 +668,15 @@
         document.getElementById("deleteBtn").addEventListener("click", async function () {
           if (!confirm("서버에 저장된 한국투자 연동 정보를 삭제할까요?")) return;
           try {
-            const res = await fetch(backendUrl + "/api/broker-accounts/me", { method: "DELETE", headers: authHeaders() });
+            const res = await authFetch(backendUrl + "/api/broker-accounts/me", {
+              method: "DELETE",
+              headers: await authHeaders(),
+            });
             const data = await res.json().catch(function () {
               return {};
             });
             if (!res.ok) {
-              toast("err", parseDetail(data));
+              toast("err", parseDetail(data, res.status));
               return;
             }
             toast("ok", "저장된 브로커 정보를 삭제했습니다.");
