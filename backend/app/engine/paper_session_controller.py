@@ -37,7 +37,8 @@ def paper_portfolio_sync_due(now_mono: float, last_at: float, interval_sec: floa
 
 class PaperSessionController:
     def __init__(self) -> None:
-        self._lock = threading.Lock()
+        # get_dashboard_payload 가 _lock 보유 중 status_payload() 를 호출하므로 재진입 허용(RLock).
+        self._lock = threading.RLock()
         self._run_flag = False
         self._thread: threading.Thread | None = None
         self._user_id: str | None = None
