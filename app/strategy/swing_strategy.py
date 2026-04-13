@@ -44,6 +44,10 @@ class SwingStrategy(BaseStrategy):
     last_regime_label: str | None = field(default=None, repr=False)
     last_diagnostics: list[dict[str, Any]] = field(default_factory=list, repr=False)
 
+    def paper_candidate_symbols(self, prices: pd.DataFrame) -> list[str]:
+        """Paper/스케줄러 공통: 품질 필터 후보. 서브클래스에서 완화판 오버라이드."""
+        return filter_quality_swing_candidates(prices)
+
     def generate_signals(self, context: StrategyContext) -> list[StrategySignal]:
         regime = classify_market_regime(
             MarketRegimeInputs(
@@ -54,7 +58,7 @@ class SwingStrategy(BaseStrategy):
             self.regime_config,
         )
         self.last_regime_label = regime.regime
-        candidates = filter_quality_swing_candidates(context.prices)
+        candidates = self.paper_candidate_symbols(context.prices)
         ranked = rank_candidates(
             prices_df=context.prices,
             candidate_symbols=candidates,
@@ -90,7 +94,7 @@ class SwingStrategy(BaseStrategy):
         buy_syms = {s.symbol for s in signals if s.side == "buy"}
         sym_list = [r.symbol for r in self.last_ranking]
         if not sym_list:
-            cand = filter_quality_swing_candidates(context.prices)
+            cand = self.paper_candidate_symbols(context.prices)
             sym_list = sorted(list(cand))[: max(5, self.config.ranking_top_n)]
 
         rows: list[dict[str, Any]] = []
@@ -145,6 +149,8 @@ def build_symbol_signal(symbol_df: pd.DataFrame) -> dict[str, float | bool]:
         "rsi_lt_40": bool(float(latest["rsi14"]) < 40.0) if pd.notna(latest["rsi14"]) else False,
         "bullish_reversal": bool(latest["is_bullish"]),
         "close": float(latest["close"]),
+        "ret_3d_pct": float(latest["ret_3d_pct"]) if pd.notna(latest["ret_3d_pct"]) else 0.0,
+        "rsi14": float(latest["rsi14"]) if pd.notna(latest["rsi14"]) else 50.0,
     }
     return signal
 

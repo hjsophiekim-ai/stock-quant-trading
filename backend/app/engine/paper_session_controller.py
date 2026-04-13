@@ -391,6 +391,17 @@ class PaperSessionController:
         if gen_ct is None:
             gen_ct = len(rep.get("generated_orders") or [])
 
+        cfb = rep.get("candidate_filter_breakdown") or []
+        tick_report = {
+            "candidate_count": cand,
+            "candidates": list(rep.get("candidates") or []),
+            "generated_order_count": gen_ct,
+            "generated_orders": list(rep.get("generated_orders") or []),
+            "no_order_reason": rep.get("no_order_reason") or "",
+            "last_diagnostics": list(rep.get("last_diagnostics") or []),
+            "candidate_filter_breakdown": list(cfb),
+        }
+
         return {
             "ok": True,
             "status": st.get("status"),
@@ -415,6 +426,8 @@ class PaperSessionController:
             "regime": rep.get("regime"),
             "last_diagnostics": rep.get("last_diagnostics") or [],
             "candidates": rep.get("candidates") or [],
+            "candidate_filter_breakdown": cfb,
+            "tick_report": tick_report,
         }
 
     def get_logs(self) -> list[dict[str, str]]:

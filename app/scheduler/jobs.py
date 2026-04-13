@@ -17,7 +17,7 @@ from app.risk.rules import RiskSnapshot, RiskRules
 from app.scheduler.equity_tracker import EquityTracker
 from app.strategy.base_strategy import StrategyContext
 from app.scheduler.kis_universe import build_mock_volatility_series
-from app.strategy.filters import filter_quality_swing_candidates
+from app.strategy.filters import explain_swing_candidate_filters, filter_quality_swing_candidates
 from app.strategy.market_regime import MarketRegimeConfig, MarketRegimeInputs, classify_market_regime
 from app.strategy.swing_strategy import SwingStrategy
 
@@ -81,6 +81,7 @@ class SchedulerJobs:
                 "message": "No OHLC data for configured symbols",
                 "candidate_count": 0,
                 "candidates": [],
+                "candidate_filter_breakdown": [],
                 "generated_order_count": 0,
                 "generated_orders": [],
                 "regime": None,
@@ -98,9 +99,16 @@ class SchedulerJobs:
         )
         regime_label = regime_snap.regime
 
-        candidates = filter_quality_swing_candidates(universe)
+        cand_fn = getattr(self.strategy, "paper_candidate_symbols", None)
+        if callable(cand_fn):
+            candidates = cand_fn(universe)
+        else:
+            candidates = filter_quality_swing_candidates(universe)
         candidate_count = len(candidates)
         candidates_sorted = sorted(list(candidates))
+        candidate_filter_breakdown: list = []
+        if candidate_count == 0 and not universe.empty:
+            candidate_filter_breakdown = explain_swing_candidate_filters(universe)
         self.logger.info("[PRE-MARKET] Candidate count=%s symbols=%s", candidate_count, candidates_sorted)
 
         snapshot_gate = self._build_risk_snapshot(universe)
@@ -128,6 +136,7 @@ class SchedulerJobs:
                 "total_pnl_pct": snapshot_gate.total_pnl_pct,
                 "candidate_count": candidate_count,
                 "candidates": candidates_sorted,
+                "candidate_filter_breakdown": candidate_filter_breakdown,
                 "generated_order_count": 0,
                 "generated_orders": [],
                 "regime": regime_label,
@@ -194,6 +203,7 @@ class SchedulerJobs:
         ]
         report["candidate_count"] = candidate_count
         report["candidates"] = candidates_sorted
+        report["candidate_filter_breakdown"] = candidate_filter_breakdown
         report["generated_order_count"] = len(strategy_orders)
         report["generated_orders"] = [_order_request_to_dict(o) for o in strategy_orders]
         report["regime"] = regime_label

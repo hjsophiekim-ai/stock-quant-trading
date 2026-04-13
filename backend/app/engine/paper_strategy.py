@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.strategy.base_strategy import BaseStrategy
 from app.strategy.bear_strategy import BearStrategy
 from app.strategy.bull_strategy import BullStrategy
+from app.strategy.swing_relaxed_strategy import SwingRelaxedStrategy
 from app.strategy.swing_strategy import SwingStrategy
 
 
@@ -14,4 +15,6 @@ def strategy_for_paper_id(strategy_id: str) -> BaseStrategy:
         return BullStrategy()
     if sid == "defensive_v1":
         return BearStrategy()
+    if sid == "swing_relaxed_v1":
+        return SwingRelaxedStrategy()
     return SwingStrategy()

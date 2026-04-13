@@ -88,6 +88,33 @@
         font-weight: 600;
         line-height: 1.35;
       }
+      .diag-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.82rem;
+        margin-top: 6px;
+      }
+      .diag-table th,
+      .diag-table td {
+        border: 1px solid #cbd5e1;
+        padding: 6px 8px;
+        text-align: left;
+        vertical-align: top;
+      }
+      .diag-table th {
+        background: #f1f5f9;
+      }
+      .tick-report-pre {
+        font-size: 0.82rem;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 6px;
+        padding: 10px;
+        overflow-x: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        margin: 0 0 10px;
+      }
     </style>
   </head>
   <body>
@@ -128,6 +155,7 @@
           <label>시작 시 전략: </label>
           <select id="strategyId">
             <option value="swing_v1">swing_v1</option>
+            <option value="swing_relaxed_v1">swing_relaxed_v1 (Paper 검증·완화)</option>
             <option value="bull_focus_v1">bull_focus_v1</option>
             <option value="defensive_v1">defensive_v1</option>
           </select>
@@ -142,6 +170,42 @@
         <div class="panel">
           <h3>Positions</h3>
           <ul id="positionsList"></ul>
+        </div>
+        <div class="panel" id="paperDiagPanel" style="display: none">
+          <h3>이번 틱 진단 (dashboard-data)</h3>
+          <p style="margin: 0 0 6px; font-size: 0.85rem; color: #64748b">
+            <code>tick_report</code> — 후보 수·생성 주문·<code>no_order_reason</code> 등 API 그대로 표시.
+          </p>
+          <pre id="paperTickReportPre" class="tick-report-pre"></pre>
+          <h4 style="margin: 12px 0 4px; font-size: 0.95rem">심볼별 스윙 조건 (last_diagnostics)</h4>
+          <table class="diag-table" id="paperDiagTable">
+            <thead>
+              <tr>
+                <th>symbol</th>
+                <th>ma20&gt;ma60</th>
+                <th>drop_3d(-6~-3%)</th>
+                <th>rsi&lt;40</th>
+                <th>bullish</th>
+                <th>entered</th>
+                <th>blocked_reason</th>
+              </tr>
+            </thead>
+            <tbody id="paperDiagTableBody"></tbody>
+          </table>
+          <h4 style="margin: 14px 0 4px; font-size: 0.95rem">품질 필터 분해 (후보 0일 때)</h4>
+          <p style="margin: 0 0 6px; font-size: 0.82rem; color: #64748b">
+            swing_v1 엄격 필터(MA60 기울기·거래량·60일수익 70분위) 종목별 통과 여부.
+          </p>
+          <table class="diag-table" id="paperFilterTable">
+            <thead>
+              <tr>
+                <th>symbol</th>
+                <th>passed</th>
+                <th>detail</th>
+              </tr>
+            </thead>
+            <tbody id="paperFilterTableBody"></tbody>
+          </table>
         </div>
         <div class="panel" id="paperDashPanel" style="display: none">
           <h3>Paper 틱 요약 (앱 모의 계정)</h3>
@@ -331,6 +395,10 @@
           }
         }
 
+        const paperDiagPanel = document.getElementById("paperDiagPanel");
+        const paperTickReportPre = document.getElementById("paperTickReportPre");
+        const paperDiagTableBody = document.getElementById("paperDiagTableBody");
+        const paperFilterTableBody = document.getElementById("paperFilterTableBody");
         const paperDashPanel = document.getElementById("paperDashPanel");
         const paperDashReason = document.getElementById("paperDashReason");
         const paperDashOrders = document.getElementById("paperDashOrders");
@@ -399,7 +467,65 @@
             });
 
             var stOk = statusData.status === "running" || statusData.status === "risk_off";
+            function yn(x) {
+              return x ? "Y" : "N";
+            }
             if (dashData && dashData.ok && stOk) {
+              paperDiagPanel.style.display = "block";
+              var tr = dashData.tick_report || {
+                candidate_count: dashData.candidate_count,
+                candidates: dashData.candidates,
+                generated_order_count: dashData.generated_order_count,
+                generated_orders: dashData.generated_orders,
+                no_order_reason: dashData.no_order_reason,
+                last_diagnostics: dashData.last_diagnostics,
+                candidate_filter_breakdown: dashData.candidate_filter_breakdown,
+              };
+              paperTickReportPre.textContent = JSON.stringify(tr, null, 2);
+              paperDiagTableBody.innerHTML = "";
+              (dashData.last_diagnostics || []).forEach(function (row) {
+                var trEl = document.createElement("tr");
+                trEl.innerHTML =
+                  "<td>" +
+                  (row.symbol || "") +
+                  "</td><td>" +
+                  yn(row.ma20_gt_ma60) +
+                  "</td><td>" +
+                  yn(row.drop_3d_in_range) +
+                  "</td><td>" +
+                  yn(row.rsi_lt_40) +
+                  "</td><td>" +
+                  yn(row.bullish_reversal) +
+                  "</td><td>" +
+                  yn(row.entered) +
+                  "</td><td>" +
+                  (row.blocked_reason ? String(row.blocked_reason).replace(/</g, "&lt;") : "—") +
+                  "</td>";
+                paperDiagTableBody.appendChild(trEl);
+              });
+              paperFilterTableBody.innerHTML = "";
+              (dashData.candidate_filter_breakdown || []).forEach(function (row) {
+                var trF = document.createElement("tr");
+                var dcell = "";
+                if (row.skipped) {
+                  dcell = row.reason || "skipped";
+                } else if (row.failed_reasons) {
+                  dcell = (row.failed_reasons || []).join(" · ") || "—";
+                } else {
+                  dcell = JSON.stringify(row);
+                }
+                var pass = row.passed_strict_filter === true ? "Y" : row.passed_strict_filter === false ? "N" : row.skipped ? "—" : "—";
+                trF.innerHTML =
+                  "<td>" +
+                  (row.symbol || row.error || "") +
+                  "</td><td>" +
+                  pass +
+                  "</td><td>" +
+                  dcell.replace(/</g, "&lt;") +
+                  "</td>";
+                paperFilterTableBody.appendChild(trF);
+              });
+
               paperDashPanel.style.display = "block";
               var nor = dashData.no_order_reason || "";
               var goc = dashData.generated_order_count != null ? dashData.generated_order_count : "—";
@@ -460,6 +586,7 @@
                 paperFillsList.innerHTML +=
                   '<li style="color:#b45309">체결 조회 오류: ' + String(dashData.recent_fills_error) + "</li>";
             } else {
+              paperDiagPanel.style.display = "none";
               paperDashPanel.style.display = "none";
             }
           } catch {

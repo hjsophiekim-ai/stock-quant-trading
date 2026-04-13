@@ -34,6 +34,8 @@ def test_jobs_report_includes_generated_meta() -> None:
     assert "no_order_reason" in out
     assert "regime" in out
     assert isinstance(out.get("generated_orders"), list)
+    assert "candidate_filter_breakdown" in out
+    assert isinstance(out.get("candidate_filter_breakdown"), list)
 
 
 def test_paper_dashboard_data_endpoint_requires_auth() -> None:
