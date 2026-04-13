@@ -4,7 +4,7 @@ import base64
 import hashlib
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -44,6 +44,23 @@ def _derive_fernet_key(raw: str) -> bytes:
     return base64.urlsafe_b64encode(digest)
 
 
+# KIS 접근 토큰 유효 시간(보통 24h)보다 짧게 보수적으로 재발급
+_CACHED_TOKEN_MAX_AGE = timedelta(hours=23)
+
+
+@dataclass
+class PaperSessionTokenEnsureResult:
+    ok: bool
+    access_token: str | None
+    token_cache_hit: bool
+    token_cache_source: str
+    token_cache_persisted: bool
+    cache_miss_reason: str | None
+    token_error_code: str | None
+    message: str
+    failure_code: str | None = None
+
+
 @dataclass
 class BrokerSecretService:
     db_path: str
@@ -76,6 +93,17 @@ class BrokerSecretService:
                 """
             )
             conn.commit()
+        self._migrate_cached_token_columns_once()
+
+    def _migrate_cached_token_columns_once(self) -> None:
+        with self._connect() as conn:
+            rows = conn.execute("PRAGMA table_info(broker_accounts)").fetchall()
+            col_names = {str(r[1]) for r in rows}
+            if "cached_access_token_enc" not in col_names:
+                conn.execute("ALTER TABLE broker_accounts ADD COLUMN cached_access_token_enc TEXT")
+            if "cached_token_issued_at" not in col_names:
+                conn.execute("ALTER TABLE broker_accounts ADD COLUMN cached_token_issued_at TEXT")
+            conn.commit()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -105,8 +133,9 @@ class BrokerSecretService:
                     INSERT INTO broker_accounts (
                         id, user_id, kis_app_key_enc, kis_app_secret_enc, kis_account_no_enc,
                         kis_account_product_code_enc, trading_mode, connection_status,
+                        cached_access_token_enc, cached_token_issued_at,
                         created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'unknown', NULL, NULL, ?, ?)
                     """,
                     (
                         account_id,
@@ -131,6 +160,8 @@ class BrokerSecretService:
                         trading_mode = ?,
                         connection_status = 'unknown',
                         connection_message = NULL,
+                        cached_access_token_enc = NULL,
+                        cached_token_issued_at = NULL,
                         updated_at = ?
                     WHERE user_id = ?
                     """,
@@ -185,6 +216,112 @@ class BrokerSecretService:
         with self._connect() as conn:
             conn.execute("DELETE FROM broker_accounts WHERE user_id = ?", (user_id,))
             conn.commit()
+
+    def _persist_cached_token(self, user_id: str, access_token: str) -> None:
+        now = _utc_now_iso()
+        enc = self._encrypt(access_token)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE broker_accounts
+                SET cached_access_token_enc = ?, cached_token_issued_at = ?, updated_at = ?
+                WHERE user_id = ?
+                """,
+                (enc, now, now, user_id),
+            )
+            conn.commit()
+
+    def get_cached_token(
+        self,
+        *,
+        user_id: str,
+        trading_mode: str,
+        api_base: str,
+        app_key: str,
+    ) -> str | None:
+        """연결 테스트 등으로 저장된 암호화 토큰을 복호화해 반환(만료·키 불일치 시 None)."""
+        del trading_mode, api_base, app_key  # 향후 무효화 조건 확장용
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT cached_access_token_enc, cached_token_issued_at FROM broker_accounts WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        if row is None or not row["cached_access_token_enc"]:
+            return None
+        issued = _to_dt(row["cached_token_issued_at"])
+        if issued is not None:
+            if datetime.now(timezone.utc) - issued > _CACHED_TOKEN_MAX_AGE:
+                return None
+        try:
+            return self._decrypt(row["cached_access_token_enc"])
+        except Exception:
+            return None
+
+    def ensure_cached_token_for_paper_start(self, user_id: str) -> PaperSessionTokenEnsureResult:
+        """Paper 세션 시작용: SQLite 캐시 우선, 없으면 OAuth 신규 발급 후 저장."""
+        try:
+            app_key, app_secret, _acct, _prod, mode = self.get_plain_credentials(user_id)
+        except ValueError:
+            return PaperSessionTokenEnsureResult(
+                ok=False,
+                access_token=None,
+                token_cache_hit=False,
+                token_cache_source="",
+                token_cache_persisted=False,
+                cache_miss_reason="no_broker",
+                token_error_code=None,
+                message="브로커 계정 없음",
+                failure_code="BROKER_NOT_REGISTERED",
+            )
+        api_base = self._resolve_kis_api_base(mode)
+        cached = self.get_cached_token(
+            user_id=user_id,
+            trading_mode=mode,
+            api_base=api_base,
+            app_key=app_key,
+        )
+        if cached:
+            return PaperSessionTokenEnsureResult(
+                ok=True,
+                access_token=cached,
+                token_cache_hit=True,
+                token_cache_source="sqlite_encrypted",
+                token_cache_persisted=True,
+                cache_miss_reason=None,
+                token_error_code=None,
+                message="캐시된 접근 토큰 사용",
+                failure_code=None,
+            )
+        tr = issue_access_token(
+            app_key=app_key,
+            app_secret=app_secret,
+            base_url=api_base,
+            timeout_sec=self.timeout_sec,
+        )
+        if not tr.ok or not tr.access_token:
+            return PaperSessionTokenEnsureResult(
+                ok=False,
+                access_token=None,
+                token_cache_hit=False,
+                token_cache_source="oauth_fresh",
+                token_cache_persisted=False,
+                cache_miss_reason="issue_failed",
+                token_error_code=tr.error_code,
+                message=tr.message,
+                failure_code="PAPER_TOKEN_NOT_READY",
+            )
+        self._persist_cached_token(user_id, tr.access_token)
+        return PaperSessionTokenEnsureResult(
+            ok=True,
+            access_token=tr.access_token,
+            token_cache_hit=False,
+            token_cache_source="oauth_fresh",
+            token_cache_persisted=True,
+            cache_miss_reason=None,
+            token_error_code=None,
+            message="신규 접근 토큰 발급·저장",
+            failure_code=None,
+        )
 
     def test_connection(self, user_id: str) -> BrokerConnectionTestResponse:
         with self._connect() as conn:
@@ -247,6 +384,8 @@ class BrokerSecretService:
                         ok = True
                         status = "success"
                         message = f"토큰·잔고조회 성공 — {balance_cash_hint}"
+                        if token_result.access_token:
+                            self._persist_cached_token(user_id, token_result.access_token)
                     else:
                         balance_check_ok = False
                         message = f"잔고조회 비정상 응답(rt_cd={balance_rt_cd}). 키·계좌·모의/실전 호스트를 확인하세요."

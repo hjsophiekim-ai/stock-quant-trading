@@ -21,6 +21,78 @@ type StrategyOption = "swing_v1" | "bull_focus_v1" | "defensive_v1";
 
 type LogItem = { ts?: string; level?: string; message?: string };
 
+function formatApiErrorDetail(detail: unknown): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      return "입력 오류가 있습니다.";
+    }
+  }
+  if (!detail || typeof detail !== "object") return "요청이 거절되었습니다.";
+  const d = detail as Record<string, unknown>;
+  const headMap: Record<string, string> = {
+    PAPER_BALANCE_PREFLIGHT_FAILED: "잔고 preflight 실패",
+    TOKEN_RATE_LIMIT_WAIT: "KIS 호출 제한",
+    PAPER_TOKEN_NOT_READY: "토큰 재사용 실패",
+  };
+  let head = typeof d.code === "string" ? headMap[d.code] || "" : "";
+  if (d.failure_kind === "invalid_mode") head = "모의 호스트가 아님";
+  const msg = typeof d.message === "string" ? d.message.trim() : "";
+  let body = "";
+  if (msg) {
+    body = msg;
+  } else if (d.code) {
+    body = `${String(d.code)} - ${msg || "(메시지 없음)"}`;
+  } else {
+    try {
+      body = JSON.stringify(d);
+    } catch {
+      body = "상세를 표시할 수 없습니다.";
+    }
+  }
+  let out = head && body.indexOf(head) === -1 ? `${head}\n${body}` : body || head || "요청이 거절되었습니다.";
+  if (d.path) out += `\n· API 경로: ${String(d.path)}`;
+  if (d.tr_id) out += `\n· TR ID: ${String(d.tr_id)}`;
+  if (d.http_status != null && d.http_status !== "") out += `\n· HTTP 상태: ${String(d.http_status)}`;
+  if (d.token_error_code) out += `\n· 토큰 오류코드: ${String(d.token_error_code)}`;
+  if (d.failure_kind) out += `\n· 유형: ${String(d.failure_kind)}`;
+  return out;
+}
+
+async function appendKisBalanceDebugLines(
+  backendUrl: string,
+  headers: HeadersInit,
+  base: string,
+): Promise<string> {
+  try {
+    const r = await fetch(`${backendUrl}/api/debug/kis-balance-check`, { headers });
+    const dj = (await r.json()) as Record<string, unknown> | null;
+    if (!dj) return base;
+    if (dj.ok === true) {
+      return `${base}\n\n[참고] 지금 잔고 진단은 성공했습니다. 방금 오류가 잠깐이었을 수 있어요. 잠시 뒤 다시 「시작」을 눌러 보세요.`;
+    }
+    const kind = String(dj.failure_kind || "");
+    const lab =
+      kind === "invalid_mode"
+        ? "모의 호스트가 아님"
+        : kind === "token_not_ready"
+          ? "토큰 재사용 실패"
+          : kind === "kis_error"
+            ? "한투 API 응답 오류"
+            : kind || "잔고 점검 실패";
+    let extra = `\n\n[잔고 재점검] ${lab}`;
+    if (dj.error) extra += `\n${String(dj.error)}`;
+    if (dj.path) extra += `\n· API 경로: ${String(dj.path)}`;
+    if (dj.tr_id) extra += `\n· TR ID: ${String(dj.tr_id)}`;
+    if (dj.http_status != null && dj.http_status !== "") extra += `\n· HTTP 상태: ${String(dj.http_status)}`;
+    return base + extra;
+  } catch {
+    return base;
+  }
+}
+
 export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpenPerformance }: Props) {
   const [strategyId, setStrategyId] = useState<StrategyOption>("swing_v1");
   const [status, setStatus] = useState("stopped");
@@ -133,9 +205,11 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
         headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ strategy_id: strategyId }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as { detail?: unknown };
       if (!res.ok) {
-        setMessage(typeof data?.detail === "string" ? data.detail : "start failed");
+        let shown = formatApiErrorDetail(data?.detail);
+        shown = await appendKisBalanceDebugLines(backendUrl, authHeaders(), shown);
+        setMessage(shown);
         return;
       }
       setMessage("Paper 세션 시작됨 (KIS 모의 주문 루프). 첫 틱까지 수십 초 걸릴 수 있습니다.");
@@ -151,9 +225,10 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
         method: "POST",
         headers: authHeaders(),
       });
-      const data = await res.json();
+      const data = (await res.json()) as { detail?: unknown };
       if (!res.ok) {
-        setMessage(typeof data?.detail === "string" ? data.detail : "stop failed");
+        const shown = formatApiErrorDetail(data?.detail) || "중지 실패";
+        setMessage(shown);
         return;
       }
       setMessage("Paper 세션 중지됨.");
@@ -169,9 +244,10 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
         method: "POST",
         headers: authHeaders(),
       });
-      const data = await res.json();
+      const data = (await res.json()) as { detail?: unknown };
       if (!res.ok) {
-        setMessage(typeof data?.detail === "string" ? data.detail : "risk-reset failed");
+        const shown = formatApiErrorDetail(data?.detail) || "risk-reset 실패";
+        setMessage(shown);
         return;
       }
       setMessage("risk_off 해제됨. 루프가 재개됩니다.");
@@ -239,7 +315,11 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
         <Button title="모의 자동매매 중지" onPress={stop} />
         <View style={{ height: 8 }} />
         <Button title="새로고침" onPress={refresh} />
-        {message ? <Text style={{ marginTop: 10, color: "#334155" }}>{message}</Text> : null}
+        {message ? (
+          <Text style={{ marginTop: 10, color: "#334155", lineHeight: 20 }} selectable>
+            {message}
+          </Text>
+        ) : null}
 
         <Text style={{ marginTop: 16, fontWeight: "bold" }}>손익 요약 (마지막 틱)</Text>
         <Text style={{ fontSize: 13, color: "#475569", marginTop: 4 }}>{pnlText || "—"}</Text>

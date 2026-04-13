@@ -81,6 +81,13 @@
       .toast.ok {
         background: #14532d;
       }
+      .toast.preline {
+        white-space: pre-line;
+        max-height: 42vh;
+        overflow-y: auto;
+        font-weight: 600;
+        line-height: 1.35;
+      }
     </style>
   </head>
   <body>
@@ -126,7 +133,7 @@
           </select>
           <button type="button" id="startBtn">모의 자동매매 시작</button>
           <button type="button" id="stopBtn">중지</button>
-          <span id="message"></span>
+          <span id="message" style="white-space: pre-line; max-width: 52rem; display: inline-block; vertical-align: top; color: #334155; font-size: 0.9rem; line-height: 1.4"></span>
         </div>
         <div class="panel">
           <h3>손익(마지막 틱 기준)</h3>
@@ -186,10 +193,87 @@
         function toast(type, text) {
           if (toastT) clearTimeout(toastT);
           toastEl.textContent = text;
-          toastEl.className = "toast show " + (type === "ok" ? "ok" : "err");
+          var base = "toast show " + (type === "ok" ? "ok" : "err");
+          if (type !== "ok" && String(text).indexOf("\n") >= 0) base += " preline";
+          toastEl.className = base;
           toastT = setTimeout(function () {
             toastEl.classList.remove("show");
-          }, 3200);
+          }, 5200);
+        }
+
+        /** FastAPI detail(문자열 | 객체) → 사용자용 메시지 (a message → b code+message → c JSON) */
+        function formatApiErrorDetail(detail) {
+          if (typeof detail === "string") return detail;
+          if (Array.isArray(detail)) {
+            try {
+              return JSON.stringify(detail);
+            } catch (e) {
+              return "입력 오류가 있습니다.";
+            }
+          }
+          if (!detail || typeof detail !== "object") return "요청이 거절되었습니다.";
+          var d = detail;
+          var head =
+            {
+              PAPER_BALANCE_PREFLIGHT_FAILED: "잔고 preflight 실패",
+              TOKEN_RATE_LIMIT_WAIT: "KIS 호출 제한",
+              PAPER_TOKEN_NOT_READY: "토큰 재사용 실패",
+            }[d.code] || "";
+          if (d.failure_kind === "invalid_mode") head = "모의 호스트가 아님";
+          var msg = typeof d.message === "string" ? d.message.trim() : "";
+          var body = "";
+          if (msg) {
+            body = msg;
+          } else if (d.code) {
+            body = String(d.code) + " - " + (msg || "(메시지 없음)");
+          } else {
+            try {
+              body = JSON.stringify(d);
+            } catch (e2) {
+              body = "상세를 표시할 수 없습니다.";
+            }
+          }
+          var out = "";
+          if (head && body.indexOf(head) === -1) out = head + "\n" + body;
+          else out = body || head || "요청이 거절되었습니다.";
+          if (d.path) out += "\n· API 경로: " + d.path;
+          if (d.tr_id) out += "\n· TR ID: " + d.tr_id;
+          if (d.http_status != null && d.http_status !== "") out += "\n· HTTP 상태: " + d.http_status;
+          if (d.token_error_code) out += "\n· 토큰 오류코드: " + d.token_error_code;
+          if (d.failure_kind) out += "\n· 유형: " + d.failure_kind;
+          return out;
+        }
+
+        /** 시작 실패 후 잔고 진단 API로 원인 보강 */
+        async function appendKisBalanceDebugLines(base, headers) {
+          try {
+            var r = await fetch(backendUrl + "/api/debug/kis-balance-check", { headers: headers });
+            var dj = await r.json().catch(function () {
+              return null;
+            });
+            if (!dj) return base;
+            if (dj.ok === true) {
+              return (
+                base +
+                "\n\n[참고] 지금 잔고 진단은 성공했습니다. 방금 오류가 잠깐이었을 수 있어요. 잠시 뒤 다시 「시작」을 눌러 보세요."
+              );
+            }
+            var kind = dj.failure_kind || "";
+            var map = {
+              invalid_mode: "모의 호스트가 아님",
+              token_not_ready: "토큰 재사용 실패",
+              kis_error: "한투 API 응답 오류",
+            };
+            var lab = map[kind] || kind || "잔고 점검 실패";
+            var extra = "\n\n[잔고 재점검] " + lab;
+            if (dj.error) extra += "\n" + dj.error;
+            if (dj.path) extra += "\n· API 경로: " + dj.path;
+            if (dj.tr_id) extra += "\n· TR ID: " + dj.tr_id;
+            if (dj.http_status != null && dj.http_status !== "") extra += "\n· HTTP 상태: " + dj.http_status;
+            return base + extra;
+          } catch (e) {
+            return base;
+          }
         }
 
         async function checkBrokerGate() {
@@ -310,9 +394,10 @@
             return {};
           });
           if (!res.ok) {
-            const detail = typeof data.detail === "string" ? data.detail : "risk-reset failed";
-            message.innerText = detail;
-            toast("err", detail);
+            var rd = formatApiErrorDetail(data.detail);
+            if (rd === "요청이 거절되었습니다." && !data.detail) rd = "risk-reset 실패";
+            message.innerText = rd;
+            toast("err", rd);
             return;
           }
           toast("ok", "risk_off 해제됨.");
@@ -331,9 +416,11 @@
             return {};
           });
           if (!res.ok) {
-            const detail = typeof data.detail === "string" ? data.detail : "start failed";
-            message.innerText = detail;
-            toast("err", detail);
+            var detailRaw = data.detail;
+            var shown = formatApiErrorDetail(detailRaw);
+            shown = await appendKisBalanceDebugLines(shown, authHeaders());
+            message.innerText = shown;
+            toast("err", shown);
             return;
           }
           statusText.innerText = data.status;
@@ -348,9 +435,10 @@
             return {};
           });
           if (!res.ok) {
-            const detail = typeof data.detail === "string" ? data.detail : "stop failed";
-            message.innerText = detail;
-            toast("err", detail);
+            var sd = formatApiErrorDetail(data.detail);
+            if (sd === "요청이 거절되었습니다." && !data.detail) sd = "중지 실패";
+            message.innerText = sd;
+            toast("err", sd);
             return;
           }
           statusText.innerText = data.status;

@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     paper_session_state_path: str = Field(default="data/paper_trading_session.json", alias="PAPER_SESSION_STATE_PATH")
     paper_kis_chart_lookback_days: int = Field(default=120, ge=20, alias="PAPER_KIS_CHART_LOOKBACK_DAYS")
 
+    # KISClient rate-limit / throttle (백엔드 Paper 경로가 app Settings 를 읽음)
+    kis_min_request_interval_ms: int = Field(default=250, ge=0, alias="KIS_MIN_REQUEST_INTERVAL_MS")
+    kis_rate_limit_max_retries: int = Field(default=6, ge=0, alias="KIS_RATE_LIMIT_MAX_RETRIES")
+    kis_rate_limit_backoff_base_sec: float = Field(default=0.5, ge=0.0, alias="KIS_RATE_LIMIT_BACKOFF_BASE_SEC")
+    kis_rate_limit_backoff_cap_sec: float = Field(default=30.0, ge=0.0, alias="KIS_RATE_LIMIT_BACKOFF_CAP_SEC")
+
     # Dynamic position sizing controls.
     sizing_bullish_boost_multiplier: float = Field(default=1.20, alias="SIZING_BULLISH_BOOST_MULTIPLIER")
     sizing_bearish_cut_multiplier: float = Field(default=0.60, alias="SIZING_BEARISH_CUT_MULTIPLIER")
