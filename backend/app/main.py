@@ -51,9 +51,6 @@ async def _validation_exception_handler(_request, exc: RequestValidationError) -
 @app.on_event("startup")
 def _install_risk_audit() -> None:
     import logging
-    import app.brokers.kis_paper_broker as kis_paper_broker_mod
-    import app.clients.kis_client as kis_client_mod
-    import backend.app.engine.user_paper_loop as user_paper_loop_mod
 
     from app.config import get_settings as get_app_settings
 
@@ -78,14 +75,12 @@ def _install_risk_audit() -> None:
         settings.database_url.split("@")[-1] if "@" in settings.database_url else settings.database_url,
     )
     ver = get_backend_version_payload(app_version=app.version)
+    # 배포 환경에서 startup 전에 무거운 코어 모듈을 선로딩하면 포트 바인딩이 늦어질 수 있음(Render 타임아웃).
     log.info(
-        "runtime info: git_sha=%s build_time=%s python=%s kis_client=%s user_paper_loop=%s kis_paper_broker=%s",
+        "runtime info: git_sha=%s build_time=%s python=%s",
         ver.get("git_sha", ""),
         ver.get("build_time", ""),
         sys.executable,
-        getattr(kis_client_mod, "__file__", ""),
-        getattr(user_paper_loop_mod, "__file__", ""),
-        getattr(kis_paper_broker_mod, "__file__", ""),
     )
 
 

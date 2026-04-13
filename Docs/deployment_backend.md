@@ -8,9 +8,12 @@
 - 서비스: FastAPI (`backend.app.main:app`)
 - 배포 방식: Render Blueprint (`render.yaml`)
 - root directory: `.`
-- build command: `pip install --upgrade pip && pip install -r requirements/backend.txt`
-- start command: `uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT`
+- build command: `pip install --upgrade pip && pip install -r requirements/backend.txt && pip install --no-deps -e .` (모노레포 패키지 `app`/`backend` 등록)
+- start command: `python -m uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT`
+- env: `PYTHONPATH=.` (Import 경로 보강)
 - health check path: `/api/health`
+
+Docker 이미지(`backend/Dockerfile`)를 쓰는 경우: 컨테이너는 **`PORT` 환경변수**(Render가 부여, 예: 10000)에 바인딩해야 하며, `--port 8000` 고정이면 헬스체크가 포트를 찾지 못해 타임아웃납니다.
 
 중요:
 - Render URL은 보통 `https://<service>.onrender.com` 형태입니다.

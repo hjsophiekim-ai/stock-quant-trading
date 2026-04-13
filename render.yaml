@@ -6,10 +6,12 @@ services:
     rootDir: .
     plan: free
     autoDeploy: true
-    buildCommand: pip install --upgrade pip && pip install -r requirements/backend.txt
-    startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install --upgrade pip && pip install -r requirements/backend.txt && pip install --no-deps -e .
+    startCommand: python -m uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
     envVars:
+      - key: PYTHONPATH
+        value: .
       - key: APP_ENV
         value: production
       - key: TRADING_MODE

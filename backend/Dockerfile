@@ -16,6 +16,7 @@ COPY app ./app
 RUN pip install --no-cache-dir -U pip setuptools wheel && \
     pip install --no-cache-dir -e .
 
+# Render 등 PaaS는 PORT 환경변수로 수신 포트를 지정함(로컬 기본 8000).
 EXPOSE 8000
 
 ENV APP_ENV=production \
@@ -25,5 +26,5 @@ ENV APP_ENV=production \
     LIVE_TRADING_CONFIRM=false \
     LIVE_TRADING_EXTRA_CONFIRM=false
 
-CMD ["python", "-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "exec python -m uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
 
