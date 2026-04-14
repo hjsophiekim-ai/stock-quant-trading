@@ -156,8 +156,11 @@
           <select id="strategyId">
             <option value="swing_v1">swing_v1</option>
             <option value="swing_relaxed_v1">swing_relaxed_v1 (Paper 검증·완화)</option>
+            <option value="swing_relaxed_v2">swing_relaxed_v2 (Paper 검증·더 완화)</option>
             <option value="bull_focus_v1">bull_focus_v1</option>
             <option value="defensive_v1">defensive_v1</option>
+            <option value="scalp_momentum_v1">scalp_momentum_v1 (Paper·인트라데이 3m)</option>
+            <option value="scalp_momentum_v2">scalp_momentum_v2 (Paper·인트라데이 1m)</option>
           </select>
           <button type="button" id="startBtn">모의 자동매매 시작</button>
           <button type="button" id="stopBtn">중지</button>
@@ -234,16 +237,39 @@
     <script src="./auth-session.js"></script>
     <script>
       (async function () {
-        const session = await resolveDesktopSession();
-        if (!session || !session.accessToken) {
+        const backendUrl = effectiveBackendUrl();
+        const pre = await ensureValidBackendSession(backendUrl);
+        if (!pre.ok) {
           window.location.href = "./login.html";
           return;
         }
-        const backendUrl = effectiveBackendUrl();
-        const accessToken = session.accessToken;
 
-        function authHeaders(extra) {
-          return { Authorization: "Bearer " + accessToken, ...(extra || {}) };
+        async function authHeaders(extra) {
+          const s = await resolveDesktopSession();
+          const t = s && s.accessToken ? s.accessToken : "";
+          return { Authorization: "Bearer " + t, ...(extra || {}) };
+        }
+
+        async function authFetch(url, options) {
+          const opt = options || {};
+          const hdrIn = opt.headers || {};
+          const h0 = await authHeaders(hdrIn);
+          let res = await fetch(url, { ...opt, headers: h0 });
+          if (res.status !== 401) return res;
+          const chk = await ensureValidBackendSession(backendUrl);
+          if (!chk.ok) {
+            await clearDesktopSession();
+            window.location.href = "./login.html";
+            throw new Error("session_expired");
+          }
+          const h1 = await authHeaders(hdrIn);
+          res = await fetch(url, { ...opt, headers: h1 });
+          if (res.status === 401) {
+            await clearDesktopSession();
+            window.location.href = "./login.html";
+            throw new Error("session_expired");
+          }
+          return res;
         }
 
         const statusText = document.getElementById("statusText");
@@ -322,7 +348,7 @@
         /** 시작 실패 후 잔고 진단 API로 원인 보강 */
         async function appendKisBalanceDebugLines(base, headers) {
           try {
-            var r = await fetch(backendUrl + "/api/debug/kis-balance-check", { headers: headers });
+            var r = await authFetch(backendUrl + "/api/debug/kis-balance-check", { headers: headers });
             var dj = await r.json().catch(function () {
               return null;
             });
@@ -353,7 +379,7 @@
 
         async function checkBrokerGate() {
           try {
-            const r = await fetch(backendUrl + "/api/broker-accounts/me/status", { headers: authHeaders() });
+            const r = await authFetch(backendUrl + "/api/broker-accounts/me/status", { headers: await authHeaders() });
             if (r.status === 404) {
               startBtn.disabled = true;
               brokerGateEl.style.display = "block";
@@ -414,7 +440,7 @@
               fetch(backendUrl + "/api/paper-trading/positions"),
               fetch(backendUrl + "/api/paper-trading/pnl"),
               fetch(backendUrl + "/api/paper-trading/logs"),
-              fetch(backendUrl + "/api/paper-trading/dashboard-data", { headers: authHeaders() }),
+              authFetch(backendUrl + "/api/paper-trading/dashboard-data", { headers: await authHeaders() }),
             ]);
             const statusData = await statusRes.json();
             const posData = await posRes.json();
@@ -534,14 +560,31 @@
                 : "주문 미생성 사유: (해당 없음 — 틱에서 신규 주문이 없었습니다)";
               var acc = dashData.accepted_orders != null ? dashData.accepted_orders : "—";
               var rej = dashData.rejected_orders != null ? dashData.rejected_orders : "—";
-              paperDashOrders.innerText =
+              var idLine =
                 "이번 틱 생성 주문 수: " +
                 goc +
                 " · 리스크 수락 " +
                 acc +
                 " / 거부 " +
                 rej +
-                " (거부=리스크 거절; 0/0 이면 전략이 신규 주문을 만들지 않은 경우가 많습니다)";
+                " (거부=리스크·인트라데이 게이트 거절; 0/0 이면 전략이 신규 주문을 만들지 않은 경우가 많습니다)";
+              if (tr.timeframe != null && String(tr.timeframe).length) {
+                idLine +=
+                  " | timeframe=" +
+                  tr.timeframe +
+                  " · 오늘 체결 시도(매수 카운트)=" +
+                  (tr.trade_count_today != null ? tr.trade_count_today : "—") +
+                  " · 목표(참고)=" +
+                  (tr.paper_intraday_target_round_trip_trades != null ? tr.paper_intraday_target_round_trip_trades : "—");
+                idLine +=
+                  " · 강제청산=" +
+                  (tr.forced_flatten ? "Y" : "N") +
+                  " · 장마감청산구간=" +
+                  (tr.flatten_before_close_armed ? "Y" : "N") +
+                  " · 일손실중지=" +
+                  (tr.risk_halt_new_entries ? "Y" : "N");
+              }
+              paperDashOrders.innerText = idLine;
               paperRankingList.innerHTML = "";
               (dashData.ranking || []).slice(0, 8).forEach(function (r) {
                 var li = document.createElement("li");
@@ -600,9 +643,9 @@
         }, 15000);
 
         riskResetBtn.addEventListener("click", async function () {
-          const res = await fetch(backendUrl + "/api/paper-trading/risk-reset", {
+          const res = await authFetch(backendUrl + "/api/paper-trading/risk-reset", {
             method: "POST",
-            headers: authHeaders(),
+            headers: await authHeaders(),
           });
           const data = await res.json().catch(function () {
             return {};
@@ -621,9 +664,9 @@
         document.getElementById("startBtn").addEventListener("click", async function () {
           if (startBtn.disabled) return;
           const strategyId = document.getElementById("strategyId").value;
-          const res = await fetch(backendUrl + "/api/paper-trading/start", {
+          const res = await authFetch(backendUrl + "/api/paper-trading/start", {
             method: "POST",
-            headers: authHeaders({ "Content-Type": "application/json" }),
+            headers: await authHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify({ strategy_id: strategyId }),
           });
           const data = await res.json().catch(function () {
@@ -632,7 +675,7 @@
           if (!res.ok) {
             var detailRaw = data.detail;
             var shown = formatApiErrorDetail(detailRaw);
-            shown = await appendKisBalanceDebugLines(shown, authHeaders());
+            shown = await appendKisBalanceDebugLines(shown, await authHeaders());
             message.innerText = shown;
             toast("err", shown);
             return;
@@ -644,7 +687,7 @@
         });
 
         document.getElementById("stopBtn").addEventListener("click", async function () {
-          const res = await fetch(backendUrl + "/api/paper-trading/stop", { method: "POST", headers: authHeaders() });
+          const res = await authFetch(backendUrl + "/api/paper-trading/stop", { method: "POST", headers: await authHeaders() });
           const data = await res.json().catch(function () {
             return {};
           });

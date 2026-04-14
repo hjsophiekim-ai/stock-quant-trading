@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     paper_trading_interval_sec: int = Field(default=600, ge=30, alias="PAPER_TRADING_INTERVAL_SEC")
     paper_trading_symbols: str = Field(default="005930,000660", alias="PAPER_TRADING_SYMBOLS")
     paper_session_state_path: str = Field(default="data/paper_trading_session.json", alias="PAPER_SESSION_STATE_PATH")
+    paper_session_auto_resume: bool = Field(default=True, alias="PAPER_SESSION_AUTO_RESUME")
     paper_kis_chart_lookback_days: int = Field(default=60, ge=20, alias="PAPER_KIS_CHART_LOOKBACK_DAYS")
     paper_smoke_mode: bool = Field(default=False, alias="PAPER_SMOKE_MODE")
     paper_kis_universe_cache_ttl_sec: int = Field(
@@ -75,6 +76,53 @@ class Settings(BaseSettings):
     kis_rate_limit_max_retries: int = Field(default=6, ge=0, alias="KIS_RATE_LIMIT_MAX_RETRIES")
     kis_rate_limit_backoff_base_sec: float = Field(default=0.5, ge=0.0, alias="KIS_RATE_LIMIT_BACKOFF_BASE_SEC")
     kis_rate_limit_backoff_cap_sec: float = Field(default=30.0, ge=0.0, alias="KIS_RATE_LIMIT_BACKOFF_CAP_SEC")
+
+    # Paper 인트라데이(분봉 단타) — 스윙 일봉 루프와 독립. 목표 빈도는 상한·설명용이며 거래를 보장하지 않음.
+    paper_intraday_enabled: bool = Field(default=False, alias="PAPER_INTRADAY_ENABLED")
+    paper_intraday_bar_minutes: int = Field(default=3, ge=1, le=60, alias="PAPER_INTRADAY_BAR_MINUTES")
+    paper_intraday_loop_interval_sec: int = Field(default=90, ge=20, alias="PAPER_INTRADAY_LOOP_INTERVAL_SEC")
+    paper_intraday_max_trades_per_day: int = Field(default=24, ge=0, alias="PAPER_INTRADAY_MAX_TRADES_PER_DAY")
+    paper_intraday_max_open_positions: int = Field(default=3, ge=1, alias="PAPER_INTRADAY_MAX_OPEN_POSITIONS")
+    paper_intraday_max_hold_minutes: int = Field(default=20, ge=1, alias="PAPER_INTRADAY_MAX_HOLD_MINUTES")
+    paper_intraday_stop_loss_pct: float = Field(default=0.65, ge=0.05, le=20.0, alias="PAPER_INTRADAY_STOP_LOSS_PCT")
+    paper_intraday_take_profit_pct: float = Field(default=1.1, ge=0.05, le=50.0, alias="PAPER_INTRADAY_TAKE_PROFIT_PCT")
+    paper_intraday_trailing_stop_pct: float = Field(default=0.45, ge=0.0, le=20.0, alias="PAPER_INTRADAY_TRAILING_STOP_PCT")
+    paper_intraday_cooldown_minutes: int = Field(default=12, ge=0, alias="PAPER_INTRADAY_COOLDOWN_MINUTES")
+    paper_intraday_min_quote_volume: float = Field(
+        default=80_000.0,
+        ge=0.0,
+        alias="PAPER_INTRADAY_MIN_QUOTE_VOLUME",
+    )
+    paper_intraday_min_trade_value_krw: float = Field(
+        default=3_000_000_000.0,
+        ge=0.0,
+        alias="PAPER_INTRADAY_MIN_TRADE_VALUE_KRW",
+    )
+    paper_intraday_max_spread_pct: float = Field(default=0.35, ge=0.0, alias="PAPER_INTRADAY_MAX_SPREAD_PCT")
+    paper_intraday_max_chase_candle_pct: float = Field(default=1.8, ge=0.0, alias="PAPER_INTRADAY_MAX_CHASE_CANDLE_PCT")
+    paper_intraday_max_daily_loss_pct: float = Field(default=1.5, ge=0.0, alias="PAPER_INTRADAY_MAX_DAILY_LOSS_PCT")
+    paper_intraday_flatten_before_close_minutes: int = Field(
+        default=15,
+        ge=1,
+        alias="PAPER_INTRADAY_FLATTEN_BEFORE_CLOSE_MINUTES",
+    )
+    paper_intraday_target_round_trip_trades: int = Field(
+        default=10,
+        ge=0,
+        alias="PAPER_INTRADAY_TARGET_ROUND_TRIP_TRADES",
+    )
+    paper_intraday_chart_cache_ttl_sec: float = Field(default=45.0, ge=0.0, alias="PAPER_INTRADAY_CHART_CACHE_TTL_SEC")
+    paper_intraday_chart_min_interval_sec: float = Field(
+        default=0.35,
+        ge=0.0,
+        alias="PAPER_INTRADAY_CHART_MIN_INTERVAL_SEC",
+    )
+    paper_intraday_order_quantity: int = Field(default=1, ge=1, alias="PAPER_INTRADAY_ORDER_QUANTITY")
+    paper_intraday_duplicate_order_guard_sec: float = Field(
+        default=45.0,
+        ge=0.0,
+        alias="PAPER_INTRADAY_DUPLICATE_ORDER_GUARD_SEC",
+    )
 
     # Dynamic position sizing controls.
     sizing_bullish_boost_multiplier: float = Field(default=1.20, alias="SIZING_BULLISH_BOOST_MULTIPLIER")

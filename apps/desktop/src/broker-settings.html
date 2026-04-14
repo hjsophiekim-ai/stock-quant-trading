@@ -254,6 +254,8 @@
         <p style="margin: 4px 0" id="maskedKey"></p>
         <p style="margin: 4px 0" id="maskedAcct"></p>
         <p style="margin: 4px 0" id="maskedProd"></p>
+        <p style="margin: 4px 0" id="maskedMode"></p>
+        <p style="margin: 4px 0" id="maskedConn"></p>
         <p class="muted" style="margin-top: 10px; margin-bottom: 0">수정 시 아래에 값을 다시 입력한 뒤 저장하세요.</p>
       </div>
 
@@ -512,6 +514,9 @@
             document.getElementById("maskedKey").textContent = "앱키: " + (data.kis_app_key_masked || "");
             document.getElementById("maskedAcct").textContent = "계좌: " + (data.kis_account_no_masked || "");
             document.getElementById("maskedProd").textContent = "상품코드: " + (data.kis_account_product_code || "");
+            document.getElementById("maskedMode").textContent = "모드: " + (data.trading_mode || "paper");
+            document.getElementById("maskedConn").textContent =
+              "연결상태: " + (data.connection_status || "unknown") + (data.connection_message ? " · " + data.connection_message : "");
             document.getElementById("kis_account_product_code").value = data.kis_account_product_code || "";
             setMode(data.trading_mode === "live" ? "live" : "paper");
             updateConnUI(data.connection_status, data.connection_message || "", data.last_tested_at);

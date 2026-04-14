@@ -108,6 +108,8 @@ class KISEndpoints:
     cancel_order: str = DomesticStockPaths.order_cancel
     hashkey: str = DomesticStockPaths.hashkey
     daily_itemchart: str = DomesticStockPaths.daily_itemchart
+    time_itemchart: str = DomesticStockPaths.time_itemchart
+    time_itemconclusion: str = DomesticStockPaths.time_itemconclusion
     inquire_psbl_order: str = DomesticStockPaths.inquire_psbl_order
     inquire_nccs: str = DomesticStockPaths.inquire_nccs
     inquire_daily_ccld: str = DomesticStockPaths.inquire_daily_ccld
@@ -664,6 +666,68 @@ class KISClient:
             payload,
             method="GET",
             path=self.endpoints.daily_itemchart,
+            tr_id=tr_id,
+            params=params,
+        )
+        return payload
+
+    def get_time_itemchartprice(
+        self,
+        *,
+        market_div_code: str,
+        symbol: str,
+        input_hour_hhmmss: str,
+        include_past_data: str = "Y",
+        etc_cls_code: str = "",
+    ) -> dict[str, Any]:
+        """
+        주식당일분봉조회. 한 호출당 최대 약 30건(공식 안내).
+        FID_INPUT_HOUR_1: 조회 기준 시각(HHMMSS). 연속 조회 시 이전 응답의 더 과거 시각을 넣어 페이징.
+        FID_PW_DATA_INCU_YN: 과거 데이터 포함(Y/N).
+        """
+        params = {
+            "FID_COND_MRKT_DIV_CODE": market_div_code,
+            "FID_INPUT_ISCD": symbol,
+            "FID_INPUT_HOUR_1": input_hour_hhmmss,
+            "FID_PW_DATA_INCU_YN": include_past_data,
+            "FID_ETC_CLS_CODE": etc_cls_code,
+        }
+        tr_id = self._resolve_tr_id(
+            paper_tr_id=self.tr_ids.time_itemchart_paper,
+            live_tr_id=self.tr_ids.time_itemchart_live,
+        )
+        payload = self._get(self.endpoints.time_itemchart, params=params, tr_id=tr_id)
+        self._validate_kis_business_success(
+            payload,
+            method="GET",
+            path=self.endpoints.time_itemchart,
+            tr_id=tr_id,
+            params=params,
+        )
+        return payload
+
+    def get_time_itemconclusion(
+        self,
+        *,
+        market_div_code: str,
+        symbol: str,
+        input_hour_hhmmss: str,
+    ) -> dict[str, Any]:
+        """주식현재가 당일시간대별체결 (거래대금·체결 흐름 등 시세분석 보조)."""
+        params = {
+            "FID_COND_MRKT_DIV_CODE": market_div_code,
+            "FID_INPUT_ISCD": symbol,
+            "FID_INPUT_HOUR_1": input_hour_hhmmss,
+        }
+        tr_id = self._resolve_tr_id(
+            paper_tr_id=self.tr_ids.time_itemconclusion_paper,
+            live_tr_id=self.tr_ids.time_itemconclusion_live,
+        )
+        payload = self._get(self.endpoints.time_itemconclusion, params=params, tr_id=tr_id)
+        self._validate_kis_business_success(
+            payload,
+            method="GET",
+            path=self.endpoints.time_itemconclusion,
             tr_id=tr_id,
             params=params,
         )

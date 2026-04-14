@@ -147,6 +147,14 @@
         <div class="risk-banner" id="riskBanner">Risk alert loading...</div>
         <div class="risk-banner info" id="serverRuntimeBanner" style="display: none"></div>
         <div class="risk-banner info" id="userPaperBanner" style="display: none"></div>
+        <div class="card" id="paperRunningCard" style="display: none; margin-bottom: 12px">
+          <b>사용자 Paper 세션 실행 중</b>
+          <div id="paperRunningMeta" class="muted" style="margin-top: 6px"></div>
+        </div>
+        <div class="card" id="storageDiagCard" style="display: none; margin-bottom: 12px; background: #fffbeb; border-color: #fbbf24">
+          <b>스토리지 지속성 진단</b>
+          <div id="storageDiagText" class="muted" style="margin-top: 6px; color: #92400e"></div>
+        </div>
         <div id="brokerGate" class="card" style="display: none; background: #fffbeb; border-color: #fbbf24; margin-bottom: 12px"></div>
         <div class="cards">
           <div class="card">
@@ -295,16 +303,20 @@
     <script src="./auth-session.js"></script>
     <script>
       const POLL_MS = 12000;
-      let session = null;
       let backendUrl = "";
 
       (async function boot() {
-        session = await resolveDesktopSession();
+        backendUrl = effectiveBackendUrl();
+        const pre = await ensureValidBackendSession(backendUrl);
+        if (!pre.ok) {
+          window.location.href = "./login.html";
+          return;
+        }
+        const session = await resolveDesktopSession();
         if (!session || !session.accessToken) {
           window.location.href = "./login.html";
           return;
         }
-        backendUrl = effectiveBackendUrl();
         document.getElementById("user").innerText = "User: " + (session.email || "-");
         await loadDashboard();
         await checkBrokerGate();
@@ -312,13 +324,38 @@
         setInterval(checkBrokerGate, 60000);
       })();
 
+      async function authHeaders(extra) {
+        const s = await resolveDesktopSession();
+        const t = s && s.accessToken ? s.accessToken : "";
+        return { Authorization: "Bearer " + t, ...(extra || {}) };
+      }
+
+      async function authFetch(url, options) {
+        const opt = options || {};
+        const hdrIn = opt.headers || {};
+        const h0 = await authHeaders(hdrIn);
+        let res = await fetch(url, { ...opt, headers: h0 });
+        if (res.status !== 401) return res;
+        const chk = await ensureValidBackendSession(backendUrl);
+        if (!chk.ok) {
+          await clearDesktopSession();
+          window.location.href = "./login.html";
+          throw new Error("session_expired");
+        }
+        const h1 = await authHeaders(hdrIn);
+        res = await fetch(url, { ...opt, headers: h1 });
+        if (res.status === 401) {
+          await clearDesktopSession();
+          window.location.href = "./login.html";
+          throw new Error("session_expired");
+        }
+        return res;
+      }
+
       async function checkBrokerGate() {
         const gate = document.getElementById("brokerGate");
-        if (!session) return;
         try {
-          const r = await fetch(backendUrl + "/api/broker-accounts/me", {
-            headers: { Authorization: "Bearer " + session.accessToken },
-          });
+          const r = await authFetch(backendUrl + "/api/broker-accounts/me");
           if (r.status === 404) {
             gate.style.display = "block";
             gate.innerHTML =
@@ -345,13 +382,11 @@
       }
 
       async function loadDashboard() {
-        if (!session) return;
-        const auth = { Authorization: "Bearer " + session.accessToken };
         document.getElementById("loadState").innerText = "로딩 중…";
         try {
           const [summaryRes, tradesRes] = await Promise.all([
-            fetch(`${backendUrl}/api/dashboard/summary`, { headers: auth }),
-            fetch(`${backendUrl}/api/trading/recent-trades?limit=15`, { headers: auth }),
+            authFetch(`${backendUrl}/api/dashboard/summary`),
+            authFetch(`${backendUrl}/api/trading/recent-trades?limit=15`),
           ]);
           const summary = await summaryRes.json();
           const trades = await tradesRes.json();
@@ -383,6 +418,35 @@
           }
           setScopeBanner("serverRuntimeBanner", summary.server_runtime_banner);
           setScopeBanner("userPaperBanner", summary.user_paper_banner);
+          const pr = document.getElementById("paperRunningCard");
+          const prm = document.getElementById("paperRunningMeta");
+          const ps = summary.paper_trading || {};
+          if (ps.status === "running" && ps.user_session_active) {
+            pr.style.display = "block";
+            prm.innerText =
+              "전략 " +
+              (ps.strategy_id || "-") +
+              " · last_tick_at " +
+              (ps.last_tick_at || "-") +
+              " · failure " +
+              String(ps.failure_streak ?? 0) +
+              " · position_count " +
+              String((summary.positions || []).length);
+          } else {
+            pr.style.display = "none";
+            prm.innerText = "";
+          }
+
+          const sd = summary.storage_diagnostics || {};
+          const sCard = document.getElementById("storageDiagCard");
+          const sText = document.getElementById("storageDiagText");
+          if (sd && sd.warning) {
+            sCard.style.display = "block";
+            sText.innerText = sd.warning;
+          } else {
+            sCard.style.display = "none";
+            sText.innerText = "";
+          }
 
           document.getElementById("mode").innerText = summary.mode || "-";
           document.getElementById("liveArmed").innerText = summary.live_execution_armed

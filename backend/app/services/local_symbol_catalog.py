@@ -26,13 +26,15 @@ def _load_rows() -> tuple[dict[str, Any], ...]:
     if not isinstance(raw, list):
         return ()
     out: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for item in raw:
         if not isinstance(item, dict):
             continue
         sym = str(item.get("symbol", "")).strip()
         name = str(item.get("name_kr", "")).strip()
-        if len(sym) == 6 and sym.isdigit():
+        if len(sym) == 6 and sym.isdigit() and name and sym not in seen:
             out.append({"symbol": sym, "name_kr": name})
+            seen.add(sym)
     return tuple(out)
 
 

@@ -82,6 +82,10 @@ Base: `/api/paper-trading`
   - res: `PaperTradingPnlResponse`
 - `GET /logs`
   - res: `PaperTradingLogsResponse`
+- `GET /dashboard-data` (Authorization: Bearer)
+  - res: `{ ok: true, candidate_count, candidates, generated_order_count, generated_orders, no_order_reason, last_diagnostics, candidate_filter_breakdown, tick_report, ... }`
+  - `tick_report`: 위 틱 메타를 한 객체로 묶은 것(중복 허용·클라이언트 표시용).
+  - `candidate_filter_breakdown`: `candidate_count===0` 이고 유니버스가 있을 때 swing 품질 필터 종목별 실패 사유.
 
 ## 6) Performance API
 

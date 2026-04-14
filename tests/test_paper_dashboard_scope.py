@@ -74,6 +74,7 @@ def test_paper_dashboard_data_ok_when_session_matches_user(monkeypatch: pytest.M
         "regime": "bullish_trend",
         "last_diagnostics": [],
         "candidates": ["005930"],
+        "tick_report": {"no_order_reason": "후보는 있으나 전략 진입 조건 미충족"},
     }
     monkeypatch.setattr(
         "backend.app.api.paper_trading_routes.get_paper_session_controller",
@@ -88,6 +89,7 @@ def test_paper_dashboard_data_ok_when_session_matches_user(monkeypatch: pytest.M
     assert body.get("positions")
     assert body.get("open_orders")
     assert body.get("no_order_reason")
+    assert body.get("tick_report", {}).get("no_order_reason")
     ctrl.get_dashboard_payload.assert_called_once()
 
 
@@ -145,3 +147,4 @@ def test_dashboard_summary_prefers_paper_fills_when_running(monkeypatch: pytest.
     body = r.json()
     assert body["data_quality"]["recent_fills_user_scoped"] is True
     assert body["recent_fills"][0]["symbol"] == "005930"
+    assert "storage_diagnostics" in body

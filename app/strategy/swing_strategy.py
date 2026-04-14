@@ -148,6 +148,8 @@ def build_symbol_signal(symbol_df: pd.DataFrame) -> dict[str, float | bool]:
         "drop_3d_in_range": bool(-6.0 <= float(latest["ret_3d_pct"]) <= -3.0) if pd.notna(latest["ret_3d_pct"]) else False,
         "rsi_lt_40": bool(float(latest["rsi14"]) < 40.0) if pd.notna(latest["rsi14"]) else False,
         "bullish_reversal": bool(latest["is_bullish"]),
+        "ma20": float(latest["ma20"]) if pd.notna(latest["ma20"]) else 0.0,
+        "ma60": float(latest["ma60"]) if pd.notna(latest["ma60"]) else 0.0,
         "close": float(latest["close"]),
         "ret_3d_pct": float(latest["ret_3d_pct"]) if pd.notna(latest["ret_3d_pct"]) else 0.0,
         "rsi14": float(latest["rsi14"]) if pd.notna(latest["rsi14"]) else 50.0,

@@ -15,6 +15,7 @@ from backend.app.api.auth_routes import get_current_user_from_auth_header
 from backend.app.api.broker_routes import get_broker_service
 from backend.app.auth.kis_auth import issue_access_token, validate_kis_inputs
 from backend.app.core.config import BackendSettings, get_backend_settings, is_live_order_execution_configured, resolved_kis_api_base_url
+from backend.app.core.storage_paths import directory_is_writable, get_resolved_storage_paths, path_is_writable_file_location
 from backend.app.engine.runtime_engine import get_runtime_engine
 from backend.app.orders import build_kis_mock_execution_engine
 from backend.app.orders.order_store import TrackedOrderStore, filter_active_submitted
@@ -76,6 +77,33 @@ def _dashboard_todos() -> list[str]:
         "손익 카드·월간 수익률 등 일부 지표는 여전히 서버 포트폴리오 sync·성과 집계 기준일 수 있습니다(계정 불일치 시 별도 안내).",
         "monthly_return_pct: performance_aggregate 와 /api/performance 동일(equity 곡선, UTC 월앵커).",
     ]
+
+
+def _storage_diagnostics(cfg: BackendSettings) -> dict[str, Any]:
+    paths = get_resolved_storage_paths()
+    users_ok = path_is_writable_file_location(paths.auth_users_path)
+    broker_ok = path_is_writable_file_location(paths.broker_accounts_db_path)
+    data_ok = directory_is_writable(paths.backend_data_dir)
+    backend_data_dir = str(paths.backend_data_dir)
+    suspicious = ("/tmp/" in backend_data_dir) or ("\\temp\\" in backend_data_dir.lower()) or ("tmp\\" in backend_data_dir.lower())
+    warning = ""
+    if not data_ok or not users_ok or not broker_ok:
+        warning = (
+            "저장소 쓰기 불가 경고: users.json/broker_accounts.db/backend_data_dir 중 일부가 writable=false 입니다. "
+            "Render Persistent Disk(BACKEND_DATA_DIR) 연결을 확인하세요."
+        )
+    elif suspicious and (cfg.app_env or "").lower() == "production":
+        warning = (
+            "BACKEND_DATA_DIR 가 임시 경로로 보입니다. Render 재시작 시 users.json/broker_accounts.db/paper 상태가 유실될 수 있습니다. "
+            "Persistent Disk 경로를 BACKEND_DATA_DIR 로 설정하세요."
+        )
+    return {
+        "backend_data_dir": backend_data_dir,
+        "backend_data_dir_writable": data_ok,
+        "users_json_writable": users_ok,
+        "broker_accounts_db_writable": broker_ok,
+        "warning": warning,
+    }
 
 
 def _tail_text_lines(path: Path, *, max_lines: int = 30) -> list[str]:
@@ -427,6 +455,7 @@ def dashboard_summary(authorization: str | None = Header(default=None)) -> dict[
 
     server_rt_banner = _server_runtime_banner(broker_probe, user_broker_snap)
     paper_usr_banner = _user_paper_banner(paper_trading_status, psd)
+    storage_diag = _storage_diagnostics(cfg)
 
     return {
         "updated_at_utc": now_iso,
@@ -505,6 +534,7 @@ def dashboard_summary(authorization: str | None = Header(default=None)) -> dict[
         "user_broker_account": user_broker_snap,
         "server_runtime_banner": server_rt_banner,
         "user_paper_banner": paper_usr_banner,
+        "storage_diagnostics": storage_diag,
         "paper_session_dashboard": paper_session_dashboard,
         "dashboard_scope": {
             "positions_open_orders_fills": "user_paper_session" if psd else "server_env",

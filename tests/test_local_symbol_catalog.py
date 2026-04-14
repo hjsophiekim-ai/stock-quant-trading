@@ -24,4 +24,4 @@ def test_name_search_ignores_pure_symbol_style() -> None:
 
 
 def test_catalog_non_empty() -> None:
-    assert catalog_size() >= 10
+    assert catalog_size() >= 100

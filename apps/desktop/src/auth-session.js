@@ -2,11 +2,51 @@
  * Electron(userData 파일) + sessionStorage + localStorage 에서 세션 복원.
  * 모든 보호된 HTML에서 runtime-config.js 다음에 로드하세요.
  */
+async function persistDesktopTokenPayload(payload) {
+  if (!payload || !payload.accessToken) return;
+  const safe = {
+    accessToken: payload.accessToken,
+    refreshToken: payload.refreshToken || "",
+    email: payload.email || "",
+  };
+  localStorage.setItem("accessToken", safe.accessToken);
+  localStorage.setItem("refreshToken", safe.refreshToken);
+  localStorage.setItem("email", safe.email);
+  if (window.appBridge) {
+    try {
+      await window.appBridge.authSave(safe);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 async function resolveDesktopSession() {
+  const ssAccess = sessionStorage.getItem("accessToken") || "";
+  const ssRefresh = sessionStorage.getItem("refreshToken") || "";
+  const ssEmail = sessionStorage.getItem("email") || "";
+  const lsAccess = localStorage.getItem("accessToken") || "";
+  const lsRefresh = localStorage.getItem("refreshToken") || "";
+  const lsEmail = localStorage.getItem("email") || "";
+
+  // sessionStorage only 로 남아 있는 토큰은 앱 시작 시 영구 저장으로 승격.
+  if (ssAccess && !lsAccess) {
+    await persistDesktopTokenPayload({
+      accessToken: ssAccess,
+      refreshToken: ssRefresh,
+      email: ssEmail,
+    });
+  }
+
   if (typeof window !== "undefined" && window.appBridge) {
     try {
       const t = await window.appBridge.authLoad();
       if (t && t.accessToken) {
+        await persistDesktopTokenPayload({
+          accessToken: t.accessToken,
+          refreshToken: t.refreshToken || "",
+          email: t.email || "",
+        });
         return {
           accessToken: t.accessToken,
           refreshToken: t.refreshToken || "",
@@ -17,16 +57,23 @@ async function resolveDesktopSession() {
       /* ignore */
     }
   }
-  const accessToken =
-    sessionStorage.getItem("accessToken") || localStorage.getItem("accessToken");
+  const accessToken = localStorage.getItem("accessToken") || sessionStorage.getItem("accessToken");
   if (!accessToken) {
     return null;
   }
-  return {
+  const out = {
     accessToken,
-    refreshToken:
-      sessionStorage.getItem("refreshToken") || localStorage.getItem("refreshToken") || "",
-    email: sessionStorage.getItem("email") || localStorage.getItem("email") || "",
+    refreshToken: localStorage.getItem("refreshToken") || sessionStorage.getItem("refreshToken") || "",
+    email: localStorage.getItem("email") || sessionStorage.getItem("email") || "",
+  };
+  // Electron 환경은 remember 여부와 무관하게 영구 저장.
+  if (typeof window !== "undefined" && window.appBridge) {
+    await persistDesktopTokenPayload(out);
+  }
+  return {
+    accessToken: out.accessToken,
+    refreshToken: out.refreshToken,
+    email: out.email,
   };
 }
 
@@ -36,34 +83,18 @@ function effectiveBackendUrl() {
   return o && o.trim() ? o.trim() : def;
 }
 
-/** 로그인 화면과 동일한 규칙: remember 시 localStorage + appBridge */
-function usesPersistentTokenStorage() {
-  return !!localStorage.getItem("accessToken") || !!localStorage.getItem("refreshToken");
-}
-
 async function persistDesktopTokens(data, email) {
-  const remember = usesPersistentTokenStorage();
   const payload = {
     accessToken: data.access_token,
     refreshToken: data.refresh_token,
     email: email || "",
   };
-  if (remember) {
-    if (window.appBridge) {
-      try {
-        await window.appBridge.authSave(payload);
-      } catch {
-        /* ignore */
-      }
-    }
-    localStorage.setItem("accessToken", data.access_token);
-    localStorage.setItem("refreshToken", data.refresh_token);
-    localStorage.setItem("email", email || "");
-  } else {
-    sessionStorage.setItem("accessToken", data.access_token);
-    sessionStorage.setItem("refreshToken", data.refresh_token);
-    sessionStorage.setItem("email", email || "");
-  }
+  // 데스크톱 보호 페이지는 기본 영구 저장(localStorage + appBridge)로 일관화.
+  await persistDesktopTokenPayload(payload);
+  // 호환성: 기존 코드가 sessionStorage를 참조해도 동작하도록 동시 반영.
+  sessionStorage.setItem("accessToken", data.access_token);
+  sessionStorage.setItem("refreshToken", data.refresh_token);
+  sessionStorage.setItem("email", email || "");
 }
 
 /**
@@ -80,6 +111,11 @@ async function ensureValidBackendSession(backendUrl) {
     headers: { Authorization: "Bearer " + session.accessToken },
   });
   if (res.ok) {
+    await persistDesktopTokenPayload({
+      accessToken: session.accessToken,
+      refreshToken: session.refreshToken || "",
+      email: session.email || "",
+    });
     return { ok: true, kind: "ok" };
   }
   if (res.status === 401 && session.refreshToken) {

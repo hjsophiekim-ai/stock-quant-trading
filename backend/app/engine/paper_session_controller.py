@@ -5,11 +5,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
 import traceback
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from backend.app.api.broker_routes import get_broker_service
@@ -57,19 +59,103 @@ class PaperSessionController:
         self._last_paper_portfolio_sync_at: float = 0.0
         self._paper_token_ensure_meta: dict[str, Any] = {}
         self._last_paper_initial_token_source: str | None = None
+        self._started_at_utc: str | None = None
+        self._desired_running: bool = False
+        self._resume_info: dict[str, Any] = {
+            "enabled": True,
+            "restored_from_state": False,
+            "last_resume_attempt_utc": None,
+            "last_resume_error": None,
+        }
+        acfg = app_get_settings()
+        self._resume_info["enabled"] = bool(getattr(acfg, "paper_session_auto_resume", True))
+        self._state_path = Path(acfg.paper_session_state_path).expanduser().resolve()
+        self._load_desired_state()
+        self._try_auto_resume()
 
     def _max_failures(self) -> int:
         return max(1, int(get_backend_settings().runtime_max_consecutive_failures))
 
     def _interval_sec(self) -> int:
-        # Paper 세션 틱 간격은 앱 Settings 의 PAPER_TRADING_INTERVAL_SEC (KIS mock 부하·rate limit 완화).
+        # Paper 세션 틱 간격: 인트라데이(scalp)는 PAPER_INTRADAY_LOOP_INTERVAL_SEC, 그 외 PAPER_TRADING_INTERVAL_SEC.
         acfg = app_get_settings()
+        sid = (self._strategy_id or "").lower().strip()
+        if bool(acfg.paper_intraday_enabled) and sid in ("scalp_momentum_v1", "scalp_momentum_v2"):
+            return max(20, int(acfg.paper_intraday_loop_interval_sec))
         return max(25, int(acfg.paper_trading_interval_sec))
 
     def _append_log(self, level: str, msg: str) -> None:
         entry = {"ts": datetime.now(timezone.utc).isoformat(), "level": level, "message": msg[:2000]}
         self._logs.insert(0, entry)
         self._logs = self._logs[:100]
+
+    def _state_snapshot(self) -> dict[str, Any]:
+        return {
+            "desired_running": self._desired_running,
+            "status": self._status,
+            "user_id": self._user_id,
+            "strategy_id": self._strategy_id,
+            "started_at_utc": self._started_at_utc,
+            "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def _save_desired_state(self) -> None:
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            self._state_path.write_text(
+                json.dumps(self._state_snapshot(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            logger.warning("paper desired state save skipped: %s", exc)
+
+    def _clear_desired_state(self) -> None:
+        try:
+            self._state_path.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning("paper desired state clear skipped: %s", exc)
+
+    def _load_desired_state(self) -> None:
+        if not self._state_path.is_file():
+            return
+        try:
+            raw = json.loads(self._state_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                return
+            self._desired_running = bool(raw.get("desired_running"))
+            self._user_id = str(raw.get("user_id") or "").strip() or None
+            self._strategy_id = str(raw.get("strategy_id") or "").strip() or None
+            self._started_at_utc = str(raw.get("started_at_utc") or "").strip() or None
+            if self._desired_running and self._user_id and self._strategy_id:
+                self._resume_info["restored_from_state"] = True
+        except (OSError, ValueError, TypeError) as exc:
+            logger.warning("paper desired state load skipped: %s", exc)
+
+    def _try_auto_resume(self) -> None:
+        if not bool(self._resume_info.get("enabled")):
+            return
+        if not (self._desired_running and self._user_id and self._strategy_id):
+            return
+        self._resume_info["last_resume_attempt_utc"] = datetime.now(timezone.utc).isoformat()
+        try:
+            svc = get_broker_service()
+            acc = svc.get_account(self._user_id)
+            if acc.trading_mode != "paper":
+                raise RuntimeError("PAPER_MODE_REQUIRED")
+            if acc.connection_status != "success":
+                raise RuntimeError("BROKER_NOT_READY")
+            self._run_flag = True
+            self._status = "running"
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(target=self._loop, name="paper-user-session", daemon=True)
+                self._thread.start()
+            self._append_log("info", f"Paper desired state auto-resume strategy={self._strategy_id}")
+            self._resume_info["last_resume_error"] = None
+        except Exception as exc:
+            self._status = "stopped"
+            self._run_flag = False
+            self._resume_info["last_resume_error"] = str(exc)
+            self._append_log("warning", f"Paper auto-resume skipped: {exc}")
 
     def _apply_paper_tick_diagnostics(self, out: dict[str, Any]) -> None:
         """틱 결과에서 KIS 실패 맥락·토큰 출처·호출 예산(캐시 히트 등)을 누적(진단 API용)."""
@@ -139,6 +225,8 @@ class PaperSessionController:
                     self._append_log("error", "trading_mode≠paper — 세션 중단 (live 혼선 방지)")
                     self._status = "stopped"
                     self._run_flag = False
+                    self._desired_running = False
+                    self._save_desired_state()
                     break
                 api_base = svc._resolve_kis_api_base(mode)
                 if "openapivts" not in (api_base or ""):
@@ -218,6 +306,7 @@ class PaperSessionController:
                 if self._failure_streak >= self._max_failures():
                     self._status = "risk_off"
                     self._append_log("error", "연속 실패 한도 → risk_off (paper-trading/risk-reset 또는 stop 후 재시작)")
+                    self._save_desired_state()
             end = time.monotonic() + float(self._interval_sec())
             while self._run_flag and time.monotonic() < end:
                 time.sleep(min(1.0, end - time.monotonic()))
@@ -259,13 +348,16 @@ class PaperSessionController:
             self._failure_streak = 0
             self._last_error = None
             self._status = "running"
+            self._started_at_utc = datetime.now(timezone.utc).isoformat()
             self._user_loop = None
             self._user_loop_identity = None
             self._last_positions_refresh_at = 0.0
             self._last_paper_portfolio_sync_at = 0.0
             self._run_flag = True
+            self._desired_running = True
             self._thread = threading.Thread(target=self._loop, name="paper-user-session", daemon=True)
             self._thread.start()
+            self._save_desired_state()
         self._append_log("info", f"Paper 세션 시작 strategy={strategy_id} (KIS 모의)")
         return {"ok": True, "status": self._status}
 
@@ -283,7 +375,10 @@ class PaperSessionController:
             self._thread = None
             self._user_loop = None
             self._user_loop_identity = None
+            self._desired_running = False
         self._last_paper_initial_token_source = None
+        self._save_desired_state()
+        self._clear_desired_state()
         self._append_log("info", "Paper 세션 중지")
         return {"ok": True, "status": "stopped"}
 
@@ -302,6 +397,8 @@ class PaperSessionController:
                 if self._user_id and self._strategy_id:
                     self._thread = threading.Thread(target=self._loop, name="paper-user-session", daemon=True)
                     self._thread.start()
+            self._desired_running = True
+            self._save_desired_state()
         self._append_log("info", "Paper risk_off 해제")
         return {"ok": True, "status": self._status}
 
@@ -323,6 +420,10 @@ class PaperSessionController:
                     "equity": self._last_report.get("equity"),
                     "daily_return_pct": self._last_report.get("daily_return_pct"),
                 },
+                "started_at_utc": self._started_at_utc,
+                "desired_running": self._desired_running,
+                "desired_state_path": str(self._state_path),
+                "resume_info": dict(self._resume_info),
                 "diagnostics": dict(self._paper_diagnostics),
             }
 
@@ -400,6 +501,16 @@ class PaperSessionController:
             "no_order_reason": rep.get("no_order_reason") or "",
             "last_diagnostics": list(rep.get("last_diagnostics") or []),
             "candidate_filter_breakdown": list(cfb),
+            "timeframe": rep.get("timeframe"),
+            "trade_count_today": rep.get("trade_count_today"),
+            "intraday_filter_breakdown": list(rep.get("intraday_filter_breakdown") or []),
+            "intraday_signal_breakdown": dict(rep.get("intraday_signal_breakdown") or {}),
+            "forced_flatten": bool(rep.get("forced_flatten")),
+            "flatten_before_close_armed": bool(rep.get("flatten_before_close_armed")),
+            "cooldown_symbols": list(rep.get("cooldown_symbols") or []),
+            "paper_intraday_target_round_trip_trades": rep.get("paper_intraday_target_round_trip_trades"),
+            "daily_pnl_pct_snapshot": rep.get("daily_pnl_pct_snapshot"),
+            "risk_halt_new_entries": rep.get("risk_halt_new_entries"),
         }
 
         return {

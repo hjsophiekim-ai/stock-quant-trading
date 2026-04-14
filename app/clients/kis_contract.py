@@ -40,6 +40,10 @@ class DomesticStockPaths:
     order_cancel: str = "/uapi/domestic-stock/v1/trading/order-rvsecncl"
     hashkey: str = "/uapi/hashkey"
     daily_itemchart: str = "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
+    # 당일 분봉 (시간별 OHLC) — 공식 샘플: TR FHKST03010200
+    time_itemchart: str = "/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
+    # 당일 시간대별 체결 요약 — 공식 샘플: TR FHPST01060000 (문서/샘플 기준)
+    time_itemconclusion: str = "/uapi/domestic-stock/v1/quotations/inquire-time-itemconclusion"
     inquire_psbl_order: str = "/uapi/domestic-stock/v1/trading/inquire-psbl-order"
     # 레거시 전용 미체결 URL(일부 환경 404). 클라이언트는 inquire_daily_ccld(CCLD_DVSN=02) 사용.
     inquire_nccs: str = "/uapi/domestic-stock/v1/trading/inquire-nccs"
@@ -69,6 +73,11 @@ class DomesticTrIds:
     cancel_live: str = "TTTC0803U"
     daily_chart_paper: str = "FHKST03010100"
     daily_chart_live: str = "FHKST03010100"
+    # 주식당일분봉조회 — 모의/실전 동일 TR (open-trading-api inquire_time_itemchartprice)
+    time_itemchart_paper: str = "FHKST03010200"
+    time_itemchart_live: str = "FHKST03010200"
+    time_itemconclusion_paper: str = "FHPST01060000"
+    time_itemconclusion_live: str = "FHPST01060000"
 
 
 def pick_tr(*, paper: str, live: str, base_url: str) -> str:

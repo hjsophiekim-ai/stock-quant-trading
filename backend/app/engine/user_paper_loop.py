@@ -17,12 +17,19 @@ from app.config import get_settings
 from app.risk.kill_switch import KillSwitch
 from app.risk.rules import RiskLimits, RiskRules
 from app.scheduler.equity_tracker import EquityTracker
+from app.scheduler.intraday_jobs import IntradaySchedulerJobs, fetch_quotes_throttled, infer_forced_flatten
 from app.scheduler.jobs import SchedulerJobs
+from app.scheduler.kis_intraday import (
+    IntradayChartCache,
+    build_intraday_universe_1m,
+    universe_as_timeframe,
+)
 from app.scheduler.kis_universe import (
     build_kis_stock_universe,
     build_kospi_index_series,
     build_mock_sp500_proxy_from_kospi,
 )
+from app.strategy.intraday_paper_state import IntradayPaperStateStore
 
 from backend.app.auth.kis_auth import issue_access_token
 from backend.app.clients.kis_client import build_kis_client_for_paper_user
@@ -30,6 +37,11 @@ from backend.app.core.config import BackendSettings, get_backend_settings
 from backend.app.engine.paper_strategy import strategy_for_paper_id
 
 logger = logging.getLogger("backend.app.engine.user_paper_loop")
+
+
+def _is_intraday_scalp_strategy(strategy_id: str) -> bool:
+    s = (strategy_id or "").lower().strip()
+    return s in ("scalp_momentum_v1", "scalp_momentum_v2")
 
 
 class UserPaperTradingLoop:
@@ -138,7 +150,199 @@ class UserPaperTradingLoop:
             logger=logger,
         )
 
+    def _build_intraday_jobs(self, client, *, state_store: IntradayPaperStateStore):
+        cfg = get_settings()
+        broker = KisPaperBroker(
+            kis_client=client,
+            account_no=self._account_no,
+            account_product_code=self._product_code,
+            logger=logger,
+        )
+        eq_path = Path(cfg.paper_session_state_path).parent / f"equity_tracker_{self._user_tag}.json"
+        tracker = EquityTracker(eq_path, logger=logger)
+        rules = RiskRules(
+            RiskLimits(
+                daily_loss_limit_pct=cfg.daily_loss_limit_pct,
+                total_loss_limit_pct=cfg.total_loss_limit_pct,
+                default_stop_loss_pct=cfg.default_stop_loss_pct,
+            )
+        )
+        kill = KillSwitch(rules=rules)
+        strat = strategy_for_paper_id(self._strategy_id)
+        return IntradaySchedulerJobs(
+            strategy=strat,
+            broker=broker,
+            risk_rules=rules,
+            kill_switch=kill,
+            equity_tracker=tracker,
+            state_store=state_store,
+            logger=logger,
+        )
+
+    def _run_intraday_scalp_tick(self) -> dict[str, Any]:
+        """분봉 단타 전용 — 일봉 유니버스와 분리."""
+        failed_step = "kis_client"
+        try:
+            try:
+                client = self._kis_client()
+            except RuntimeError as exc:
+                err_s = str(exc)
+                is_rl = err_s.startswith("TOKEN_RATE_LIMIT:") or "TOKEN_RATE_LIMIT" in err_s
+                fk = "token_rate_limit" if is_rl else "token_failure"
+                return {
+                    "ok": False,
+                    "error": err_s,
+                    "failed_step": "kis_token",
+                    "kis_context": {},
+                    "token_source": self.token_source_for_diagnostics(),
+                    "failure_kind": fk,
+                    "token_error_code": "TOKEN_RATE_LIMIT" if is_rl else (self._last_token_error_code or "TOKEN_FAILURE"),
+                    "paper_loop_fresh_issue": False,
+                    "paper_loop_last_token_failure_at": self._last_token_failure_at_iso,
+                    "paper_loop_last_token_http_status": self._last_token_http_status,
+                }
+
+            cfg = get_settings()
+            symbols = [s.strip() for s in cfg.paper_trading_symbols.split(",") if s.strip()]
+            if not symbols:
+                return {
+                    "ok": False,
+                    "error": "paper_trading_symbols 비어 있음 (app 설정)",
+                    "failed_step": "config",
+                    "kis_context": {},
+                    "token_source": self.token_source_for_diagnostics(),
+                    "failure_kind": "config",
+                }
+            if cfg.paper_smoke_mode:
+                symbols = symbols[:1]
+
+            state_path = Path(cfg.paper_session_state_path).parent / f"paper_intraday_state_{self._user_tag}.json"
+            state_store = IntradayPaperStateStore(state_path, logger=logger)
+            chart_cache = IntradayChartCache(
+                ttl_sec=float(cfg.paper_intraday_chart_cache_ttl_sec),
+                min_interval_sec=float(cfg.paper_intraday_chart_min_interval_sec),
+            )
+
+            failed_step = "intraday_universe"
+            universe_1m = build_intraday_universe_1m(
+                client,
+                symbols,
+                target_bars_per_symbol=140,
+                logger=logger,
+                cache=chart_cache,
+            )
+
+            sid = (self._strategy_id or "").lower().strip()
+            if sid == "scalp_momentum_v1":
+                universe_tf = universe_as_timeframe(universe_1m, 3)
+                timeframe = "3m"
+            else:
+                universe_tf = universe_1m
+                timeframe = "1m"
+
+            failed_step = "kospi_series"
+            now_m = time.monotonic()
+            ttl_u = int(cfg.paper_kis_kospi_cache_ttl_sec)
+            lookback = max(int(cfg.paper_kis_chart_lookback_days), 60)
+            univ_key = f"kospi|{lookback}"
+            kospi_cache_hit = False
+            if (
+                ttl_u > 0
+                and self._kospi_df is not None
+                and self._kospi_sig == univ_key
+                and (now_m - self._kospi_ts) < float(ttl_u)
+            ):
+                kospi = self._kospi_df
+                kospi_cache_hit = True
+            else:
+                kospi = build_kospi_index_series(
+                    client,
+                    lookback_calendar_days=lookback,
+                    logger=logger,
+                )
+                self._kospi_sig = univ_key
+                self._kospi_ts = time.monotonic()
+                self._kospi_df = kospi
+
+            sp500 = build_mock_sp500_proxy_from_kospi(kospi)
+
+            failed_step = "intraday_quotes"
+            quote_by_symbol = fetch_quotes_throttled(
+                client,
+                symbols,
+                min_interval_sec=max(0.15, float(cfg.paper_intraday_chart_min_interval_sec)),
+                logger=logger,
+            )
+            forced_flatten = infer_forced_flatten(cfg)
+
+            failed_step = "intraday_jobs"
+            jobs = self._build_intraday_jobs(client, state_store=state_store)
+            report = jobs.run_intraday_cycle(
+                universe_tf=universe_tf,
+                kospi_index=kospi,
+                sp500_index=sp500,
+                timeframe=timeframe,
+                quote_by_symbol=quote_by_symbol,
+                forced_flatten=forced_flatten,
+            )
+
+            return {
+                "ok": True,
+                "report": report,
+                "token_source": self.token_source_for_diagnostics(),
+                "token_cache_source": self.token_source_for_diagnostics(),
+                "token_error_code": None,
+                "paper_loop_fresh_issue": self._token_issued_locally,
+                "paper_loop_last_token_failure_at": self._last_token_failure_at_iso,
+                "paper_loop_last_token_error_code": self._last_token_error_code,
+                "paper_loop_last_token_http_status": self._last_token_http_status,
+                "universe_cache_hit": False,
+                "kospi_cache_hit": kospi_cache_hit,
+                "request_budget_mode": "paper_intraday",
+                "throttled_mode": int(cfg.kis_min_request_interval_ms) > 0,
+                "paper_tick_interval_sec": int(cfg.paper_intraday_loop_interval_sec),
+                "paper_intraday_mode": True,
+            }
+        except KISClientError as exc:
+            ctx = getattr(exc, "kis_context", {}) or {}
+            if ctx.get("rate_limit"):
+                fk = "rate_limit"
+            elif "business error" in str(exc).lower():
+                fk = "kis_business_error"
+            else:
+                fk = "kis_client_error"
+            return {
+                "ok": False,
+                "error": str(exc),
+                "failed_step": failed_step,
+                "kis_context": ctx,
+                "token_source": self.token_source_for_diagnostics(),
+                "failure_kind": fk,
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": str(exc),
+                "failed_step": failed_step,
+                "kis_context": {},
+                "token_source": self.token_source_for_diagnostics(),
+                "failure_kind": type(exc).__name__,
+            }
+
     def run_intraday_tick(self) -> dict[str, Any]:
+        cfg = get_settings()
+        if _is_intraday_scalp_strategy(self._strategy_id):
+            if not bool(cfg.paper_intraday_enabled):
+                return {
+                    "ok": False,
+                    "error": "scalp 전략은 PAPER_INTRADAY_ENABLED=true 일 때만 실행됩니다.",
+                    "failed_step": "config",
+                    "kis_context": {},
+                    "token_source": self.token_source_for_diagnostics(),
+                    "failure_kind": "config",
+                }
+            return self._run_intraday_scalp_tick()
+
         failed_step = "kis_client"
         try:
             try:
@@ -258,6 +462,7 @@ class UserPaperTradingLoop:
                 "request_budget_mode": "paper_conserve",
                 "throttled_mode": int(cfg.kis_min_request_interval_ms) > 0,
                 "paper_tick_interval_sec": int(cfg.paper_trading_interval_sec),
+                "paper_intraday_mode": False,
             }
         except KISClientError as exc:
             ctx = getattr(exc, "kis_context", {}) or {}
