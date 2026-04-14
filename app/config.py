@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     paper_trading_loop: bool = Field(default=False, alias="PAPER_TRADING_LOOP")
     paper_trading_interval_sec: int = Field(default=600, ge=30, alias="PAPER_TRADING_INTERVAL_SEC")
     paper_trading_symbols: str = Field(default="005930,000660", alias="PAPER_TRADING_SYMBOLS")
-    # 비어 있으면 paper_trading_symbols(또는 종목 수 부족 시 data/domestic_liquid_symbols 상위 N) 사용 — 인트라데이 전용
+    # 비어 있으면 인트라데이 전용 기본 대표 유동 종목 fallback 사용
     paper_intraday_symbols: str = Field(default="", alias="PAPER_INTRADAY_SYMBOLS")
     paper_session_state_path: str = Field(default="data/paper_trading_session.json", alias="PAPER_SESSION_STATE_PATH")
     paper_session_auto_resume: bool = Field(default=True, alias="PAPER_SESSION_AUTO_RESUME")
@@ -85,26 +85,26 @@ class Settings(BaseSettings):
     paper_intraday_enabled: bool = Field(default=False, alias="PAPER_INTRADAY_ENABLED")
     paper_intraday_bar_minutes: int = Field(default=3, ge=1, le=60, alias="PAPER_INTRADAY_BAR_MINUTES")
     paper_intraday_loop_interval_sec: int = Field(default=90, ge=20, alias="PAPER_INTRADAY_LOOP_INTERVAL_SEC")
-    paper_intraday_max_trades_per_day: int = Field(default=24, ge=0, alias="PAPER_INTRADAY_MAX_TRADES_PER_DAY")
+    paper_intraday_max_trades_per_day: int = Field(default=30, ge=0, alias="PAPER_INTRADAY_MAX_TRADES_PER_DAY")
     paper_intraday_max_open_positions: int = Field(default=3, ge=1, alias="PAPER_INTRADAY_MAX_OPEN_POSITIONS")
     paper_intraday_max_hold_minutes: int = Field(default=20, ge=1, alias="PAPER_INTRADAY_MAX_HOLD_MINUTES")
-    paper_intraday_stop_loss_pct: float = Field(default=0.65, ge=0.05, le=20.0, alias="PAPER_INTRADAY_STOP_LOSS_PCT")
-    paper_intraday_take_profit_pct: float = Field(default=1.1, ge=0.05, le=50.0, alias="PAPER_INTRADAY_TAKE_PROFIT_PCT")
-    paper_intraday_trailing_stop_pct: float = Field(default=0.45, ge=0.0, le=20.0, alias="PAPER_INTRADAY_TRAILING_STOP_PCT")
-    paper_intraday_cooldown_minutes: int = Field(default=12, ge=0, alias="PAPER_INTRADAY_COOLDOWN_MINUTES")
+    paper_intraday_stop_loss_pct: float = Field(default=0.50, ge=0.05, le=20.0, alias="PAPER_INTRADAY_STOP_LOSS_PCT")
+    paper_intraday_take_profit_pct: float = Field(default=0.80, ge=0.05, le=50.0, alias="PAPER_INTRADAY_TAKE_PROFIT_PCT")
+    paper_intraday_trailing_stop_pct: float = Field(default=0.35, ge=0.0, le=20.0, alias="PAPER_INTRADAY_TRAILING_STOP_PCT")
+    paper_intraday_cooldown_minutes: int = Field(default=7, ge=0, alias="PAPER_INTRADAY_COOLDOWN_MINUTES")
     paper_intraday_min_quote_volume: float = Field(
-        default=80_000.0,
+        default=50_000.0,
         ge=0.0,
         alias="PAPER_INTRADAY_MIN_QUOTE_VOLUME",
     )
     paper_intraday_min_trade_value_krw: float = Field(
-        default=3_000_000_000.0,
+        default=1_500_000_000.0,
         ge=0.0,
         alias="PAPER_INTRADAY_MIN_TRADE_VALUE_KRW",
     )
-    paper_intraday_max_spread_pct: float = Field(default=0.35, ge=0.0, alias="PAPER_INTRADAY_MAX_SPREAD_PCT")
+    paper_intraday_max_spread_pct: float = Field(default=0.45, ge=0.0, alias="PAPER_INTRADAY_MAX_SPREAD_PCT")
     paper_intraday_max_chase_candle_pct: float = Field(default=1.8, ge=0.0, alias="PAPER_INTRADAY_MAX_CHASE_CANDLE_PCT")
-    paper_intraday_max_daily_loss_pct: float = Field(default=1.5, ge=0.0, alias="PAPER_INTRADAY_MAX_DAILY_LOSS_PCT")
+    paper_intraday_max_daily_loss_pct: float = Field(default=1.2, ge=0.0, alias="PAPER_INTRADAY_MAX_DAILY_LOSS_PCT")
     paper_intraday_flatten_before_close_minutes: int = Field(
         default=15,
         ge=1,
@@ -156,29 +156,45 @@ class Settings(BaseSettings):
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             return []
 
+    def intraday_fallback_symbols(self) -> list[str]:
+        """인트라데이 기본 대표 유동 종목(코스피/코스닥 대형·고유동 중심)."""
+        return [
+            "005930",  # 삼성전자
+            "000660",  # SK하이닉스
+            "035420",  # NAVER
+            "035720",  # 카카오
+            "005380",  # 현대차
+            "000270",  # 기아
+            "207940",  # 삼성바이오로직스
+            "068270",  # 셀트리온
+            "105560",  # KB금융
+            "055550",  # 신한지주
+            "005490",  # POSCO홀딩스
+            "373220",  # LG에너지솔루션
+            "006400",  # 삼성SDI
+            "051910",  # LG화학
+            "012450",  # 한화에어로스페이스
+            "034020",  # 두산에너빌리티
+            "329180",  # HD현대중공업
+            "015760",  # 한국전력
+            "003490",  # 대한항공
+            "011200",  # HMM
+            "096770",  # SK이노베이션
+            "028260",  # 삼성물산
+            "012330",  # 현대모비스
+            "005935",  # 삼성전자우
+            "323410",  # 카카오뱅크
+        ]
+
     def resolved_intraday_symbol_list(self) -> list[str]:
         """
         PAPER_INTRADAY_SYMBOLS 가 있으면 우선.
-        없으면 PAPER_TRADING_SYMBOLS — 종목이 10개 미만이면 domestic_liquid 상위와 병합(최대 ~30).
+        비어 있으면 인트라데이 전용 fallback(20~30개) 사용.
         """
         explicit = (self.paper_intraday_symbols or "").strip()
         if explicit:
             return [x.strip() for x in explicit.split(",") if x.strip()][:60]
-        base = [x.strip() for x in (self.paper_trading_symbols or "").split(",") if x.strip()]
-        if len(base) >= 10:
-            return base[:35]
-        fb = self.load_intraday_fallback_symbols(max_count=28)
-        merged: list[str] = []
-        seen: set[str] = set()
-        for s in base + fb:
-            s = s.strip()
-            if not s or s in seen:
-                continue
-            seen.add(s)
-            merged.append(s)
-            if len(merged) >= 30:
-                break
-        return merged
+        return self.intraday_fallback_symbols()
 
     @property
     def resolved_account_no(self) -> str:

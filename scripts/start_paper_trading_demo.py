@@ -30,7 +30,7 @@ def main() -> int:
     p.add_argument(
         "--strategy-id",
         default="swing_v1",
-        help="Paper strategy id: swing_v1 | swing_relaxed_v1 | swing_relaxed_v2 | bull_focus_v1 | defensive_v1 | scalp_momentum_v1 | scalp_momentum_v2 (not 'live'; scalp 는 PAPER_INTRADAY_ENABLED 필요)",
+        help="Paper strategy id: swing_v1 | swing_relaxed_v1 | swing_relaxed_v2 | bull_focus_v1 | defensive_v1 | scalp_momentum_v1 | scalp_momentum_v2 | scalp_momentum_v3 (not 'live'; scalp 는 PAPER_INTRADAY_ENABLED 필요)",
     )
     p.add_argument("--sync-portfolio", action="store_true", help="POST /api/portfolio/sync after start")
     p.add_argument("--email", default="", help="Login email (with --password) for Bearer token")

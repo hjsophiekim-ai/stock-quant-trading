@@ -80,7 +80,7 @@ class PaperSessionController:
         # Paper 세션 틱 간격: 인트라데이(scalp)는 PAPER_INTRADAY_LOOP_INTERVAL_SEC, 그 외 PAPER_TRADING_INTERVAL_SEC.
         acfg = app_get_settings()
         sid = (self._strategy_id or "").lower().strip()
-        if bool(acfg.paper_intraday_enabled) and sid in ("scalp_momentum_v1", "scalp_momentum_v2"):
+        if bool(acfg.paper_intraday_enabled) and sid in ("scalp_momentum_v1", "scalp_momentum_v2", "scalp_momentum_v3"):
             return max(20, int(acfg.paper_intraday_loop_interval_sec))
         return max(25, int(acfg.paper_trading_interval_sec))
 
@@ -517,6 +517,7 @@ class PaperSessionController:
             "minute_bars_present": rep.get("minute_bars_present"),
             "symbols_request_count": rep.get("symbols_request_count"),
             "paper_trading_symbols_resolved": list(rep.get("paper_trading_symbols_resolved") or []),
+            "intraday_symbols_source": rep.get("intraday_symbols_source"),
             "intraday_universe_symbol_count": rep.get("intraday_universe_symbol_count"),
             "intraday_universe_row_count": rep.get("intraday_universe_row_count"),
             "intraday_bar_fetch_summary": list(rep.get("intraday_bar_fetch_summary") or []),

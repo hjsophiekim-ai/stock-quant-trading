@@ -1,4 +1,4 @@
-"""Paper 인트라데이 단타 v2 — 1분봉·완화형 모멘텀(점수 기반) + 리스크 우선."""
+"""Paper 인트라데이 단타 v3 — v2보다 진입 완화, 대신 손실 관리 더 타이트."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from app.strategy.intraday_common import (
     is_regular_krx_session,
     last_bar_body_pct,
     quote_liquidity_from_payload,
-    rsi_wilder,
     session_vwap,
     should_force_flatten_before_close_kst,
     volume_zscore_recent,
@@ -25,8 +24,8 @@ from app.strategy.market_regime import MarketRegimeConfig, MarketRegimeInputs, c
 
 
 @dataclass
-class ScalpMomentumV2Strategy(BaseStrategy):
-    """1분봉 VWAP reclaim·단기 EMA 정배열·거래량 스파이크. 동일 종목 재진입 쿨다운은 루프/상태에서 처리."""
+class ScalpMomentumV3Strategy(BaseStrategy):
+    """1분봉 초단타 진입 빈도 확대 버전(5개 신호 중 2개 이상) + 보수적 청산."""
 
     regime_config: MarketRegimeConfig = field(default_factory=MarketRegimeConfig)
     last_diagnostics: list[dict[str, Any]] = field(default_factory=list)
@@ -38,8 +37,6 @@ class ScalpMomentumV2Strategy(BaseStrategy):
     risk_halt_new_entries: bool = False
     timeframe_label: str = "1m"
 
-    _risk_tighten: float = 0.90
-
     def generate_signals(self, context: StrategyContext) -> list[StrategySignal]:
         cfg = get_settings()
         self.last_diagnostics = []
@@ -47,7 +44,6 @@ class ScalpMomentumV2Strategy(BaseStrategy):
         self.last_intraday_signal_breakdown = {"entries_evaluated": 0, "exits_evaluated": 0}
         signals: list[StrategySignal] = []
         st = self.intraday_state
-        rt = float(self._risk_tighten)
 
         if not is_regular_krx_session():
             self.last_intraday_signal_breakdown["session"] = "outside_regular"
@@ -72,10 +68,11 @@ class ScalpMomentumV2Strategy(BaseStrategy):
         if not portfolio.empty and "symbol" in portfolio.columns:
             pos_symbols = set(str(s).strip() for s in portfolio["symbol"].unique())
 
-        sl_pct = float(cfg.paper_intraday_stop_loss_pct) * rt
-        tp_pct = float(cfg.paper_intraday_take_profit_pct) * rt
-        trail_pct = float(cfg.paper_intraday_trailing_stop_pct) * rt
-        hold_min = float(cfg.paper_intraday_max_hold_minutes) * 0.65
+        # v3는 손절/익절/트레일/보유시간을 짧게(더 보수적 리스크 관리)
+        sl_pct = max(0.05, float(cfg.paper_intraday_stop_loss_pct) * 0.80)
+        tp_pct = max(0.05, float(cfg.paper_intraday_take_profit_pct) * 0.82)
+        trail_pct = max(0.0, float(cfg.paper_intraday_trailing_stop_pct) * 0.85)
+        hold_min = max(3.0, float(cfg.paper_intraday_max_hold_minutes) * 0.50)
 
         for sym in pos_symbols:
             sub = prices[prices["symbol"] == sym].sort_values("date") if not prices.empty else pd.DataFrame()
@@ -123,34 +120,29 @@ class ScalpMomentumV2Strategy(BaseStrategy):
                         price=last_px,
                         stop_loss_pct=None,
                         reason=exit_reason,
-                        strategy_name="scalp_momentum_v2",
+                        strategy_name="scalp_momentum_v3",
                     )
                 )
 
         if flatten_close:
             return signals
-
         if self.risk_halt_new_entries:
             self.last_intraday_signal_breakdown["blocked"] = "daily_loss_halt"
             return signals
-
         if st and int(cfg.paper_intraday_max_trades_per_day) > 0:
             if st.trade_count_today >= int(cfg.paper_intraday_max_trades_per_day):
                 self.last_intraday_signal_breakdown["blocked"] = "max_trades_per_day"
                 return signals
-
         open_n = len(pos_symbols)
         if open_n >= int(cfg.paper_intraday_max_open_positions):
             self.last_intraday_signal_breakdown["blocked"] = "max_open_positions"
             return signals
-
         if high_vol_block:
             self.last_intraday_signal_breakdown["blocked"] = "high_volatility_risk_no_entry"
             return signals
 
         max_new = max(0, int(cfg.paper_intraday_max_open_positions) - open_n)
         entries_added = 0
-
         if not prices.empty:
             for sym in prices["symbol"].unique():
                 sym = str(sym).strip()
@@ -171,11 +163,10 @@ class ScalpMomentumV2Strategy(BaseStrategy):
                     "mom_ok": False,
                     "vol_spike": False,
                     "micro_break": False,
-                    "rsi_ok": False,
                     "total_score": 0,
-                    "min_score_required": 3,
+                    "min_score_required": 2,
                 }
-                if len(sub) < 24:
+                if len(sub) < 20:
                     diag["blocked_reason"] = "insufficient_bars"
                     self.last_diagnostics.append(diag)
                     continue
@@ -183,19 +174,16 @@ class ScalpMomentumV2Strategy(BaseStrategy):
                 qp = self.quote_by_symbol.get(sym) or {}
                 liq = quote_liquidity_from_payload(qp) if qp else None
                 if liq:
-                    if liq["acml_vol"] < float(cfg.paper_intraday_min_quote_volume) * 0.8:
+                    if liq["acml_vol"] < float(cfg.paper_intraday_min_quote_volume) * 0.7:
                         diag["blocked_reason"] = "liquidity_volume"
-                        self.last_intraday_filter_breakdown.append({"symbol": sym, "rule": "min_volume"})
                         self.last_diagnostics.append(diag)
                         continue
-                    if liq["acml_tr_pbmn"] < float(cfg.paper_intraday_min_trade_value_krw) * 0.8:
+                    if liq["acml_tr_pbmn"] < float(cfg.paper_intraday_min_trade_value_krw) * 0.7:
                         diag["blocked_reason"] = "liquidity_trade_value"
-                        self.last_intraday_filter_breakdown.append({"symbol": sym, "rule": "min_trade_value"})
                         self.last_diagnostics.append(diag)
                         continue
-                    if liq["spread_pct"] > float(cfg.paper_intraday_max_spread_pct):
+                    if liq["spread_pct"] > float(cfg.paper_intraday_max_spread_pct) * 1.05:
                         diag["blocked_reason"] = "spread"
-                        self.last_intraday_filter_breakdown.append({"symbol": sym, "rule": "max_spread"})
                         self.last_diagnostics.append(diag)
                         continue
 
@@ -204,62 +192,44 @@ class ScalpMomentumV2Strategy(BaseStrategy):
                 ema8 = ema(close, 8)
                 ema21 = ema(close, 21)
                 vwap = session_vwap(sub)
-                rsi = rsi_wilder(close, 14)
                 vol = sub["volume"].astype(float)
-                vz = volume_zscore_recent(vol, 15)
+                vz = volume_zscore_recent(vol, 12)
                 last_close = float(close.iloc[-1])
                 prev_high = float(sub["high"].iloc[-2]) if len(sub) >= 2 else last_close
-                mom_ok = last_close >= float(close.iloc[-5]) * 1.0002 if len(close) >= 5 else False
-                ema_align = (
-                    len(ema3) > 0
-                    and len(ema8) > 0
-                    and float(ema3.iloc[-1]) > float(ema8.iloc[-1]) > float(ema21.iloc[-1])
-                )
-                vwap_reclaim = len(vwap) and last_close > float(vwap.iloc[-1]) * 1.0
-                micro_break = last_close > prev_high * 1.0001
-                vol_spike = vz is not None and vz > 0.10
-                rsi_ok = len(rsi) and float(rsi.iloc[-1]) < 76.0
-                body_pct = last_bar_body_pct(sub) or 0.0
-                if body_pct > float(cfg.paper_intraday_max_chase_candle_pct) * 1.2:
-                    diag["blocked_reason"] = "chase_candle"
-                    self.last_intraday_filter_breakdown.append({"symbol": sym, "rule": "chase_candle"})
-                    self.last_diagnostics.append(diag)
-                    continue
 
                 score_flags = {
-                    "ema_align": bool(ema_align),
-                    "vwap_reclaim": bool(vwap_reclaim),
-                    "mom_ok": bool(mom_ok),
-                    "vol_spike": bool(vol_spike),
-                    "micro_break": bool(micro_break),
-                    "rsi_ok": bool(rsi_ok),
+                    "ema_align": len(ema3) > 0 and len(ema8) > 0 and float(ema3.iloc[-1]) > float(ema8.iloc[-1]) > float(ema21.iloc[-1]),
+                    "vwap_reclaim": len(vwap) > 0 and last_close > float(vwap.iloc[-1]) * 1.0,
+                    "mom_ok": last_close >= float(close.iloc[-5]) * 1.0001 if len(close) >= 5 else False,
+                    "vol_spike": vz is not None and vz > -0.05,
+                    "micro_break": last_close > prev_high * 1.0,
                 }
                 total_score = sum(1 for v in score_flags.values() if v)
+                body_pct = last_bar_body_pct(sub) or 0.0
                 diag.update(score_flags)
                 diag["total_score"] = int(total_score)
-                diag["min_score_required"] = 3
                 diag["body_pct"] = float(body_pct)
-
-                if total_score < 3:
+                if body_pct > float(cfg.paper_intraday_max_chase_candle_pct) * 1.25:
+                    diag["blocked_reason"] = "chase_candle"
+                    self.last_diagnostics.append(diag)
+                    continue
+                if total_score < 2:
                     diag["blocked_reason"] = "signal_not_met"
                     self.last_diagnostics.append(diag)
                     continue
 
-                last_px = last_close
                 signals.append(
                     StrategySignal(
                         symbol=sym,
                         side="buy",
                         quantity=int(cfg.paper_intraday_order_quantity),
-                        price=last_px,
+                        price=last_close,
                         stop_loss_pct=sl_pct,
-                        reason="scalp_momentum_v2_entry",
-                        strategy_name="scalp_momentum_v2",
+                        reason="scalp_momentum_v3_entry",
+                        strategy_name="scalp_momentum_v3",
                     )
                 )
                 diag["entered"] = True
-                diag["blocked_reason"] = ""
                 self.last_diagnostics.append(diag)
                 entries_added += 1
-
         return signals

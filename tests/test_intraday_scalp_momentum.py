@@ -12,9 +12,13 @@ from zoneinfo import ZoneInfo
 
 from app.scheduler.kis_intraday import kis_time_chart_rows_to_ohlc_df, resample_minute_ohlc
 from app.scheduler.intraday_jobs import IntradaySchedulerJobs
+from app.config import get_settings
 from app.strategy.base_strategy import StrategyContext
 from app.strategy.intraday_paper_state import IntradayPaperState, IntradayPaperStateStore
+from app.strategy.market_regime import MarketRegimeConfig
 from app.strategy.scalp_momentum_v1_strategy import ScalpMomentumV1Strategy
+from app.strategy.scalp_momentum_v2_strategy import ScalpMomentumV2Strategy
+from app.strategy.scalp_momentum_v3_strategy import ScalpMomentumV3Strategy
 
 
 _KST = ZoneInfo("Asia/Seoul")
@@ -179,3 +183,114 @@ def test_buy_gate_cooldown_and_duplicate(monkeypatch: pytest.MonkeyPatch, tmp_pa
     st2.cooldown_until_iso["005930"] = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     g2 = jobs._intraday_buy_gate("005930", st2, cfg)
     assert g2["ok"] is False
+
+
+def _build_intraday_prices(symbol: str, bars: int, *, trend_step: float = 0.25) -> pd.DataFrame:
+    now = datetime.now(_KST).replace(second=0, microsecond=0)
+    start = now - timedelta(minutes=bars - 1)
+    rows = []
+    for i in range(bars):
+        px = 100.0 + (i * trend_step)
+        rows.append(
+            {
+                "symbol": symbol,
+                "date": start + timedelta(minutes=i),
+                "open": px - 0.03,
+                "high": px + 0.09,
+                "low": px - 0.08,
+                "close": px,
+                "volume": 10_000.0 + (i * 150.0),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _build_context_from_prices(price_df: pd.DataFrame) -> StrategyContext:
+    kospi = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=40, freq="D", tz=_KST),
+            "close": [2500.0 + (i * 0.5) for i in range(40)],
+        }
+    )
+    sp500 = kospi.copy()
+    vol = pd.DataFrame({"date": kospi["date"], "value": [1.0] * len(kospi)})
+    return StrategyContext(
+        prices=price_df,
+        kospi_index=kospi,
+        sp500_index=sp500,
+        portfolio=pd.DataFrame(columns=["symbol", "quantity", "average_price", "hold_days"]),
+        volatility_index=vol,
+    )
+
+
+def test_scalp_momentum_v2_score_based_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.strategy.intraday_common.is_regular_krx_session", lambda: True)
+    monkeypatch.setattr("app.strategy.intraday_common.should_force_flatten_before_close_kst", lambda **_: False)
+    strat = ScalpMomentumV2Strategy()
+    strat.intraday_state = IntradayPaperState()
+    strat.quote_by_symbol = {
+        "005930": {
+            "output": {
+                "acml_vol": "250000000",
+                "acml_tr_pbmn": "5000000000000",
+                "bidp": "105.0",
+                "askp": "105.2",
+            }
+        }
+    }
+    prices = _build_intraday_prices("005930", 26, trend_step=0.18)
+    sigs = strat.generate_signals(_build_context_from_prices(prices))
+    assert any(s.side == "buy" for s in sigs)
+    assert len(strat.last_diagnostics) >= 1
+    assert "total_score" in strat.last_diagnostics[0]
+    assert "ema_align" in strat.last_diagnostics[0]
+
+
+def test_scalp_momentum_v3_entry_and_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.strategy.intraday_common.is_regular_krx_session", lambda: True)
+    monkeypatch.setattr("app.strategy.intraday_common.should_force_flatten_before_close_kst", lambda **_: False)
+    # 진입 가능 케이스
+    strat_ok = ScalpMomentumV3Strategy()
+    strat_ok.intraday_state = IntradayPaperState()
+    strat_ok.quote_by_symbol = {
+        "000660": {
+            "output": {
+                "acml_vol": "200000000",
+                "acml_tr_pbmn": "4500000000000",
+                "bidp": "110.0",
+                "askp": "110.3",
+            }
+        }
+    }
+    prices_ok = _build_intraday_prices("000660", 22, trend_step=0.15)
+    sigs_ok = strat_ok.generate_signals(_build_context_from_prices(prices_ok))
+    assert any(s.side == "buy" for s in sigs_ok)
+
+    # 고변동 리스크 차단 케이스
+    strat_block = ScalpMomentumV3Strategy(regime_config=MarketRegimeConfig(volatility_threshold=0.1))
+    strat_block.intraday_state = IntradayPaperState()
+    strat_block.quote_by_symbol = strat_ok.quote_by_symbol
+    # 큰 변동으로 high_volatility_risk를 유도
+    kospi_dates = pd.date_range("2026-01-01", periods=40, freq="D", tz=_KST)
+    kospi_high_vol = pd.DataFrame({"date": kospi_dates, "close": [2500 + ((-1) ** i) * 120 for i in range(40)]})
+    ctx_block = StrategyContext(
+        prices=prices_ok,
+        kospi_index=kospi_high_vol,
+        sp500_index=kospi_high_vol.copy(),
+        portfolio=pd.DataFrame(columns=["symbol", "quantity", "average_price", "hold_days"]),
+        volatility_index=pd.DataFrame({"date": kospi_dates, "value": [10.0] * len(kospi_dates)}),
+    )
+    sigs_block = strat_block.generate_signals(ctx_block)
+    assert not any(s.side == "buy" for s in sigs_block)
+    assert strat_block.last_intraday_signal_breakdown.get("blocked") == "high_volatility_risk_no_entry"
+
+
+def test_intraday_symbol_fallback_when_env_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PAPER_INTRADAY_SYMBOLS", raising=False)
+    monkeypatch.delenv("PAPER_TRADING_SYMBOLS", raising=False)
+    get_settings.cache_clear()
+    cfg = get_settings()
+    symbols = cfg.resolved_intraday_symbol_list()
+    assert 20 <= len(symbols) <= 30
+    assert "005930" in symbols
+    assert "000660" in symbols

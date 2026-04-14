@@ -10,6 +10,7 @@ from app.strategy.swing_relaxed_v2_strategy import SwingRelaxedV2Strategy
 from app.strategy.swing_strategy import SwingStrategy
 from app.strategy.scalp_momentum_v1_strategy import ScalpMomentumV1Strategy
 from app.strategy.scalp_momentum_v2_strategy import ScalpMomentumV2Strategy
+from app.strategy.scalp_momentum_v3_strategy import ScalpMomentumV3Strategy
 
 
 def strategy_for_paper_id(strategy_id: str) -> BaseStrategy:
@@ -26,4 +27,6 @@ def strategy_for_paper_id(strategy_id: str) -> BaseStrategy:
         return ScalpMomentumV1Strategy()
     if sid == "scalp_momentum_v2":
         return ScalpMomentumV2Strategy()
+    if sid == "scalp_momentum_v3":
+        return ScalpMomentumV3Strategy()
     return SwingStrategy()

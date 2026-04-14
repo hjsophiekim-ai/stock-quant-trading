@@ -42,7 +42,7 @@ logger = logging.getLogger("backend.app.engine.user_paper_loop")
 
 def _is_intraday_scalp_strategy(strategy_id: str) -> bool:
     s = (strategy_id or "").lower().strip()
-    return s in ("scalp_momentum_v1", "scalp_momentum_v2")
+    return s in ("scalp_momentum_v1", "scalp_momentum_v2", "scalp_momentum_v3")
 
 
 class UserPaperTradingLoop:
@@ -208,7 +208,7 @@ class UserPaperTradingLoop:
             if not symbols:
                 return {
                     "ok": False,
-                    "error": "인트라데이 조회 종목이 비어 있음 (PAPER_INTRADAY_SYMBOLS / PAPER_TRADING_SYMBOLS / 유동성 fallback)",
+                    "error": "인트라데이 조회 종목이 비어 있음 (PAPER_INTRADAY_SYMBOLS / 인트라데이 fallback)",
                     "failed_step": "config",
                     "kis_context": {},
                     "token_source": self.token_source_for_diagnostics(),
@@ -298,6 +298,11 @@ class UserPaperTradingLoop:
             )
             report = dict(report)
             report["paper_trading_symbols_resolved"] = paper_trading_symbols_resolved
+            report["intraday_symbols_source"] = (
+                "PAPER_INTRADAY_SYMBOLS"
+                if (cfg.paper_intraday_symbols or "").strip()
+                else "INTRADAY_FALLBACK"
+            )
             report["intraday_universe_symbol_count"] = intraday_universe_symbol_count
             report["intraday_universe_row_count"] = intraday_universe_row_count
             report["intraday_bar_fetch_summary"] = intraday_bar_fetch_summary

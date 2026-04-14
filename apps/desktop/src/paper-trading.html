@@ -161,6 +161,7 @@
             <option value="defensive_v1">defensive_v1</option>
             <option value="scalp_momentum_v1">scalp_momentum_v1 (Paper·인트라데이 3m)</option>
             <option value="scalp_momentum_v2">scalp_momentum_v2 (Paper·인트라데이 1m)</option>
+            <option value="scalp_momentum_v3">scalp_momentum_v3 (Paper·인트라데이 1m·고빈도)</option>
           </select>
           <button type="button" id="startBtn">모의 자동매매 시작</button>
           <button type="button" id="stopBtn">중지</button>
@@ -202,10 +203,13 @@
             <thead>
               <tr>
                 <th>symbol</th>
-                <th>ma20&gt;ma60</th>
-                <th>drop_3d(-6~-3%)</th>
-                <th>rsi&lt;40</th>
-                <th>bullish</th>
+                <th>total_score</th>
+                <th>ema</th>
+                <th>vwap</th>
+                <th>mom</th>
+                <th>vol</th>
+                <th>micro</th>
+                <th>rsi</th>
                 <th>entered</th>
                 <th>blocked_reason</th>
               </tr>
@@ -550,6 +554,7 @@
                 forced_flatten: tr0.forced_flatten,
                 flatten_before_close_armed: tr0.flatten_before_close_armed,
                 cooldown_symbols: tr0.cooldown_symbols,
+                intraday_symbols_source: tr0.intraday_symbols_source,
                 paper_intraday_target_round_trip_trades: tr0.paper_intraday_target_round_trip_trades,
                 daily_pnl_pct_snapshot: tr0.daily_pnl_pct_snapshot,
                 risk_halt_new_entries: tr0.risk_halt_new_entries,
@@ -564,7 +569,10 @@
               if (paperIntradayDiagBlock) {
                 paperIntradayDiagBlock.style.display = showIntraday ? "block" : "none";
                 if (showIntraday && paperIntradaySummaryLine && paperIntradayBarsTableBody) {
-                  var symLine = (tr.paper_trading_symbols_resolved || []).join(", ") || "—";
+                  var allSyms = tr.paper_trading_symbols_resolved || [];
+                  var symCount = allSyms.length;
+                  var symPreview = allSyms.slice(0, 10).join(", ");
+                  var moreLabel = symCount > 10 ? " 외 " + (symCount - 10) + "개" : "";
                   paperIntradaySummaryLine.innerHTML =
                     "<b>정규장(KST)</b> " +
                     escCell(tr.session_open_kst != null ? yn(tr.session_open_kst) : "—") +
@@ -576,10 +584,13 @@
                     escCell(tr.candidate_count != null ? tr.candidate_count : "—") +
                     " · <b>조회 요청 심볼 수</b> " +
                     escCell(tr.symbols_request_count != null ? tr.symbols_request_count : "—") +
+                    " · <b>symbol source</b> " +
+                    escCell(tr.intraday_symbols_source || "—") +
                     " · <b>minute_bars_present</b> " +
                     escCell(tr.minute_bars_present != null ? yn(tr.minute_bars_present) : "—") +
                     "<br/><b>조회 대상</b> " +
-                    escCell(symLine) +
+                    escCell(symPreview || "—") +
+                    (symCount ? " <span style=\"color:#64748b\">(총 " + escCell(symCount) + "개" + escCell(moreLabel) + ")</span>" : "") +
                     (tr.no_order_reason
                       ? "<br/><b>no_order_reason</b> " + escCell(tr.no_order_reason)
                       : "");
@@ -612,18 +623,30 @@
               paperTickReportPre.textContent = JSON.stringify(tr, null, 2);
               paperDiagTableBody.innerHTML = "";
               (dashData.last_diagnostics || []).forEach(function (row) {
+                var emaCell = row.ema_align != null ? yn(row.ema_align) : row.ma20_gt_ma60 != null ? yn(row.ma20_gt_ma60) : "—";
+                var vwapCell = row.vwap_reclaim != null ? yn(row.vwap_reclaim) : row.drop_3d_in_range != null ? yn(row.drop_3d_in_range) : "—";
+                var momCell = row.mom_ok != null ? yn(row.mom_ok) : row.rsi_lt_40 != null ? yn(row.rsi_lt_40) : "—";
+                var volCell = row.vol_spike != null ? yn(row.vol_spike) : row.bullish_reversal != null ? yn(row.bullish_reversal) : "—";
+                var microCell = row.micro_break != null ? yn(row.micro_break) : "—";
+                var rsiCell = row.rsi_ok != null ? yn(row.rsi_ok) : row.rsi_lt_40 != null ? yn(row.rsi_lt_40) : "—";
                 var trEl = document.createElement("tr");
                 trEl.innerHTML =
                   "<td>" +
                   (row.symbol || "") +
                   "</td><td>" +
-                  yn(row.ma20_gt_ma60) +
+                  (row.total_score != null ? String(row.total_score) : "—") +
                   "</td><td>" +
-                  yn(row.drop_3d_in_range) +
+                  emaCell +
                   "</td><td>" +
-                  yn(row.rsi_lt_40) +
+                  vwapCell +
                   "</td><td>" +
-                  yn(row.bullish_reversal) +
+                  momCell +
+                  "</td><td>" +
+                  volCell +
+                  "</td><td>" +
+                  microCell +
+                  "</td><td>" +
+                  rsiCell +
                   "</td><td>" +
                   yn(row.entered) +
                   "</td><td>" +
