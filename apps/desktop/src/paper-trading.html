@@ -115,6 +115,31 @@
         word-break: break-word;
         margin: 0 0 10px;
       }
+      .session-warning {
+        display: none;
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin: 8px 0 10px;
+        border: 1px solid #f59e0b;
+        background: #fffbeb;
+        color: #92400e;
+        font-size: 0.9rem;
+        line-height: 1.45;
+      }
+      .session-warning.show {
+        display: block;
+      }
+      .session-warning .title {
+        font-weight: 800;
+        color: #b45309;
+        margin-bottom: 4px;
+      }
+      .session-metrics {
+        margin: 0 0 8px;
+        font-size: 0.84rem;
+        color: #0f172a;
+        font-weight: 650;
+      }
     </style>
   </head>
   <body>
@@ -182,6 +207,11 @@
           </p>
           <div id="paperIntradayDiagBlock" style="display: none">
             <h4 style="margin: 0 0 6px; font-size: 0.95rem">인트라데이 분봉·후보 (scalp_momentum)</h4>
+            <div id="paperSessionWarning" class="session-warning">
+              <div class="title">장외 시간으로 신규 진입 비활성</div>
+              <div id="paperSessionWarningBody"></div>
+            </div>
+            <p id="paperIntradaySessionMetrics" class="session-metrics"></p>
             <p id="paperIntradaySummaryLine" style="margin: 0 0 8px; font-size: 0.82rem; color: #334155; line-height: 1.45"></p>
             <table class="diag-table" id="paperIntradayBarsTable">
               <thead>
@@ -444,6 +474,9 @@
 
         const paperDiagPanel = document.getElementById("paperDiagPanel");
         const paperIntradayDiagBlock = document.getElementById("paperIntradayDiagBlock");
+        const paperSessionWarning = document.getElementById("paperSessionWarning");
+        const paperSessionWarningBody = document.getElementById("paperSessionWarningBody");
+        const paperIntradaySessionMetrics = document.getElementById("paperIntradaySessionMetrics");
         const paperIntradaySummaryLine = document.getElementById("paperIntradaySummaryLine");
         const paperIntradayBarsTableBody = document.getElementById("paperIntradayBarsTableBody");
         const paperTickReportPre = document.getElementById("paperTickReportPre");
@@ -520,6 +553,22 @@
             function yn(x) {
               return x ? "Y" : "N";
             }
+            function kstNowLabel() {
+              try {
+                return new Date().toLocaleString("ko-KR", {
+                  timeZone: "Asia/Seoul",
+                  hour12: false,
+                  year: "numeric",
+                  month: "2-digit",
+                  day: "2-digit",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  second: "2-digit",
+                });
+              } catch (e) {
+                return "KST 시간 확인 불가";
+              }
+            }
             function escCell(s) {
               if (s == null || s === "") return "—";
               return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -573,6 +622,38 @@
                   var symCount = allSyms.length;
                   var symPreview = allSyms.slice(0, 10).join(", ");
                   var moreLabel = symCount > 10 ? " 외 " + (symCount - 10) + "개" : "";
+                  var nowKst = kstNowLabel();
+                  var regKst = tr.regular_session_kst != null ? !!tr.regular_session_kst : null;
+                  if (paperIntradaySessionMetrics) {
+                    paperIntradaySessionMetrics.innerHTML =
+                      "<b>세션 요약</b> · session_open_kst=" +
+                      escCell(tr.session_open_kst != null ? yn(tr.session_open_kst) : "—") +
+                      " · regular_session_kst=" +
+                      escCell(regKst != null ? yn(regKst) : "—") +
+                      " · minute_bars_present=" +
+                      escCell(tr.minute_bars_present != null ? yn(tr.minute_bars_present) : "—") +
+                      " · intraday_universe_symbol_count=" +
+                      escCell(tr.intraday_universe_symbol_count != null ? tr.intraday_universe_symbol_count : "—") +
+                      " · intraday_universe_row_count=" +
+                      escCell(tr.intraday_universe_row_count != null ? tr.intraday_universe_row_count : "—");
+                  }
+                  var noOrderReason = String(tr.no_order_reason || "");
+                  var outOfSession = noOrderReason.indexOf("정규장 외") >= 0 || regKst === false;
+                  if (paperSessionWarning && paperSessionWarningBody) {
+                    if (outOfSession) {
+                      paperSessionWarning.classList.add("show");
+                      paperSessionWarningBody.innerHTML =
+                        "한국주식 인트라데이 전략은 KST 09:00~15:30 에만 신규 진입합니다.<br/>" +
+                        "<b>현재 KST</b> " +
+                        escCell(nowKst) +
+                        " · <b>no_order_reason</b> " +
+                        escCell(noOrderReason || "정규장 외") +
+                        "<br/>다음 테스트 권장: 평일 09:10~11:30 KST";
+                    } else {
+                      paperSessionWarning.classList.remove("show");
+                      paperSessionWarningBody.innerHTML = "";
+                    }
+                  }
                   paperIntradaySummaryLine.innerHTML =
                     "<b>정규장(KST)</b> " +
                     escCell(tr.session_open_kst != null ? yn(tr.session_open_kst) : "—") +
