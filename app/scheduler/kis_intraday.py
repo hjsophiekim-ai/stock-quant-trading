@@ -19,9 +19,18 @@ from zoneinfo import ZoneInfo
 
 from app.clients.kis_client import KISClient, KISClientError
 from app.clients.kis_parsers import output2_rows
+from app.strategy.intraday_common import is_regular_krx_session
 
 _KST = ZoneInfo("Asia/Seoul")
 _STOCK_MKT = "J"
+
+# 분봉 수집 실패/구분 코드 (tick_report.intraday_bar_fetch_summary)
+FETCH_OK = ""
+FETCH_EMPTY_OUTPUT2 = "empty_output2"
+FETCH_API_ERROR = "api_error"
+FETCH_PARSE_FAILED = "parse_failed"
+FETCH_OUTSIDE_SESSION = "outside_session_or_no_data"
+FETCH_SKIPPED_OFFSESSION = "skipped_off_session"
 
 
 def _hhmmss_from_ts(ts: pd.Timestamp) -> str:
@@ -192,6 +201,41 @@ class IntradayChartCache:
             self._entries[k] = _CacheEntry(df=df.copy(), mono_ts=time.monotonic())
 
 
+def _ts_to_kst_iso(ts: pd.Timestamp | None) -> str | None:
+    if ts is None:
+        return None
+    if isinstance(ts, pd.Timestamp):
+        t = ts.tz_convert(_KST) if ts.tzinfo else ts.tz_localize(_KST)
+        return t.isoformat()
+    return None
+
+
+def _bar_fetch_row_template(symbol: str) -> dict[str, Any]:
+    return {
+        "symbol": symbol,
+        "bars_1m": 0,
+        "first_bar_kst": None,
+        "last_bar_kst": None,
+        "fetch_error": "",
+        "fetch_error_detail": "",
+    }
+
+
+def _df_to_fetch_summary_row(symbol: str, df: pd.DataFrame, fetch_error: str, detail: str = "") -> dict[str, Any]:
+    row = _bar_fetch_row_template(symbol)
+    row["fetch_error"] = fetch_error or ""
+    row["fetch_error_detail"] = (detail or "")[:500]
+    if df.empty or "date" not in df.columns:
+        return row
+    sorted_df = df.sort_values("date")
+    row["bars_1m"] = int(len(sorted_df))
+    first = sorted_df["date"].iloc[0]
+    last = sorted_df["date"].iloc[-1]
+    row["first_bar_kst"] = _ts_to_kst_iso(first if isinstance(first, pd.Timestamp) else None)
+    row["last_bar_kst"] = _ts_to_kst_iso(last if isinstance(last, pd.Timestamp) else None)
+    return row
+
+
 def _cursor_before_minute(hhmmss: str) -> str:
     """다음 페이징용: HHMMSS 에서 1분 전."""
     hs = str(hhmmss or "").strip().zfill(6)[:6]
@@ -203,7 +247,7 @@ def _cursor_before_minute(hhmmss: str) -> str:
         return "090000"
 
 
-def fetch_today_minute_bars(
+def fetch_today_minute_bars_with_diag(
     client: KISClient,
     symbol: str,
     *,
@@ -214,23 +258,39 @@ def fetch_today_minute_bars(
     logger: logging.Logger | None = None,
     cache: IntradayChartCache | None = None,
     cache_key: str | None = None,
-) -> pd.DataFrame:
+    skip_if_off_session: bool = True,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
     """
-    당일 1분 봉을 페이징으로 수집(최대 target_bars 근접).
-    장외·데이터 없음이면 빈 DataFrame.
+    당일 1분 봉 + 심볼별 진단(dict: bars_1m, first/last KST, fetch_error 코드).
     """
     log = logger or logging.getLogger("app.scheduler.kis_intraday")
     today = datetime.now(_KST).strftime("%Y%m%d")
     ck = cache_key or today
+
     if cache:
         hit = cache.get_cached(ck, symbol)
         if hit is not None:
-            return hit
+            diag = _df_to_fetch_summary_row(symbol, hit, FETCH_OK)
+            return hit, diag
+
+    if skip_if_off_session and not is_regular_krx_session():
+        empty = pd.DataFrame(columns=["symbol", "date", "open", "high", "low", "close", "volume"])
+        d = _df_to_fetch_summary_row(
+            symbol,
+            empty,
+            FETCH_SKIPPED_OFFSESSION,
+            "KST 정규장(09:00~15:30) 밖에서는 분봉 API 호출을 생략했습니다.",
+        )
+        return empty, d
 
     cursor = datetime.now(_KST).strftime("%H%M%S")
     merged_rows: list[dict[str, Any]] = []
+    last_exc: KISClientError | None = None
+    saw_empty_output2 = False
+    pages = 0
 
     for page in range(max_pages):
+        pages += 1
         if cache:
             cache._throttle_symbol(symbol)
         try:
@@ -243,9 +303,19 @@ def fetch_today_minute_bars(
             )
         except KISClientError as exc:
             log.warning("time chart failed symbol=%s page=%s err=%s", symbol, page, exc)
-            break
+            last_exc = exc
+            empty = pd.DataFrame(columns=["symbol", "date", "open", "high", "low", "close", "volume"])
+            d = _df_to_fetch_summary_row(
+                symbol,
+                empty,
+                FETCH_API_ERROR,
+                str(exc)[:400],
+            )
+            return empty, d
+
         batch = output2_rows(payload)
         if not batch:
+            saw_empty_output2 = True
             break
         merged_rows.extend(batch)
 
@@ -267,8 +337,49 @@ def fetch_today_minute_bars(
         cursor = _cursor_before_minute(_hhmmss_from_ts(oldest_ts))
 
     df = kis_time_chart_rows_to_ohlc_df(merged_rows, symbol=symbol, default_date_yyyymmdd=today)
-    if cache is not None and not df.empty:
+
+    if df.empty:
+        err = FETCH_PARSE_FAILED if merged_rows else (FETCH_EMPTY_OUTPUT2 if saw_empty_output2 or pages else FETCH_OUTSIDE_SESSION)
+        detail = ""
+        if merged_rows and err == FETCH_PARSE_FAILED:
+            detail = f"output2_rows={len(merged_rows)} 이지만 OHLC 파싱 결과 0건"
+        elif err == FETCH_EMPTY_OUTPUT2:
+            detail = "API output2 비어 있음(또는 첫 페이지 무응답)"
+        elif err == FETCH_OUTSIDE_SESSION and not merged_rows:
+            detail = "수집 행 없음(장외·당일 분봉 미제공 가능)"
+        diag = _df_to_fetch_summary_row(symbol, df, err, detail)
+        return df, diag
+
+    if cache is not None:
         cache.put(ck, symbol, df)
+    diag = _df_to_fetch_summary_row(symbol, df, FETCH_OK)
+    return df, diag
+
+
+def fetch_today_minute_bars(
+    client: KISClient,
+    symbol: str,
+    *,
+    market_div: str = _STOCK_MKT,
+    target_bars: int = 120,
+    max_pages: int = 8,
+    include_past_data: str = "Y",
+    logger: logging.Logger | None = None,
+    cache: IntradayChartCache | None = None,
+    cache_key: str | None = None,
+) -> pd.DataFrame:
+    """하위 호환: DataFrame 만 반환."""
+    df, _ = fetch_today_minute_bars_with_diag(
+        client,
+        symbol,
+        market_div=market_div,
+        target_bars=target_bars,
+        max_pages=max_pages,
+        include_past_data=include_past_data,
+        logger=logger,
+        cache=cache,
+        cache_key=cache_key,
+    )
     return df
 
 
@@ -279,24 +390,29 @@ def build_intraday_universe_1m(
     target_bars_per_symbol: int = 120,
     logger: logging.Logger | None = None,
     cache: IntradayChartCache | None = None,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    """
+    심볼별 1분 OHLC concat + intraday_bar_fetch_summary (티당 진단).
+    """
     frames: list[pd.DataFrame] = []
+    summary: list[dict[str, Any]] = []
     for sym in symbols:
         s = sym.strip()
         if not s:
             continue
-        df = fetch_today_minute_bars(
+        df, diag = fetch_today_minute_bars_with_diag(
             client,
             s,
             target_bars=target_bars_per_symbol,
             logger=logger,
             cache=cache,
         )
+        summary.append(diag)
         if not df.empty:
             frames.append(df)
     if not frames:
-        return pd.DataFrame(columns=["symbol", "date", "open", "high", "low", "close", "volume"])
-    return pd.concat(frames, ignore_index=True)
+        return pd.DataFrame(columns=["symbol", "date", "open", "high", "low", "close", "volume"]), summary
+    return pd.concat(frames, ignore_index=True), summary
 
 
 def universe_as_timeframe(universe_1m: pd.DataFrame, bar_minutes: int) -> pd.DataFrame:

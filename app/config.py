@@ -1,4 +1,6 @@
+import json
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -40,6 +42,8 @@ class Settings(BaseSettings):
     paper_trading_loop: bool = Field(default=False, alias="PAPER_TRADING_LOOP")
     paper_trading_interval_sec: int = Field(default=600, ge=30, alias="PAPER_TRADING_INTERVAL_SEC")
     paper_trading_symbols: str = Field(default="005930,000660", alias="PAPER_TRADING_SYMBOLS")
+    # 비어 있으면 paper_trading_symbols(또는 종목 수 부족 시 data/domestic_liquid_symbols 상위 N) 사용 — 인트라데이 전용
+    paper_intraday_symbols: str = Field(default="", alias="PAPER_INTRADAY_SYMBOLS")
     paper_session_state_path: str = Field(default="data/paper_trading_session.json", alias="PAPER_SESSION_STATE_PATH")
     paper_session_auto_resume: bool = Field(default=True, alias="PAPER_SESSION_AUTO_RESUME")
     paper_kis_chart_lookback_days: int = Field(default=60, ge=20, alias="PAPER_KIS_CHART_LOOKBACK_DAYS")
@@ -133,6 +137,48 @@ class Settings(BaseSettings):
     sizing_low_vol_atr_threshold_pct: float = Field(default=1.8, alias="SIZING_LOW_VOL_ATR_THRESHOLD_PCT")
     sizing_losing_streak_deleverage_step: float = Field(default=0.10, alias="SIZING_LOSING_STREAK_DELEVERAGE_STEP")
     sizing_max_deleverage_multiplier: float = Field(default=0.50, alias="SIZING_MAX_DELEVERAGE_MULTIPLIER")
+
+    def load_intraday_fallback_symbols(self, *, max_count: int = 25) -> list[str]:
+        """국내 유동성 JSON 상위 종목(인트라데이 기본 폭 확대용)."""
+        root = Path(__file__).resolve().parent.parent
+        p = root / "data" / "domestic_liquid_symbols.json"
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(raw, list):
+                return []
+            out: list[str] = []
+            for row in raw:
+                if isinstance(row, dict) and row.get("symbol"):
+                    out.append(str(row["symbol"]).strip())
+                if len(out) >= max_count:
+                    break
+            return out
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return []
+
+    def resolved_intraday_symbol_list(self) -> list[str]:
+        """
+        PAPER_INTRADAY_SYMBOLS 가 있으면 우선.
+        없으면 PAPER_TRADING_SYMBOLS — 종목이 10개 미만이면 domestic_liquid 상위와 병합(최대 ~30).
+        """
+        explicit = (self.paper_intraday_symbols or "").strip()
+        if explicit:
+            return [x.strip() for x in explicit.split(",") if x.strip()][:60]
+        base = [x.strip() for x in (self.paper_trading_symbols or "").split(",") if x.strip()]
+        if len(base) >= 10:
+            return base[:35]
+        fb = self.load_intraday_fallback_symbols(max_count=28)
+        merged: list[str] = []
+        seen: set[str] = set()
+        for s in base + fb:
+            s = s.strip()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            merged.append(s)
+            if len(merged) >= 30:
+                break
+        return merged
 
     @property
     def resolved_account_no(self) -> str:

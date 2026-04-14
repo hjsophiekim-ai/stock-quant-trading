@@ -29,6 +29,7 @@ from app.scheduler.kis_universe import (
     build_kospi_index_series,
     build_mock_sp500_proxy_from_kospi,
 )
+from app.strategy.intraday_common import is_regular_krx_session
 from app.strategy.intraday_paper_state import IntradayPaperStateStore
 
 from backend.app.auth.kis_auth import issue_access_token
@@ -203,11 +204,11 @@ class UserPaperTradingLoop:
                 }
 
             cfg = get_settings()
-            symbols = [s.strip() for s in cfg.paper_trading_symbols.split(",") if s.strip()]
+            symbols = cfg.resolved_intraday_symbol_list()
             if not symbols:
                 return {
                     "ok": False,
-                    "error": "paper_trading_symbols 비어 있음 (app 설정)",
+                    "error": "인트라데이 조회 종목이 비어 있음 (PAPER_INTRADAY_SYMBOLS / PAPER_TRADING_SYMBOLS / 유동성 fallback)",
                     "failed_step": "config",
                     "kis_context": {},
                     "token_source": self.token_source_for_diagnostics(),
@@ -224,13 +225,19 @@ class UserPaperTradingLoop:
             )
 
             failed_step = "intraday_universe"
-            universe_1m = build_intraday_universe_1m(
+            universe_1m, intraday_bar_fetch_summary = build_intraday_universe_1m(
                 client,
                 symbols,
                 target_bars_per_symbol=140,
                 logger=logger,
                 cache=chart_cache,
             )
+            intraday_universe_row_count = int(len(universe_1m))
+            intraday_universe_symbol_count = (
+                int(universe_1m["symbol"].nunique()) if not universe_1m.empty and "symbol" in universe_1m.columns else 0
+            )
+            paper_trading_symbols_resolved = list(symbols)
+            regular_session_kst = is_regular_krx_session()
 
             sid = (self._strategy_id or "").lower().strip()
             if sid == "scalp_momentum_v1":
@@ -284,7 +291,16 @@ class UserPaperTradingLoop:
                 timeframe=timeframe,
                 quote_by_symbol=quote_by_symbol,
                 forced_flatten=forced_flatten,
+                paper_trading_symbols_resolved=paper_trading_symbols_resolved,
+                intraday_bar_fetch_summary=intraday_bar_fetch_summary,
+                intraday_universe_row_count=intraday_universe_row_count,
+                regular_session_kst=regular_session_kst,
             )
+            report = dict(report)
+            report["paper_trading_symbols_resolved"] = paper_trading_symbols_resolved
+            report["intraday_universe_symbol_count"] = intraday_universe_symbol_count
+            report["intraday_universe_row_count"] = intraday_universe_row_count
+            report["intraday_bar_fetch_summary"] = intraday_bar_fetch_summary
 
             return {
                 "ok": True,

@@ -511,6 +511,15 @@ class PaperSessionController:
             "paper_intraday_target_round_trip_trades": rep.get("paper_intraday_target_round_trip_trades"),
             "daily_pnl_pct_snapshot": rep.get("daily_pnl_pct_snapshot"),
             "risk_halt_new_entries": rep.get("risk_halt_new_entries"),
+            # 인트라데이(scalp) 진단 — 분봉 수집 vs 후보 0 vs 신호 0 구분용
+            "session_open_kst": rep.get("session_open_kst"),
+            "regular_session_kst": rep.get("regular_session_kst"),
+            "minute_bars_present": rep.get("minute_bars_present"),
+            "symbols_request_count": rep.get("symbols_request_count"),
+            "paper_trading_symbols_resolved": list(rep.get("paper_trading_symbols_resolved") or []),
+            "intraday_universe_symbol_count": rep.get("intraday_universe_symbol_count"),
+            "intraday_universe_row_count": rep.get("intraday_universe_row_count"),
+            "intraday_bar_fetch_summary": list(rep.get("intraday_bar_fetch_summary") or []),
         }
 
         return {

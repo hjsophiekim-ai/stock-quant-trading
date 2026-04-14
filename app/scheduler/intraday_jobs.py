@@ -50,21 +50,25 @@ def _intraday_no_order_reason(
     *,
     halted: bool,
     halt_message: str | None,
-    session_ok: bool,
+    forced_flatten: bool,
+    regular_session_kst: bool,
+    minute_bars_present: bool,
+    symbols_request_count: int,
     candidate_count: int,
     generated_order_count: int,
-    forced_flatten: bool,
 ) -> str:
     if halted:
         return (halt_message or "").strip() or "사이클 중단"
-    if not session_ok:
-        return "정규장 외이거나 분봉 데이터 없음"
     if forced_flatten:
         return "장 종료 직전 강제 청산 틱"
-    if candidate_count == 0:
-        return "유동성/분봉 후보 없음"
+    if not regular_session_kst:
+        return "정규장 외"
+    if symbols_request_count > 0 and not minute_bars_present:
+        return "분봉 API 응답 없음"
+    if candidate_count > 0 and generated_order_count == 0:
+        return "후보는 있으나 전략 신호 0개"
     if generated_order_count == 0:
-        return "조건 미충족·필터·쿨다운·손실 한도 등으로 주문 없음"
+        return "조회 종목은 있으나 후보 0개"
     return ""
 
 
@@ -87,9 +91,19 @@ class IntradaySchedulerJobs:
         timeframe: str,
         quote_by_symbol: dict[str, dict[str, Any]],
         forced_flatten: bool,
+        paper_trading_symbols_resolved: list[str] | None = None,
+        intraday_bar_fetch_summary: list[dict[str, Any]] | None = None,
+        intraday_universe_row_count: int | None = None,
+        regular_session_kst: bool | None = None,
     ) -> dict[str, Any]:
         cfg = get_settings()
         self.logger.info("[INTRADAY] cycle start tf=%s rows=%s", timeframe, len(universe_tf))
+
+        sym_res = [s.strip() for s in (paper_trading_symbols_resolved or []) if s and str(s).strip()]
+        fetch_summary = list(intraday_bar_fetch_summary or [])
+        reg_kst = bool(regular_session_kst) if regular_session_kst is not None else is_regular_krx_session()
+        urows = int(intraday_universe_row_count) if intraday_universe_row_count is not None else int(len(universe_tf))
+        symbols_request_count = len(sym_res)
 
         st_store = self.state_store
         state = st_store.load() if st_store else None
@@ -109,7 +123,8 @@ class IntradaySchedulerJobs:
         candidate_syms = sorted({str(s).strip() for s in universe_tf["symbol"].unique()}) if not universe_tf.empty else []
         candidate_count = len(candidate_syms)
 
-        session_ok = is_regular_krx_session() and candidate_count > 0
+        minute_bars_present = urows > 0
+        session_ok = reg_kst and candidate_count > 0
 
         snapshot_gate = self._build_risk_snapshot(universe_tf)
         daily_pct = float(snapshot_gate.daily_pnl_pct)
@@ -146,6 +161,12 @@ class IntradaySchedulerJobs:
                 strategy_orders=[],
                 halt_message=halt_msg,
                 pos_n=pos_n,
+                paper_trading_symbols_resolved=sym_res,
+                intraday_bar_fetch_summary=fetch_summary,
+                intraday_universe_row_count=urows,
+                regular_session_kst=reg_kst,
+                minute_bars_present=minute_bars_present,
+                symbols_request_count=symbols_request_count,
             )
 
         context = StrategyContext(
@@ -225,7 +246,13 @@ class IntradaySchedulerJobs:
                         minutes_before_close=int(cfg.paper_intraday_flatten_before_close_minutes),
                     )
                 ),
-                "session_open_kst": session_ok,
+                "session_open_kst": reg_kst,
+                "regular_session_kst": reg_kst,
+                "minute_bars_present": minute_bars_present,
+                "symbols_request_count": symbols_request_count,
+                "paper_trading_symbols_resolved": sym_res,
+                "intraday_bar_fetch_summary": fetch_summary,
+                "intraday_universe_row_count": urows,
                 "daily_pnl_pct_snapshot": daily_pct,
                 "risk_halt_new_entries": risk_halt,
                 "paper_intraday_target_round_trip_trades": int(cfg.paper_intraday_target_round_trip_trades),
@@ -233,27 +260,42 @@ class IntradaySchedulerJobs:
                 "no_order_reason": _intraday_no_order_reason(
                     halted=False,
                     halt_message=None,
-                    session_ok=session_ok,
+                    forced_flatten=forced_flatten,
+                    regular_session_kst=reg_kst,
+                    minute_bars_present=minute_bars_present,
+                    symbols_request_count=symbols_request_count,
                     candidate_count=candidate_count,
                     generated_order_count=len(strategy_orders),
-                    forced_flatten=forced_flatten,
                 ),
             }
         )
-        rep["no_order_reason"] = self._refine_no_order_reason(rep, pos_n)
+        rep["no_order_reason"] = self._refine_no_order_reason(
+            rep,
+            pos_n,
+            session_ok_effective=session_ok,
+        )
         self.logger.info("[INTRADAY] done %s", {k: rep[k] for k in ("accepted_orders", "rejected_orders", "trade_count_today") if k in rep})
         return rep
 
-    def _refine_no_order_reason(self, rep: dict[str, Any], pos_n: int) -> str:
+    def _refine_no_order_reason(
+        self,
+        rep: dict[str, Any],
+        pos_n: int,
+        *,
+        session_ok_effective: bool,
+    ) -> str:
+        _ = session_ok_effective
         base = str(rep.get("no_order_reason") or "")
         if rep.get("generated_order_count", 0) > 0:
             return ""
-        if not rep.get("session_open_kst"):
-            return "정규장 외 또는 분봉 없음"
+        if not rep.get("regular_session_kst", rep.get("session_open_kst")):
+            return "정규장 외"
         if rep.get("risk_halt_new_entries"):
             return "인트라데이 일중 손실 한도로 신규 진입 중지"
         if rep.get("regime") == "high_volatility_risk":
             return "고변동 국면으로 신규 진입 제한"
+        if pos_n > 0 and "후보는 있으나" in base:
+            return "포지션 관리·청산만 해당 (신규 진입 없음)"
         if pos_n > 0 and base.endswith("주문 없음"):
             return "포지션 관리·청산 조건만 해당될 수 있음(신규 없음)"
         return base or "조건 미충족"
@@ -310,9 +352,19 @@ class IntradaySchedulerJobs:
         strategy_orders: list[OrderRequest],
         halt_message: str,
         pos_n: int,
+        paper_trading_symbols_resolved: list[str] | None = None,
+        intraday_bar_fetch_summary: list[dict[str, Any]] | None = None,
+        intraday_universe_row_count: int = 0,
+        regular_session_kst: bool = False,
+        minute_bars_present: bool = False,
+        symbols_request_count: int = 0,
     ) -> dict[str, Any]:
         cfg = get_settings()
         rep = self._build_report(universe_tf, accepted=accepted, rejected=rejected, strategy_orders=strategy_orders)
+        sym_res = list(paper_trading_symbols_resolved or [])
+        sreq = int(symbols_request_count or len(sym_res))
+        urows = int(intraday_universe_row_count or 0)
+        mb = bool(minute_bars_present) if minute_bars_present is not None else urows > 0
         rep.update(
             {
                 "halted": halted,
@@ -329,7 +381,13 @@ class IntradaySchedulerJobs:
                 "trade_count_today": int(state.trade_count_today),
                 "cooldown_symbols": sorted(state.cooldown_until_iso.keys()),
                 "forced_flatten": forced_flatten,
-                "session_open_kst": session_ok,
+                "session_open_kst": bool(regular_session_kst),
+                "regular_session_kst": bool(regular_session_kst),
+                "minute_bars_present": mb,
+                "symbols_request_count": sreq,
+                "paper_trading_symbols_resolved": sym_res,
+                "intraday_bar_fetch_summary": list(intraday_bar_fetch_summary or []),
+                "intraday_universe_row_count": urows,
                 "daily_pnl_pct_snapshot": daily_pct,
                 "risk_halt_new_entries": risk_halt,
                 "paper_intraday_target_round_trip_trades": int(cfg.paper_intraday_target_round_trip_trades),
@@ -337,10 +395,12 @@ class IntradaySchedulerJobs:
                 "no_order_reason": _intraday_no_order_reason(
                     halted=True,
                     halt_message=halt_message,
-                    session_ok=session_ok,
+                    forced_flatten=forced_flatten,
+                    regular_session_kst=bool(regular_session_kst),
+                    minute_bars_present=mb,
+                    symbols_request_count=sreq,
                     candidate_count=len(candidate_syms),
                     generated_order_count=len(strategy_orders),
-                    forced_flatten=forced_flatten,
                 ),
             }
         )

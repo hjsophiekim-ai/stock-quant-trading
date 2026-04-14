@@ -179,6 +179,23 @@
           <p style="margin: 0 0 6px; font-size: 0.85rem; color: #64748b">
             <code>tick_report</code> — 후보 수·생성 주문·<code>no_order_reason</code> 등 API 그대로 표시.
           </p>
+          <div id="paperIntradayDiagBlock" style="display: none">
+            <h4 style="margin: 0 0 6px; font-size: 0.95rem">인트라데이 분봉·후보 (scalp_momentum)</h4>
+            <p id="paperIntradaySummaryLine" style="margin: 0 0 8px; font-size: 0.82rem; color: #334155; line-height: 1.45"></p>
+            <table class="diag-table" id="paperIntradayBarsTable">
+              <thead>
+                <tr>
+                  <th>symbol</th>
+                  <th>bars_1m</th>
+                  <th>first_bar_kst</th>
+                  <th>last_bar_kst</th>
+                  <th>fetch_error</th>
+                </tr>
+              </thead>
+              <tbody id="paperIntradayBarsTableBody"></tbody>
+            </table>
+          </div>
+          <p style="margin: 8px 0 4px; font-size: 0.8rem; color: #64748b">tick_report (JSON)</p>
           <pre id="paperTickReportPre" class="tick-report-pre"></pre>
           <h4 style="margin: 12px 0 4px; font-size: 0.95rem">심볼별 스윙 조건 (last_diagnostics)</h4>
           <table class="diag-table" id="paperDiagTable">
@@ -422,6 +439,9 @@
         }
 
         const paperDiagPanel = document.getElementById("paperDiagPanel");
+        const paperIntradayDiagBlock = document.getElementById("paperIntradayDiagBlock");
+        const paperIntradaySummaryLine = document.getElementById("paperIntradaySummaryLine");
+        const paperIntradayBarsTableBody = document.getElementById("paperIntradayBarsTableBody");
         const paperTickReportPre = document.getElementById("paperTickReportPre");
         const paperDiagTableBody = document.getElementById("paperDiagTableBody");
         const paperFilterTableBody = document.getElementById("paperFilterTableBody");
@@ -496,17 +516,99 @@
             function yn(x) {
               return x ? "Y" : "N";
             }
+            function escCell(s) {
+              if (s == null || s === "") return "—";
+              return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            }
             if (dashData && dashData.ok && stOk) {
               paperDiagPanel.style.display = "block";
-              var tr = dashData.tick_report || {
-                candidate_count: dashData.candidate_count,
-                candidates: dashData.candidates,
-                generated_order_count: dashData.generated_order_count,
-                generated_orders: dashData.generated_orders,
-                no_order_reason: dashData.no_order_reason,
-                last_diagnostics: dashData.last_diagnostics,
-                candidate_filter_breakdown: dashData.candidate_filter_breakdown,
+              var tr0 = dashData.tick_report || {};
+              var tr = {
+                candidate_count: tr0.candidate_count != null ? tr0.candidate_count : dashData.candidate_count,
+                candidates: tr0.candidates != null ? tr0.candidates : dashData.candidates,
+                generated_order_count:
+                  tr0.generated_order_count != null ? tr0.generated_order_count : dashData.generated_order_count,
+                generated_orders: tr0.generated_orders != null ? tr0.generated_orders : dashData.generated_orders,
+                no_order_reason: tr0.no_order_reason != null ? tr0.no_order_reason : dashData.no_order_reason,
+                last_diagnostics: tr0.last_diagnostics != null ? tr0.last_diagnostics : dashData.last_diagnostics,
+                candidate_filter_breakdown:
+                  tr0.candidate_filter_breakdown != null
+                    ? tr0.candidate_filter_breakdown
+                    : dashData.candidate_filter_breakdown,
+                timeframe: tr0.timeframe,
+                session_open_kst: tr0.session_open_kst,
+                regular_session_kst: tr0.regular_session_kst,
+                minute_bars_present: tr0.minute_bars_present,
+                symbols_request_count: tr0.symbols_request_count,
+                paper_trading_symbols_resolved: tr0.paper_trading_symbols_resolved,
+                intraday_universe_symbol_count: tr0.intraday_universe_symbol_count,
+                intraday_universe_row_count: tr0.intraday_universe_row_count,
+                intraday_bar_fetch_summary: tr0.intraday_bar_fetch_summary,
+                trade_count_today: tr0.trade_count_today,
+                intraday_filter_breakdown: tr0.intraday_filter_breakdown,
+                intraday_signal_breakdown: tr0.intraday_signal_breakdown,
+                forced_flatten: tr0.forced_flatten,
+                flatten_before_close_armed: tr0.flatten_before_close_armed,
+                cooldown_symbols: tr0.cooldown_symbols,
+                paper_intraday_target_round_trip_trades: tr0.paper_intraday_target_round_trip_trades,
+                daily_pnl_pct_snapshot: tr0.daily_pnl_pct_snapshot,
+                risk_halt_new_entries: tr0.risk_halt_new_entries,
               };
+              Object.keys(tr0).forEach(function (k) {
+                if (tr[k] === undefined) tr[k] = tr0[k];
+              });
+              var tf = tr.timeframe != null ? String(tr.timeframe) : "";
+              var ibs = Array.isArray(tr.intraday_bar_fetch_summary) ? tr.intraday_bar_fetch_summary : [];
+              var showIntraday =
+                tf === "1m" || tf === "3m" || ibs.length > 0 || tr.intraday_universe_row_count != null;
+              if (paperIntradayDiagBlock) {
+                paperIntradayDiagBlock.style.display = showIntraday ? "block" : "none";
+                if (showIntraday && paperIntradaySummaryLine && paperIntradayBarsTableBody) {
+                  var symLine = (tr.paper_trading_symbols_resolved || []).join(", ") || "—";
+                  paperIntradaySummaryLine.innerHTML =
+                    "<b>정규장(KST)</b> " +
+                    escCell(tr.session_open_kst != null ? yn(tr.session_open_kst) : "—") +
+                    " · <b>분봉 행 수</b> " +
+                    escCell(tr.intraday_universe_row_count != null ? tr.intraday_universe_row_count : "—") +
+                    " · <b>유니버스 심볼 수</b> " +
+                    escCell(tr.intraday_universe_symbol_count != null ? tr.intraday_universe_symbol_count : "—") +
+                    " · <b>후보 수</b> " +
+                    escCell(tr.candidate_count != null ? tr.candidate_count : "—") +
+                    " · <b>조회 요청 심볼 수</b> " +
+                    escCell(tr.symbols_request_count != null ? tr.symbols_request_count : "—") +
+                    " · <b>minute_bars_present</b> " +
+                    escCell(tr.minute_bars_present != null ? yn(tr.minute_bars_present) : "—") +
+                    "<br/><b>조회 대상</b> " +
+                    escCell(symLine) +
+                    (tr.no_order_reason
+                      ? "<br/><b>no_order_reason</b> " + escCell(tr.no_order_reason)
+                      : "");
+                  paperIntradayBarsTableBody.innerHTML = "";
+                  if (ibs.length === 0) {
+                    var trEmpty = document.createElement("tr");
+                    trEmpty.innerHTML =
+                      "<td colspan=\"5\" style=\"color:#64748b\">심볼별 분봉 요약 없음 (인트라데이 틱이 아니거나 아직 수집 전)</td>";
+                    paperIntradayBarsTableBody.appendChild(trEmpty);
+                  } else {
+                    ibs.forEach(function (row) {
+                      var r = document.createElement("tr");
+                      r.innerHTML =
+                        "<td>" +
+                        escCell(row.symbol) +
+                        "</td><td>" +
+                        escCell(row.bars_1m != null ? row.bars_1m : "—") +
+                        "</td><td>" +
+                        escCell(row.first_bar_kst) +
+                        "</td><td>" +
+                        escCell(row.last_bar_kst) +
+                        "</td><td>" +
+                        escCell(row.fetch_error || "") +
+                        "</td>";
+                      paperIntradayBarsTableBody.appendChild(r);
+                    });
+                  }
+                }
+              }
               paperTickReportPre.textContent = JSON.stringify(tr, null, 2);
               paperDiagTableBody.innerHTML = "";
               (dashData.last_diagnostics || []).forEach(function (row) {
