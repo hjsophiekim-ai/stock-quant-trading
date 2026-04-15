@@ -6,10 +6,15 @@ services:
     rootDir: .
     plan: free
     autoDeploy: true
-    buildCommand: pip install --upgrade pip && pip install -r requirements/backend.txt && pip install --no-deps -e .
+    # PIP_PREFER_BINARY: 소스 빌드 대신 wheel 우선(특히 pandas/numpy/cryptography)로 빌드 시간 단축
+    buildCommand: python -m pip install -U pip setuptools wheel && python -m pip install -r requirements/backend.txt && python -m pip install --no-deps -e .
     startCommand: python -m uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
     envVars:
+      - key: PIP_PREFER_BINARY
+        value: "1"
+      - key: PYTHONDONTWRITEBYTECODE
+        value: "1"
       - key: PYTHONPATH
         value: .
       - key: APP_ENV
