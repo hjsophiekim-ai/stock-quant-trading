@@ -241,7 +241,28 @@ def _risk_banner_from_aggregate(
     return {"level": "info", "message": "리스크·연결 상태 양호 (최근 치명 이벤트 없음)"}
 
 
+def _server_runtime_account_ready() -> bool:
+    """runtime_engine 장중 루프가 KisPaperBroker 를 만들기 위해 필요한 서버 .env 계좌."""
+    try:
+        from app.config import get_settings
+
+        acfg = get_settings()
+        return bool(acfg.resolved_account_no and acfg.resolved_account_product_code)
+    except Exception:
+        return False
+
+
 def _server_runtime_banner(broker_probe: dict[str, Any], user_broker_snap: dict[str, Any] | None) -> dict[str, str]:
+    if not _server_runtime_account_ready():
+        return {
+            "level": "critical",
+            "title": "서버 runtime_engine 미구성",
+            "message": (
+                "서버 .env 에 KIS_ACCOUNT_NO · KIS_ACCOUNT_PRODUCT_CODE(또는 ACCOUNT_NUMBER/ACCOUNT_PRODUCT_CODE)가 없으면 "
+                "runtime_engine 장중 세션 루프가 동작하지 않습니다. "
+                "앱에 저장한 사용자 Paper 세션·브로커 계정과는 별개입니다."
+            ),
+        }
     ok = _broker_chain_ok(broker_probe, user_broker_snap)
     if ok:
         return {
@@ -488,6 +509,8 @@ def dashboard_summary(authorization: str | None = Header(default=None)) -> dict[
             "market_phase_now": rt.get("market_phase_now"),
             "persisted": persisted,
             "last_loop_summary": (rt.get("volatile_summary") or {}).get("last_summary"),
+            "last_kis_token_failure": rt.get("last_kis_token_failure"),
+            "server_runtime_account_configured": _server_runtime_account_ready(),
         },
         "portfolio": {
             "synced": portfolio is not None,
@@ -633,6 +656,8 @@ def dashboard_runtime_status() -> dict[str, Any]:
             "last_error": rt.get("last_error"),
             "persisted": persisted,
             "last_loop_summary": (rt.get("volatile_summary") or {}).get("last_summary"),
+            "last_kis_token_failure": rt.get("last_kis_token_failure"),
+            "server_runtime_account_configured": _server_runtime_account_ready(),
         },
     }
 

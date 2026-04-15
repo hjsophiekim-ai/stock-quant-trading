@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.app.core.config import BackendSettings, get_backend_settings
-from backend.app.engine.market_loop import BackendMarketLoop, MarketLoopResult
+from backend.app.engine.market_loop import BackendMarketLoop, MarketLoopResult, get_last_kis_token_failure_diag
 from backend.app.engine.scheduler import MarketPhase, classify_market_phase, now_kst
 
 logger = logging.getLogger("backend.app.engine.runtime_engine")
@@ -279,6 +279,7 @@ class RuntimeEngine:
             "persisted_file": snap_path,
             "persisted": disk,
             "volatile_summary": dict(self._last_result_summary),
+            "last_kis_token_failure": get_last_kis_token_failure_diag(),
         }
 
 

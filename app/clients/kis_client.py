@@ -443,6 +443,10 @@ class KISClient:
             "params": sanitize_kis_params_for_log(params_for_log),
             "data_keys": sorted(data.keys()) if isinstance(data, dict) else None,
             "rate_limit": False,
+            "http_status": 200,
+            "rt_cd": str(payload.get("rt_cd") or payload.get("RT_CD") or ""),
+            "msg_cd": str(payload.get("msg_cd") or payload.get("MSG_CD") or ""),
+            "msg1": str(payload.get("msg1") or payload.get("MSG1") or ""),
         }
         self.logger.error(
             "KIS business error",

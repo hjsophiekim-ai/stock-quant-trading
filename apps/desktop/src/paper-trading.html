@@ -218,6 +218,10 @@
                 <tr>
                   <th>symbol</th>
                   <th>bars_1m</th>
+                  <th>session_state</th>
+                  <th>fetch_ok</th>
+                  <th>order_ok</th>
+                  <th>fetch_block</th>
                   <th>first_bar_kst</th>
                   <th>last_bar_kst</th>
                   <th>fetch_error</th>
@@ -225,6 +229,10 @@
               </thead>
               <tbody id="paperIntradayBarsTableBody"></tbody>
             </table>
+            <div
+              id="paperIntradayFetchErrDetail"
+              style="display: none; margin-top: 10px; padding: 10px 12px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; font-size: 0.82rem; color: #7f1d1d; line-height: 1.45"
+            ></div>
           </div>
           <p style="margin: 8px 0 4px; font-size: 0.8rem; color: #64748b">tick_report (JSON)</p>
           <pre id="paperTickReportPre" class="tick-report-pre"></pre>
@@ -479,6 +487,7 @@
         const paperIntradaySessionMetrics = document.getElementById("paperIntradaySessionMetrics");
         const paperIntradaySummaryLine = document.getElementById("paperIntradaySummaryLine");
         const paperIntradayBarsTableBody = document.getElementById("paperIntradayBarsTableBody");
+        const paperIntradayFetchErrDetail = document.getElementById("paperIntradayFetchErrDetail");
         const paperTickReportPre = document.getElementById("paperTickReportPre");
         const paperDiagTableBody = document.getElementById("paperDiagTableBody");
         const paperFilterTableBody = document.getElementById("paperFilterTableBody");
@@ -607,6 +616,14 @@
                 paper_intraday_target_round_trip_trades: tr0.paper_intraday_target_round_trip_trades,
                 daily_pnl_pct_snapshot: tr0.daily_pnl_pct_snapshot,
                 risk_halt_new_entries: tr0.risk_halt_new_entries,
+                krx_session_state: tr0.krx_session_state,
+                fetch_allowed: tr0.fetch_allowed,
+                order_allowed: tr0.order_allowed,
+                fetch_block_reason: tr0.fetch_block_reason,
+                order_block_reason: tr0.order_block_reason,
+                orders_blocked_session: tr0.orders_blocked_session,
+                fetch_error_summary: tr0.fetch_error_summary,
+                intraday_first_api_error: tr0.intraday_first_api_error,
               };
               Object.keys(tr0).forEach(function (k) {
                 if (tr[k] === undefined) tr[k] = tr0[k];
@@ -625,30 +642,59 @@
                   var nowKst = kstNowLabel();
                   var regKst = tr.regular_session_kst != null ? !!tr.regular_session_kst : null;
                   if (paperIntradaySessionMetrics) {
+                    var stName =
+                      tr.krx_session_state != null && tr.krx_session_state !== ""
+                        ? String(tr.krx_session_state)
+                        : "—";
                     paperIntradaySessionMetrics.innerHTML =
-                      "<b>세션 요약</b> · session_open_kst=" +
-                      escCell(tr.session_open_kst != null ? yn(tr.session_open_kst) : "—") +
-                      " · regular_session_kst=" +
+                      "<b>현재 KST</b> " +
+                      escCell(nowKst) +
+                      "<br/><b>세션</b> " +
+                      escCell(stName) +
+                      " · <b>분봉 수집</b> " +
+                      escCell(tr.fetch_allowed != null ? yn(tr.fetch_allowed) : "—") +
+                      " · <b>주문 실행</b> " +
+                      escCell(tr.order_allowed != null ? yn(tr.order_allowed) : "—") +
+                      "<br/><b>regular_session_kst</b> " +
                       escCell(regKst != null ? yn(regKst) : "—") +
-                      " · minute_bars_present=" +
+                      " · <b>minute_bars_present</b> " +
                       escCell(tr.minute_bars_present != null ? yn(tr.minute_bars_present) : "—") +
-                      " · intraday_universe_symbol_count=" +
-                      escCell(tr.intraday_universe_symbol_count != null ? tr.intraday_universe_symbol_count : "—") +
-                      " · intraday_universe_row_count=" +
-                      escCell(tr.intraday_universe_row_count != null ? tr.intraday_universe_row_count : "—");
+                      " · <b>universe rows</b> " +
+                      escCell(tr.intraday_universe_row_count != null ? tr.intraday_universe_row_count : "—") +
+                      "<br/><b>fetch_block_reason</b> " +
+                      escCell(tr.fetch_block_reason || "—") +
+                      " · <b>order_block_reason</b> " +
+                      escCell(tr.order_block_reason || "—");
                   }
                   var noOrderReason = String(tr.no_order_reason || "");
-                  var outOfSession = noOrderReason.indexOf("정규장 외") >= 0 || regKst === false;
+                  var sessKey = tr.krx_session_state != null ? String(tr.krx_session_state) : "";
+                  var outOfSession =
+                    sessKey === "closed" ||
+                    tr.fetch_allowed === false ||
+                    noOrderReason.indexOf("정규장 외") >= 0 ||
+                    regKst === false;
+                  var orderObserveOnly =
+                    (sessKey === "pre_open" || sessKey === "after_hours") && tr.order_allowed === false;
                   if (paperSessionWarning && paperSessionWarningBody) {
-                    if (outOfSession) {
+                    if (outOfSession || orderObserveOnly) {
                       paperSessionWarning.classList.add("show");
+                      var extra = "";
+                      if (orderObserveOnly) {
+                        extra =
+                          "<br/><b>안내</b> 장전·장후는 현재 코드 기준으로 <b>국내 REST 주문이 정규장 전용</b>이어서 실제 주문은 막고, 신호·분봉(설정 시)만 확인합니다.";
+                      }
+                      if (tr.fetch_allowed === false) {
+                        extra +=
+                          "<br/><b>분봉</b> " + escCell(tr.fetch_block_reason || "수집 비활성 또는 장외");
+                      }
                       paperSessionWarningBody.innerHTML =
-                        "한국주식 인트라데이 전략은 KST 09:00~15:30 에만 신규 진입합니다.<br/>" +
                         "<b>현재 KST</b> " +
                         escCell(nowKst) +
-                        " · <b>no_order_reason</b> " +
-                        escCell(noOrderReason || "정규장 외") +
-                        "<br/>다음 테스트 권장: 평일 09:10~11:30 KST";
+                        " · <b>session</b> " +
+                        escCell(sessKey || "—") +
+                        "<br/><b>no_order_reason</b> " +
+                        escCell(noOrderReason || "—") +
+                        extra;
                     } else {
                       paperSessionWarning.classList.remove("show");
                       paperSessionWarningBody.innerHTML = "";
@@ -657,6 +703,8 @@
                   paperIntradaySummaryLine.innerHTML =
                     "<b>정규장(KST)</b> " +
                     escCell(tr.session_open_kst != null ? yn(tr.session_open_kst) : "—") +
+                    " · <b>krx_session_state</b> " +
+                    escCell(tr.krx_session_state != null ? String(tr.krx_session_state) : "—") +
                     " · <b>분봉 행 수</b> " +
                     escCell(tr.intraday_universe_row_count != null ? tr.intraday_universe_row_count : "—") +
                     " · <b>유니버스 심볼 수</b> " +
@@ -674,12 +722,15 @@
                     (symCount ? " <span style=\"color:#64748b\">(총 " + escCell(symCount) + "개" + escCell(moreLabel) + ")</span>" : "") +
                     (tr.no_order_reason
                       ? "<br/><b>no_order_reason</b> " + escCell(tr.no_order_reason)
+                      : "") +
+                    (tr.orders_blocked_session != null && tr.orders_blocked_session > 0
+                      ? "<br/><b>세션으로 차단된 주문 시도</b> " + escCell(tr.orders_blocked_session)
                       : "");
                   paperIntradayBarsTableBody.innerHTML = "";
                   if (ibs.length === 0) {
                     var trEmpty = document.createElement("tr");
                     trEmpty.innerHTML =
-                      "<td colspan=\"5\" style=\"color:#64748b\">심볼별 분봉 요약 없음 (인트라데이 틱이 아니거나 아직 수집 전)</td>";
+                      "<td colspan=\"9\" style=\"color:#64748b\">심볼별 분봉 요약 없음 (인트라데이 틱이 아니거나 아직 수집 전)</td>";
                     paperIntradayBarsTableBody.appendChild(trEmpty);
                   } else {
                     ibs.forEach(function (row) {
@@ -690,6 +741,14 @@
                         "</td><td>" +
                         escCell(row.bars_1m != null ? row.bars_1m : "—") +
                         "</td><td>" +
+                        escCell(row.session_state) +
+                        "</td><td>" +
+                        escCell(row.fetch_allowed != null ? yn(row.fetch_allowed) : "—") +
+                        "</td><td>" +
+                        escCell(row.order_allowed != null ? yn(row.order_allowed) : "—") +
+                        "</td><td>" +
+                        escCell(row.fetch_block_reason) +
+                        "</td><td>" +
                         escCell(row.first_bar_kst) +
                         "</td><td>" +
                         escCell(row.last_bar_kst) +
@@ -698,6 +757,53 @@
                         "</td>";
                       paperIntradayBarsTableBody.appendChild(r);
                     });
+                  }
+                  if (paperIntradayFetchErrDetail) {
+                    var apiErr = tr.intraday_first_api_error;
+                    var feSum = Array.isArray(tr.fetch_error_summary) ? tr.fetch_error_summary : [];
+                    var nor = String(tr.no_order_reason || "");
+                    var barsMissing = tr.minute_bars_present === false || (tr.intraday_universe_row_count != null && Number(tr.intraday_universe_row_count) === 0);
+                    var looksLikeBarFail =
+                      nor.indexOf("분봉") >= 0 ||
+                      nor.indexOf("api_error") >= 0 ||
+                      nor.indexOf("KIS API") >= 0 ||
+                      (barsMissing && feSum.some(function (x) { return x && x.fetch_error === "api_error"; }));
+                    if (looksLikeBarFail && apiErr && (apiErr.kis_path || apiErr.fetch_error === "api_error" || apiErr.fetch_error_detail_full)) {
+                      paperIntradayFetchErrDetail.style.display = "block";
+                      paperIntradayFetchErrDetail.innerHTML =
+                        "<div style=\"font-weight:800;margin-bottom:6px\">분봉 API 오류 (전략 조건 이전 단계)</div>" +
+                        "<div style=\"color:#991b1b;margin-bottom:8px\">" +
+                        "현재는 전략 조건 미충족이 아니라 <b>분봉 API 수집 실패</b>로 주문 생성이 0건입니다." +
+                        "</div>" +
+                        "<div><b>fetch_error_summary (상위)</b> " +
+                        escCell(JSON.stringify(feSum)) +
+                        "</div>" +
+                        "<div><b>fetch_error_detail</b> " +
+                        escCell(apiErr.fetch_error_detail || apiErr.fetch_error_detail_full || "—") +
+                        "</div>" +
+                        "<div><b>fetch_error_detail_full</b> " +
+                        escCell(apiErr.fetch_error_detail_full || "—") +
+                        "</div>" +
+                        "<div><b>kis_path</b> " +
+                        escCell(apiErr.kis_path || "—") +
+                        "</div>" +
+                        "<div><b>kis_tr_id</b> " +
+                        escCell(apiErr.kis_tr_id || "—") +
+                        "</div>" +
+                        "<div><b>kis_http_status</b> " +
+                        escCell(apiErr.kis_http_status != null && apiErr.kis_http_status !== "" ? apiErr.kis_http_status : "—") +
+                        "</div>" +
+                        "<div><b>kis_rt_cd / msg_cd / msg1</b> " +
+                        escCell(
+                          [apiErr.kis_rt_cd, apiErr.kis_msg_cd, apiErr.kis_msg1].filter(function (x) {
+                            return x != null && String(x) !== "";
+                          }).join(" | ") || "—"
+                        ) +
+                        "</div>";
+                    } else {
+                      paperIntradayFetchErrDetail.style.display = "none";
+                      paperIntradayFetchErrDetail.innerHTML = "";
+                    }
                   }
                 }
               }

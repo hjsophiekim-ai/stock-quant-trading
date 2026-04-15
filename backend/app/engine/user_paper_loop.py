@@ -29,7 +29,7 @@ from app.scheduler.kis_universe import (
     build_kospi_index_series,
     build_mock_sp500_proxy_from_kospi,
 )
-from app.strategy.intraday_common import is_regular_krx_session
+from app.strategy.intraday_common import analyze_krx_intraday_session, krx_session_config_from_settings
 from app.strategy.intraday_paper_state import IntradayPaperStateStore
 
 from backend.app.auth.kis_auth import issue_access_token
@@ -225,19 +225,25 @@ class UserPaperTradingLoop:
             )
 
             failed_step = "intraday_universe"
+            scfg = krx_session_config_from_settings(cfg)
+            session_snap = analyze_krx_intraday_session(session_config=scfg)
             universe_1m, intraday_bar_fetch_summary = build_intraday_universe_1m(
                 client,
                 symbols,
                 target_bars_per_symbol=140,
                 logger=logger,
                 cache=chart_cache,
+                intraday_fetch_allowed=session_snap.fetch_allowed,
+                intraday_fetch_block_reason=session_snap.fetch_block_reason,
+                session_state=session_snap.state,
+                order_allowed=session_snap.order_allowed,
             )
             intraday_universe_row_count = int(len(universe_1m))
             intraday_universe_symbol_count = (
                 int(universe_1m["symbol"].nunique()) if not universe_1m.empty and "symbol" in universe_1m.columns else 0
             )
             paper_trading_symbols_resolved = list(symbols)
-            regular_session_kst = is_regular_krx_session()
+            regular_session_kst = session_snap.regular_session_kst
 
             sid = (self._strategy_id or "").lower().strip()
             if sid == "scalp_momentum_v1":
@@ -295,6 +301,7 @@ class UserPaperTradingLoop:
                 intraday_bar_fetch_summary=intraday_bar_fetch_summary,
                 intraday_universe_row_count=intraday_universe_row_count,
                 regular_session_kst=regular_session_kst,
+                intraday_session_snapshot=session_snap,
             )
             report = dict(report)
             report["paper_trading_symbols_resolved"] = paper_trading_symbols_resolved

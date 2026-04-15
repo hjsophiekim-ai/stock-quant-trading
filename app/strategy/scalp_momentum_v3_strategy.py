@@ -12,7 +12,9 @@ from app.config import get_settings
 from app.strategy.base_strategy import BaseStrategy, StrategyContext, StrategySignal
 from app.strategy.intraday_common import (
     ema,
-    is_regular_krx_session,
+    get_krx_session_state_kst,
+    intraday_liquidity_multipliers_for_state,
+    krx_session_config_from_settings,
     last_bar_body_pct,
     quote_liquidity_from_payload,
     session_vwap,
@@ -34,6 +36,7 @@ class ScalpMomentumV3Strategy(BaseStrategy):
 
     quote_by_symbol: dict[str, dict[str, Any]] = field(default_factory=dict)
     intraday_state: IntradayPaperState | None = None
+    intraday_session_context: dict[str, Any] = field(default_factory=dict)
     risk_halt_new_entries: bool = False
     timeframe_label: str = "1m"
 
@@ -45,10 +48,14 @@ class ScalpMomentumV3Strategy(BaseStrategy):
         signals: list[StrategySignal] = []
         st = self.intraday_state
 
-        if not is_regular_krx_session():
-            self.last_intraday_signal_breakdown["session"] = "outside_regular"
+        ctx_sess = getattr(self, "intraday_session_context", None) or {}
+        sess_state = str(ctx_sess.get("krx_session_state") or get_krx_session_state_kst())
+        self.last_intraday_signal_breakdown["session_state"] = sess_state
+        if sess_state == "closed":
+            self.last_intraday_signal_breakdown["session"] = "closed"
             return signals
 
+        scfg = krx_session_config_from_settings(cfg)
         regime = classify_market_regime(
             MarketRegimeInputs(
                 kospi=context.kospi_index,
@@ -60,6 +67,7 @@ class ScalpMomentumV3Strategy(BaseStrategy):
         high_vol_block = regime.regime == "high_volatility_risk"
         flatten_close = should_force_flatten_before_close_kst(
             minutes_before_close=int(cfg.paper_intraday_flatten_before_close_minutes),
+            session_config=scfg,
         )
 
         prices = context.prices
@@ -143,6 +151,9 @@ class ScalpMomentumV3Strategy(BaseStrategy):
 
         max_new = max(0, int(cfg.paper_intraday_max_open_positions) - open_n)
         entries_added = 0
+
+        m_vol, m_spread, m_chase = intraday_liquidity_multipliers_for_state(sess_state, cfg)
+
         if not prices.empty:
             for sym in prices["symbol"].unique():
                 sym = str(sym).strip()
@@ -174,15 +185,18 @@ class ScalpMomentumV3Strategy(BaseStrategy):
                 qp = self.quote_by_symbol.get(sym) or {}
                 liq = quote_liquidity_from_payload(qp) if qp else None
                 if liq:
-                    if liq["acml_vol"] < float(cfg.paper_intraday_min_quote_volume) * 0.7:
+                    min_v = float(cfg.paper_intraday_min_quote_volume) * 0.7 * m_vol
+                    min_tv = float(cfg.paper_intraday_min_trade_value_krw) * 0.7 * m_vol
+                    max_sp = float(cfg.paper_intraday_max_spread_pct) * 1.05 * m_spread
+                    if liq["acml_vol"] < min_v:
                         diag["blocked_reason"] = "liquidity_volume"
                         self.last_diagnostics.append(diag)
                         continue
-                    if liq["acml_tr_pbmn"] < float(cfg.paper_intraday_min_trade_value_krw) * 0.7:
+                    if liq["acml_tr_pbmn"] < min_tv:
                         diag["blocked_reason"] = "liquidity_trade_value"
                         self.last_diagnostics.append(diag)
                         continue
-                    if liq["spread_pct"] > float(cfg.paper_intraday_max_spread_pct) * 1.05:
+                    if liq["spread_pct"] > max_sp:
                         diag["blocked_reason"] = "spread"
                         self.last_diagnostics.append(diag)
                         continue
@@ -209,7 +223,7 @@ class ScalpMomentumV3Strategy(BaseStrategy):
                 diag.update(score_flags)
                 diag["total_score"] = int(total_score)
                 diag["body_pct"] = float(body_pct)
-                if body_pct > float(cfg.paper_intraday_max_chase_candle_pct) * 1.25:
+                if body_pct > float(cfg.paper_intraday_max_chase_candle_pct) * 1.25 * m_chase:
                     diag["blocked_reason"] = "chase_candle"
                     self.last_diagnostics.append(diag)
                     continue

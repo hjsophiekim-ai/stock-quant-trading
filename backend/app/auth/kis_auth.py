@@ -9,6 +9,10 @@ import requests
 
 logger = logging.getLogger("backend.app.auth.kis_auth")
 
+# OAuth2 토큰 엔드포인트(TR API 의 tr_id 헤더와 무관)
+KIS_OAUTH_TOKEN_HTTP_PATH = "/oauth2/tokenP"
+KIS_OAUTH_TR_ID_NOTE = "(oauth2/tokenP — REST TR_ID 미사용)"
+
 
 @dataclass(frozen=True)
 class KISTokenResult:
@@ -17,6 +21,9 @@ class KISTokenResult:
     message: str
     error_code: str
     status_code: int | None = None
+    kis_base_url: str | None = None
+    kis_http_path: str | None = None
+    kis_tr_id: str | None = None
 
 
 def mask_secret_tail(value: str, *, keep_last: int = 4) -> str:
@@ -70,14 +77,41 @@ def issue_access_token(
     - HTTP 5xx·네트워크 오류 시 제한적 재시도
     - 본문 rt_cd 가 0이 아니면 실패 처리 (HTTP 200 이더라도)
     """
-    if not app_key:
-        return KISTokenResult(False, None, "앱키 누락", "MISSING_APP_KEY")
-    if not app_secret:
-        return KISTokenResult(False, None, "앱시크릿 누락", "MISSING_APP_SECRET")
-    if not base_url.startswith("http"):
-        return KISTokenResult(False, None, "base url 오류", "INVALID_BASE_URL")
+    tr_id = KIS_OAUTH_TR_ID_NOTE
 
-    endpoint = f"{base_url.rstrip('/')}/oauth2/tokenP"
+    if not app_key:
+        return KISTokenResult(
+            False,
+            None,
+            "앱키 누락",
+            "MISSING_APP_KEY",
+            kis_base_url=base_url.rstrip("/") if base_url.startswith("http") else None,
+            kis_http_path=KIS_OAUTH_TOKEN_HTTP_PATH,
+            kis_tr_id=tr_id,
+        )
+    if not app_secret:
+        return KISTokenResult(
+            False,
+            None,
+            "앱시크릿 누락",
+            "MISSING_APP_SECRET",
+            kis_base_url=base_url.rstrip("/") if base_url.startswith("http") else None,
+            kis_http_path=KIS_OAUTH_TOKEN_HTTP_PATH,
+            kis_tr_id=tr_id,
+        )
+    if not base_url.startswith("http"):
+        return KISTokenResult(
+            False,
+            None,
+            "base url 오류",
+            "INVALID_BASE_URL",
+            kis_base_url=base_url,
+            kis_http_path=KIS_OAUTH_TOKEN_HTTP_PATH,
+            kis_tr_id=tr_id,
+        )
+
+    norm_base = base_url.rstrip("/")
+    endpoint = f"{norm_base}{KIS_OAUTH_TOKEN_HTTP_PATH}"
     payload_json = {
         "grant_type": "client_credentials",
         "appkey": app_key,
@@ -108,6 +142,9 @@ def issue_access_token(
                     None,
                     "토큰 발급 실패: 네트워크 또는 타임아웃",
                     "TOKEN_REQUEST_NETWORK_ERROR",
+                    kis_base_url=norm_base,
+                    kis_http_path=KIS_OAUTH_TOKEN_HTTP_PATH,
+                    kis_tr_id=tr_id,
                 )
             time.sleep(retry_backoff_sec * (2**attempt))
             continue
@@ -128,21 +165,43 @@ def issue_access_token(
                 f"토큰 발급 실패: HTTP {response.status_code}",
                 "TOKEN_HTTP_ERROR",
                 status_code=response.status_code,
+                kis_base_url=norm_base,
+                kis_http_path=KIS_OAUTH_TOKEN_HTTP_PATH,
+                kis_tr_id=tr_id,
             )
 
         if response.status_code >= 400:
+            logger.warning(
+                "KIS token HTTP %s path=%s base=%s tr_id=%s",
+                response.status_code,
+                KIS_OAUTH_TOKEN_HTTP_PATH,
+                norm_base,
+                tr_id,
+            )
             return KISTokenResult(
                 False,
                 None,
                 f"토큰 발급 실패: HTTP {response.status_code}",
                 "TOKEN_HTTP_ERROR",
                 status_code=response.status_code,
+                kis_base_url=norm_base,
+                kis_http_path=KIS_OAUTH_TOKEN_HTTP_PATH,
+                kis_tr_id=tr_id,
             )
 
         try:
             body: dict[str, Any] = response.json()
         except ValueError:
-            return KISTokenResult(False, None, "토큰 발급 실패: 응답 JSON 파싱 오류", "TOKEN_JSON_ERROR")
+            return KISTokenResult(
+                False,
+                None,
+                "토큰 발급 실패: 응답 JSON 파싱 오류",
+                "TOKEN_JSON_ERROR",
+                status_code=response.status_code,
+                kis_base_url=norm_base,
+                kis_http_path=KIS_OAUTH_TOKEN_HTTP_PATH,
+                kis_tr_id=tr_id,
+            )
 
         rt = str(body.get("rt_cd", "0"))
         if rt not in {"0", ""}:
@@ -153,19 +212,43 @@ def issue_access_token(
                 f"토큰 발급 실패: {msg}",
                 "TOKEN_BUSINESS_ERROR",
                 status_code=response.status_code,
+                kis_base_url=norm_base,
+                kis_http_path=KIS_OAUTH_TOKEN_HTTP_PATH,
+                kis_tr_id=tr_id,
             )
 
         token = body.get("access_token")
         if not isinstance(token, str) or not token:
             msg = str(body.get("msg1") or body.get("error_description") or "access_token 없음")
-            return KISTokenResult(False, None, f"토큰 발급 실패: {msg}", "TOKEN_ISSUE_FAILED")
+            return KISTokenResult(
+                False,
+                None,
+                f"토큰 발급 실패: {msg}",
+                "TOKEN_ISSUE_FAILED",
+                status_code=response.status_code,
+                kis_base_url=norm_base,
+                kis_http_path=KIS_OAUTH_TOKEN_HTTP_PATH,
+                kis_tr_id=tr_id,
+            )
 
         logger.info("KIS access token issued (app_key_tail=%s)", mask_secret_tail(app_key))
-        return KISTokenResult(True, token, "토큰 발급 성공", "OK", status_code=response.status_code)
+        return KISTokenResult(
+            True,
+            token,
+            "토큰 발급 성공",
+            "OK",
+            status_code=response.status_code,
+            kis_base_url=norm_base,
+            kis_http_path=KIS_OAUTH_TOKEN_HTTP_PATH,
+            kis_tr_id=tr_id,
+        )
 
     return KISTokenResult(
         False,
         None,
         f"토큰 발급 실패: {last_network!r}",
         "TOKEN_REQUEST_NETWORK_ERROR",
+        kis_base_url=norm_base,
+        kis_http_path=KIS_OAUTH_TOKEN_HTTP_PATH,
+        kis_tr_id=tr_id,
     )

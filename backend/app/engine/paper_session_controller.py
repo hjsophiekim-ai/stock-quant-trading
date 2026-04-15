@@ -521,6 +521,14 @@ class PaperSessionController:
             "intraday_universe_symbol_count": rep.get("intraday_universe_symbol_count"),
             "intraday_universe_row_count": rep.get("intraday_universe_row_count"),
             "intraday_bar_fetch_summary": list(rep.get("intraday_bar_fetch_summary") or []),
+            "fetch_error_summary": rep.get("fetch_error_summary"),
+            "intraday_first_api_error": rep.get("intraday_first_api_error"),
+            "krx_session_state": rep.get("krx_session_state"),
+            "fetch_allowed": rep.get("fetch_allowed"),
+            "order_allowed": rep.get("order_allowed"),
+            "fetch_block_reason": rep.get("fetch_block_reason"),
+            "order_block_reason": rep.get("order_block_reason"),
+            "orders_blocked_session": rep.get("orders_blocked_session"),
         }
 
         return {

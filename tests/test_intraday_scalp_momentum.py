@@ -111,11 +111,11 @@ def test_forced_flatten_flag_in_report_fields(tmp_path: Path) -> None:
 def test_scalp_diagnostics_populated(monkeypatch: pytest.MonkeyPatch) -> None:
     """진입은 막혀도 last_diagnostics·filter_breakdown 경로가 동작하는지."""
     monkeypatch.setattr(
-        "app.strategy.intraday_common.is_regular_krx_session",
-        lambda: True,
+        "app.strategy.scalp_momentum_v1_strategy.get_krx_session_state_kst",
+        lambda *a, **k: "regular",
     )
     monkeypatch.setattr(
-        "app.strategy.intraday_common.should_force_flatten_before_close_kst",
+        "app.strategy.scalp_momentum_v1_strategy.should_force_flatten_before_close_kst",
         lambda **_: False,
     )
     strat = ScalpMomentumV1Strategy()
@@ -185,8 +185,14 @@ def test_buy_gate_cooldown_and_duplicate(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert g2["ok"] is False
 
 
-def _build_intraday_prices(symbol: str, bars: int, *, trend_step: float = 0.25) -> pd.DataFrame:
-    now = datetime.now(_KST).replace(second=0, microsecond=0)
+def _build_intraday_prices(
+    symbol: str,
+    bars: int,
+    *,
+    trend_step: float = 0.25,
+    anchor_kst: datetime | None = None,
+) -> pd.DataFrame:
+    now = (anchor_kst or datetime.now(_KST)).replace(second=0, microsecond=0)
     start = now - timedelta(minutes=bars - 1)
     rows = []
     for i in range(bars):
@@ -224,8 +230,10 @@ def _build_context_from_prices(price_df: pd.DataFrame) -> StrategyContext:
 
 
 def test_scalp_momentum_v2_score_based_entry(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("app.strategy.intraday_common.is_regular_krx_session", lambda: True)
-    monkeypatch.setattr("app.strategy.intraday_common.should_force_flatten_before_close_kst", lambda **_: False)
+    monkeypatch.setattr("app.strategy.scalp_momentum_v2_strategy.get_krx_session_state_kst", lambda *a, **k: "regular")
+    monkeypatch.setattr("app.strategy.scalp_momentum_v2_strategy.should_force_flatten_before_close_kst", lambda **_: False)
+    # 세션/앵커 시각에 따라 마지막 봉 body%가 달라져 chase_candle 에 걸릴 수 있어 고정
+    monkeypatch.setattr("app.strategy.scalp_momentum_v2_strategy.last_bar_body_pct", lambda _df: 0.8)
     strat = ScalpMomentumV2Strategy()
     strat.intraday_state = IntradayPaperState()
     strat.quote_by_symbol = {
@@ -238,7 +246,12 @@ def test_scalp_momentum_v2_score_based_entry(monkeypatch: pytest.MonkeyPatch) ->
             }
         }
     }
-    prices = _build_intraday_prices("005930", 26, trend_step=0.18)
+    prices = _build_intraday_prices(
+        "005930",
+        26,
+        trend_step=0.18,
+        anchor_kst=datetime(2026, 4, 14, 10, 0, tzinfo=_KST),
+    )
     sigs = strat.generate_signals(_build_context_from_prices(prices))
     assert any(s.side == "buy" for s in sigs)
     assert len(strat.last_diagnostics) >= 1
@@ -247,8 +260,9 @@ def test_scalp_momentum_v2_score_based_entry(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_scalp_momentum_v3_entry_and_block(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("app.strategy.intraday_common.is_regular_krx_session", lambda: True)
-    monkeypatch.setattr("app.strategy.intraday_common.should_force_flatten_before_close_kst", lambda **_: False)
+    monkeypatch.setattr("app.strategy.scalp_momentum_v3_strategy.get_krx_session_state_kst", lambda *a, **k: "regular")
+    monkeypatch.setattr("app.strategy.scalp_momentum_v3_strategy.should_force_flatten_before_close_kst", lambda **_: False)
+    monkeypatch.setattr("app.strategy.scalp_momentum_v3_strategy.last_bar_body_pct", lambda _df: 0.8)
     # 진입 가능 케이스
     strat_ok = ScalpMomentumV3Strategy()
     strat_ok.intraday_state = IntradayPaperState()
@@ -262,12 +276,17 @@ def test_scalp_momentum_v3_entry_and_block(monkeypatch: pytest.MonkeyPatch) -> N
             }
         }
     }
-    prices_ok = _build_intraday_prices("000660", 22, trend_step=0.15)
+    prices_ok = _build_intraday_prices(
+        "000660",
+        22,
+        trend_step=0.15,
+        anchor_kst=datetime(2026, 4, 14, 10, 0, tzinfo=_KST),
+    )
     sigs_ok = strat_ok.generate_signals(_build_context_from_prices(prices_ok))
     assert any(s.side == "buy" for s in sigs_ok)
 
     # 고변동 리스크 차단 케이스
-    strat_block = ScalpMomentumV3Strategy(regime_config=MarketRegimeConfig(volatility_threshold=0.1))
+    strat_block = ScalpMomentumV3Strategy(regime_config=MarketRegimeConfig(high_volatility_threshold=0.1))
     strat_block.intraday_state = IntradayPaperState()
     strat_block.quote_by_symbol = strat_ok.quote_by_symbol
     # 큰 변동으로 high_volatility_risk를 유도

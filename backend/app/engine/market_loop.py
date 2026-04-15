@@ -15,13 +15,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from backend.app.auth.kis_auth import issue_access_token
+from backend.app.auth.kis_auth import KIS_OAUTH_TOKEN_HTTP_PATH, issue_access_token
 from backend.app.clients.kis_client import build_kis_client_for_backend
 from backend.app.core.config import BackendSettings, get_backend_settings, resolved_kis_api_base_url
 from backend.app.engine.scheduler import MarketPhase, now_kst
 from backend.app.portfolio.sync_engine import run_portfolio_sync
 
 logger = logging.getLogger("backend.app.engine.market_loop")
+
+_last_kis_token_failure_diag: dict[str, Any] | None = None
+
+
+def get_last_kis_token_failure_diag() -> dict[str, Any] | None:
+    """Volatile: 마지막 KIS OAuth 토큰 실패 맥락(runtime_engine / market_loop)."""
+    return _last_kis_token_failure_diag
 
 
 @dataclass
@@ -41,7 +48,9 @@ class BackendMarketLoop:
         self._token_monotonic: float = 0.0
 
     def _issue_token(self) -> str:
+        global _last_kis_token_failure_diag
         base = resolved_kis_api_base_url(self._backend)
+        trading_mode = (self._backend.trading_mode or "").strip().lower()
         tr = issue_access_token(
             app_key=self._backend.kis_app_key,
             app_secret=self._backend.kis_app_secret,
@@ -49,7 +58,19 @@ class BackendMarketLoop:
             timeout_sec=12,
         )
         if not tr.ok or not tr.access_token:
-            raise RuntimeError(tr.message)
+            diag: dict[str, Any] = {
+                "kis_base_url": tr.kis_base_url or base,
+                "kis_http_path": tr.kis_http_path or KIS_OAUTH_TOKEN_HTTP_PATH,
+                "kis_http_status": tr.status_code,
+                "kis_tr_id": tr.kis_tr_id,
+                "trading_mode": trading_mode,
+                "error_code": tr.error_code,
+                "message": tr.message,
+            }
+            _last_kis_token_failure_diag = diag
+            logger.error("KIS token failure (runtime_engine): %s", json.dumps(diag, ensure_ascii=False))
+            raise RuntimeError(f"{tr.message} | {json.dumps(diag, ensure_ascii=False)}")
+        _last_kis_token_failure_diag = None
         self._access_token = tr.access_token
         self._token_monotonic = time.monotonic()
         return tr.access_token

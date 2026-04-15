@@ -23,10 +23,13 @@ from app.portfolio.pnl import compute_cumulative_return_pct, compute_daily_retur
 from app.risk.kill_switch import KillSwitch
 from app.risk.rules import RiskSnapshot, RiskRules
 from app.scheduler.equity_tracker import EquityTracker
+from app.scheduler.kis_intraday import first_intraday_api_error_row, summarize_intraday_fetch_errors
 from app.scheduler.kis_universe import build_mock_volatility_series
 from app.strategy.base_strategy import StrategyContext
 from app.strategy.intraday_common import (
-    is_regular_krx_session,
+    IntradaySessionSnapshot,
+    analyze_krx_intraday_session,
+    krx_session_config_from_settings,
     should_force_flatten_before_close_kst,
 )
 from app.strategy.intraday_paper_state import IntradayPaperStateStore, iso_now_utc
@@ -51,7 +54,11 @@ def _intraday_no_order_reason(
     halted: bool,
     halt_message: str | None,
     forced_flatten: bool,
-    regular_session_kst: bool,
+    fetch_allowed: bool,
+    order_allowed: bool,
+    fetch_block_reason: str,
+    order_block_reason: str,
+    krx_session_state: str,
     minute_bars_present: bool,
     symbols_request_count: int,
     candidate_count: int,
@@ -61,15 +68,50 @@ def _intraday_no_order_reason(
         return (halt_message or "").strip() or "사이클 중단"
     if forced_flatten:
         return "장 종료 직전 강제 청산 틱"
-    if not regular_session_kst:
-        return "정규장 외"
+    if not fetch_allowed:
+        return _human_fetch_block_message(fetch_block_reason, krx_session_state)
     if symbols_request_count > 0 and not minute_bars_present:
         return "분봉 API 응답 없음"
+    if not order_allowed:
+        return _human_order_block_message(krx_session_state, order_block_reason)
     if candidate_count > 0 and generated_order_count == 0:
         return "후보는 있으나 전략 신호 0개"
     if generated_order_count == 0:
         return "조회 종목은 있으나 후보 0개"
     return ""
+
+
+def _human_fetch_block_message(code: str, state: str) -> str:
+    c = (code or "").strip()
+    if c == "skipped_closed_session":
+        return "완전 장외(또는 세션 밖) — 분봉 조회 안 함"
+    if c == "skipped_preopen_disabled":
+        return "장전 구간이나 설정에서 장전 분봉 조회 비활성"
+    if c == "skipped_afterhours_disabled":
+        return "장후 구간이나 설정에서 장후 분봉 조회 비활성"
+    return f"분봉 조회 비활성({state}, {c or 'reason_unknown'})"
+
+
+def _human_order_block_message(state: str, order_block_reason: str) -> str:
+    r = (order_block_reason or "").strip()
+    if r == "extended_order_disabled":
+        return f"{_session_label_ko(state)} — 실제 주문 비활성(확장 주문 플래그 OFF)"
+    if r == "kis_domestic_order_regular_hours_only":
+        return f"{_session_label_ko(state)} — 국내 REST 주문은 정규장 기준만(코드상 장전·장후 전용 파라미터 없음) — 관찰만"
+    if r == "closed_session":
+        return "세션 외 — 주문 불가"
+    return f"주문 비활성({state}, {r or 'reason_unknown'})"
+
+
+def _session_label_ko(state: str) -> str:
+    s = (state or "").strip()
+    if s == "pre_open":
+        return "장전 세션"
+    if s == "after_hours":
+        return "장후 세션"
+    if s == "regular":
+        return "정규장"
+    return s or "세션"
 
 
 @dataclass
@@ -95,13 +137,19 @@ class IntradaySchedulerJobs:
         intraday_bar_fetch_summary: list[dict[str, Any]] | None = None,
         intraday_universe_row_count: int | None = None,
         regular_session_kst: bool | None = None,
+        intraday_session_snapshot: IntradaySessionSnapshot | None = None,
     ) -> dict[str, Any]:
         cfg = get_settings()
         self.logger.info("[INTRADAY] cycle start tf=%s rows=%s", timeframe, len(universe_tf))
 
         sym_res = [s.strip() for s in (paper_trading_symbols_resolved or []) if s and str(s).strip()]
         fetch_summary = list(intraday_bar_fetch_summary or [])
-        reg_kst = bool(regular_session_kst) if regular_session_kst is not None else is_regular_krx_session()
+        snap = intraday_session_snapshot or analyze_krx_intraday_session(
+            session_config=krx_session_config_from_settings(cfg),
+        )
+        reg_kst = bool(regular_session_kst) if regular_session_kst is not None else snap.regular_session_kst
+        fetch_ok = bool(snap.fetch_allowed)
+        order_ok = bool(snap.order_allowed)
         urows = int(intraday_universe_row_count) if intraday_universe_row_count is not None else int(len(universe_tf))
         symbols_request_count = len(sym_res)
 
@@ -124,7 +172,7 @@ class IntradaySchedulerJobs:
         candidate_count = len(candidate_syms)
 
         minute_bars_present = urows > 0
-        session_ok = reg_kst and candidate_count > 0
+        session_ok = fetch_ok and candidate_count > 0
 
         snapshot_gate = self._build_risk_snapshot(universe_tf)
         daily_pct = float(snapshot_gate.daily_pnl_pct)
@@ -132,6 +180,14 @@ class IntradaySchedulerJobs:
         self.strategy.intraday_state = state
         self.strategy.quote_by_symbol = quote_by_symbol
         self.strategy.risk_halt_new_entries = risk_halt
+        self.strategy.intraday_session_context = {
+            "krx_session_state": snap.state,
+            "fetch_allowed": snap.fetch_allowed,
+            "order_allowed": snap.order_allowed,
+            "fetch_block_reason": snap.fetch_block_reason,
+            "order_block_reason": snap.order_block_reason,
+            "regular_session_kst": snap.regular_session_kst,
+        }
         if hasattr(self.strategy, "timeframe_label"):
             self.strategy.timeframe_label = timeframe
 
@@ -165,6 +221,7 @@ class IntradaySchedulerJobs:
                 intraday_bar_fetch_summary=fetch_summary,
                 intraday_universe_row_count=urows,
                 regular_session_kst=reg_kst,
+                intraday_session_snapshot=snap,
                 minute_bars_present=minute_bars_present,
                 symbols_request_count=symbols_request_count,
             )
@@ -193,7 +250,16 @@ class IntradaySchedulerJobs:
                     continue
             filtered.append(order)
 
+        orders_blocked_session = 0
         for order in filtered:
+            if not order_ok:
+                orders_blocked_session += 1
+                self.logger.info(
+                    "[INTRADAY] order suppressed by session state=%s reason=%s",
+                    snap.state,
+                    snap.order_block_reason,
+                )
+                continue
             signal = OrderSignal(
                 symbol=order.symbol,
                 side=order.side,
@@ -244,14 +310,23 @@ class IntradaySchedulerJobs:
                 "flatten_before_close_armed": bool(
                     should_force_flatten_before_close_kst(
                         minutes_before_close=int(cfg.paper_intraday_flatten_before_close_minutes),
+                        session_config=krx_session_config_from_settings(cfg),
                     )
                 ),
                 "session_open_kst": reg_kst,
                 "regular_session_kst": reg_kst,
+                "krx_session_state": snap.state,
+                "fetch_allowed": fetch_ok,
+                "order_allowed": order_ok,
+                "fetch_block_reason": snap.fetch_block_reason,
+                "order_block_reason": snap.order_block_reason,
+                "orders_blocked_session": int(orders_blocked_session),
                 "minute_bars_present": minute_bars_present,
                 "symbols_request_count": symbols_request_count,
                 "paper_trading_symbols_resolved": sym_res,
                 "intraday_bar_fetch_summary": fetch_summary,
+                "fetch_error_summary": summarize_intraday_fetch_errors(fetch_summary),
+                "intraday_first_api_error": first_intraday_api_error_row(fetch_summary),
                 "intraday_universe_row_count": urows,
                 "daily_pnl_pct_snapshot": daily_pct,
                 "risk_halt_new_entries": risk_halt,
@@ -261,7 +336,11 @@ class IntradaySchedulerJobs:
                     halted=False,
                     halt_message=None,
                     forced_flatten=forced_flatten,
-                    regular_session_kst=reg_kst,
+                    fetch_allowed=fetch_ok,
+                    order_allowed=order_ok,
+                    fetch_block_reason=snap.fetch_block_reason,
+                    order_block_reason=snap.order_block_reason,
+                    krx_session_state=snap.state,
                     minute_bars_present=minute_bars_present,
                     symbols_request_count=symbols_request_count,
                     candidate_count=candidate_count,
@@ -286,10 +365,28 @@ class IntradaySchedulerJobs:
     ) -> str:
         _ = session_ok_effective
         base = str(rep.get("no_order_reason") or "")
-        if rep.get("generated_order_count", 0) > 0:
+        gen_ct = int(rep.get("generated_order_count") or 0)
+        if gen_ct > 0 and not rep.get("order_allowed", True):
+            return "세션 정책으로 주문 실행 차단(신호는 생성됨)"
+        if gen_ct > 0:
             return ""
+        if (
+            not rep.get("minute_bars_present")
+            and int(rep.get("symbols_request_count") or 0) > 0
+            and rep.get("intraday_first_api_error")
+        ):
+            return (
+                "분봉 KIS API 오류(api_error)로 데이터가 없어 전략 조건 평가 전에 중단됨 "
+                "(조건 미충족 아님 · intraday_first_api_error·심볼별 요약 참고)"
+            )
+        if not rep.get("fetch_allowed", True):
+            return base or "분봉 조회 비활성"
+        if not rep.get("order_allowed", True):
+            return base or "확장 세션 — 주문 비활성"
         if not rep.get("regular_session_kst", rep.get("session_open_kst")):
-            return "정규장 외"
+            if any(x in base for x in ("분봉", "장전", "장후", "장외")):
+                return base
+            return base or "정규장 외"
         if rep.get("risk_halt_new_entries"):
             return "인트라데이 일중 손실 한도로 신규 진입 중지"
         if rep.get("regime") == "high_volatility_risk":
@@ -358,13 +455,18 @@ class IntradaySchedulerJobs:
         regular_session_kst: bool = False,
         minute_bars_present: bool = False,
         symbols_request_count: int = 0,
+        intraday_session_snapshot: IntradaySessionSnapshot | None = None,
     ) -> dict[str, Any]:
         cfg = get_settings()
+        snap = intraday_session_snapshot or analyze_krx_intraday_session(
+            session_config=krx_session_config_from_settings(cfg),
+        )
         rep = self._build_report(universe_tf, accepted=accepted, rejected=rejected, strategy_orders=strategy_orders)
         sym_res = list(paper_trading_symbols_resolved or [])
         sreq = int(symbols_request_count or len(sym_res))
         urows = int(intraday_universe_row_count or 0)
         mb = bool(minute_bars_present) if minute_bars_present is not None else urows > 0
+        fs = list(intraday_bar_fetch_summary or [])
         rep.update(
             {
                 "halted": halted,
@@ -383,10 +485,18 @@ class IntradaySchedulerJobs:
                 "forced_flatten": forced_flatten,
                 "session_open_kst": bool(regular_session_kst),
                 "regular_session_kst": bool(regular_session_kst),
+                "krx_session_state": snap.state,
+                "fetch_allowed": snap.fetch_allowed,
+                "order_allowed": snap.order_allowed,
+                "fetch_block_reason": snap.fetch_block_reason,
+                "order_block_reason": snap.order_block_reason,
+                "orders_blocked_session": 0,
                 "minute_bars_present": mb,
                 "symbols_request_count": sreq,
                 "paper_trading_symbols_resolved": sym_res,
-                "intraday_bar_fetch_summary": list(intraday_bar_fetch_summary or []),
+                "intraday_bar_fetch_summary": fs,
+                "fetch_error_summary": summarize_intraday_fetch_errors(fs),
+                "intraday_first_api_error": first_intraday_api_error_row(fs),
                 "intraday_universe_row_count": urows,
                 "daily_pnl_pct_snapshot": daily_pct,
                 "risk_halt_new_entries": risk_halt,
@@ -396,7 +506,11 @@ class IntradaySchedulerJobs:
                     halted=True,
                     halt_message=halt_message,
                     forced_flatten=forced_flatten,
-                    regular_session_kst=bool(regular_session_kst),
+                    fetch_allowed=snap.fetch_allowed,
+                    order_allowed=snap.order_allowed,
+                    fetch_block_reason=snap.fetch_block_reason,
+                    order_block_reason=snap.order_block_reason,
+                    krx_session_state=snap.state,
                     minute_bars_present=mb,
                     symbols_request_count=sreq,
                     candidate_count=len(candidate_syms),
@@ -509,6 +623,8 @@ def fetch_quotes_throttled(
 
 
 def infer_forced_flatten(cfg: Any) -> bool:
+    sc = krx_session_config_from_settings(cfg)
     return should_force_flatten_before_close_kst(
         minutes_before_close=int(cfg.paper_intraday_flatten_before_close_minutes),
+        session_config=sc,
     )

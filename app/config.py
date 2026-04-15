@@ -128,6 +128,24 @@ class Settings(BaseSettings):
         alias="PAPER_INTRADAY_DUPLICATE_ORDER_GUARD_SEC",
     )
 
+    # KRX 세션(장전/정규/장후) — Paper 인트라데이 분봉·주문 게이트
+    paper_krx_preopen_enabled: bool = Field(default=False, alias="PAPER_KRX_PREOPEN_ENABLED")
+    paper_krx_afterhours_enabled: bool = Field(default=False, alias="PAPER_KRX_AFTERHOURS_ENABLED")
+    paper_krx_preopen_start_hhmm: str = Field(default="080000", alias="PAPER_KRX_PREOPEN_START_HHMM")
+    paper_krx_regular_open_hhmm: str = Field(default="090000", alias="PAPER_KRX_REGULAR_OPEN_HHMM")
+    paper_krx_regular_close_hhmm: str = Field(default="153000", alias="PAPER_KRX_REGULAR_CLOSE_HHMM")
+    paper_krx_afterhours_close_hhmm: str = Field(default="180000", alias="PAPER_KRX_AFTERHOURS_CLOSE_HHMM")
+    paper_krx_extended_fetch_enabled: bool = Field(default=False, alias="PAPER_KRX_EXTENDED_FETCH_ENABLED")
+    paper_krx_extended_order_enabled: bool = Field(default=False, alias="PAPER_KRX_EXTENDED_ORDER_ENABLED")
+
+    # 장전/장후 유동성 필터 보수화(배수)
+    paper_intraday_preopen_min_vol_mult: float = Field(default=1.15, ge=0.1, alias="PAPER_INTRADAY_PREOPEN_MIN_VOL_MULT")
+    paper_intraday_preopen_spread_mult: float = Field(default=0.88, ge=0.05, le=2.0, alias="PAPER_INTRADAY_PREOPEN_SPREAD_MULT")
+    paper_intraday_preopen_chase_mult: float = Field(default=0.82, ge=0.05, le=2.0, alias="PAPER_INTRADAY_PREOPEN_CHASE_MULT")
+    paper_intraday_afterhours_min_vol_mult: float = Field(default=1.35, ge=0.1, alias="PAPER_INTRADAY_AFTERHOURS_MIN_VOL_MULT")
+    paper_intraday_afterhours_spread_mult: float = Field(default=0.65, ge=0.05, le=2.0, alias="PAPER_INTRADAY_AFTERHOURS_SPREAD_MULT")
+    paper_intraday_afterhours_chase_mult: float = Field(default=0.72, ge=0.05, le=2.0, alias="PAPER_INTRADAY_AFTERHOURS_CHASE_MULT")
+
     # Dynamic position sizing controls.
     sizing_bullish_boost_multiplier: float = Field(default=1.20, alias="SIZING_BULLISH_BOOST_MULTIPLIER")
     sizing_bearish_cut_multiplier: float = Field(default=0.60, alias="SIZING_BEARISH_CUT_MULTIPLIER")
