@@ -12,6 +12,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,7 @@ from backend.app.auth.kis_auth import KIS_OAUTH_TOKEN_HTTP_PATH, issue_access_to
 from backend.app.clients.kis_client import build_kis_client_for_backend
 from backend.app.core.config import BackendSettings, get_backend_settings, resolved_kis_api_base_url
 from backend.app.engine.scheduler import MarketPhase, now_kst
-from backend.app.portfolio.sync_engine import run_portfolio_sync
+from backend.app.portfolio.sync_engine import SyncRunResult, run_portfolio_sync
 
 logger = logging.getLogger("backend.app.engine.market_loop")
 
@@ -164,6 +165,12 @@ class BackendMarketLoop:
 
     def run_intraday_tick(self) -> MarketLoopResult:
         """장중: 전략·리스크·주문 1틱."""
+        portfolio_sync_summary: dict[str, Any] = {
+            "ok": False,
+            "message": "not_executed",
+            "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "warnings": [],
+        }
         try:
             client = self._kis_client()
             jobs = self._build_jobs(client)
@@ -189,15 +196,15 @@ class BackendMarketLoop:
             sp500 = build_mock_sp500_proxy_from_kospi(kospi)
             report = jobs.run_daily_cycle(universe=universe, kospi_index=kospi, sp500_index=sp500)
             track = self._order_tracking_snapshot(client, cfg)
-            sync_summary = run_portfolio_sync(backfill_days=self._backend.portfolio_sync_backfill_days, settings=self._backend)
+            sync_result = run_portfolio_sync(
+                backfill_days=self._backend.portfolio_sync_backfill_days,
+                settings=self._backend,
+            )
+            portfolio_sync_summary = self._build_portfolio_sync_summary(sync_result)
             summary: dict[str, Any] = {
                 "cycle_report": report,
                 "order_tracking": track,
-                "portfolio_sync": {
-                    "ok": True,
-                    "updated_at_utc": sync_summary.get("updated_at_utc"),
-                    "warnings": sync_summary.get("warnings") or [],
-                },
+                "portfolio_sync": portfolio_sync_summary,
             }
             if self._backend.screener_auto_refresh_with_runtime:
                 try:
@@ -216,7 +223,20 @@ class BackendMarketLoop:
             return MarketLoopResult(ok=True, phase=MarketPhase.SESSION, summary=summary)
         except Exception as exc:
             logger.exception("intraday tick failed")
-            return MarketLoopResult(ok=False, phase=MarketPhase.SESSION, error=str(exc))
+            portfolio_sync_summary["message"] = str(exc)
+            summary = {"portfolio_sync": portfolio_sync_summary}
+            return MarketLoopResult(ok=False, phase=MarketPhase.SESSION, summary=summary, error=str(exc))
+
+    def _build_portfolio_sync_summary(self, sync_result: SyncRunResult) -> dict[str, Any]:
+        snapshot = sync_result.snapshot if isinstance(sync_result.snapshot, dict) else {}
+        warnings = snapshot.get("warnings")
+        updated_at_utc = snapshot.get("updated_at_utc") if snapshot else None
+        return {
+            "ok": bool(sync_result.ok),
+            "message": str(sync_result.message or ""),
+            "updated_at_utc": updated_at_utc or datetime.now(timezone.utc).isoformat(),
+            "warnings": warnings if isinstance(warnings, list) else [],
+        }
 
     def _order_tracking_snapshot(self, client, cfg) -> dict[str, Any]:
         acct = cfg.resolved_account_no
@@ -238,6 +258,12 @@ class BackendMarketLoop:
 
     def run_afterhours(self, reports_dir: Path) -> MarketLoopResult:
         """장 마감 후: 잔고·추적 스냅샷 JSON 저장."""
+        portfolio_sync_summary: dict[str, Any] = {
+            "ok": False,
+            "message": "not_executed",
+            "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "warnings": [],
+        }
         try:
             client = self._kis_client()
             cfg = self._app_config()
@@ -245,7 +271,11 @@ class BackendMarketLoop:
             prod = cfg.resolved_account_product_code
             balance = client.get_balance(account_no=acct, account_product_code=prod)
             track = self._order_tracking_snapshot(client, cfg)
-            sync_summary = run_portfolio_sync(backfill_days=self._backend.portfolio_sync_backfill_days, settings=self._backend)
+            sync_result = run_portfolio_sync(
+                backfill_days=self._backend.portfolio_sync_backfill_days,
+                settings=self._backend,
+            )
+            portfolio_sync_summary = self._build_portfolio_sync_summary(sync_result)
             reports_dir.mkdir(parents=True, exist_ok=True)
             day = now_kst().strftime("%Y-%m-%d")
             path = reports_dir / f"eod_{day}.json"
@@ -254,14 +284,20 @@ class BackendMarketLoop:
                 "written_at": now_kst().isoformat(),
                 "balance_keys": list(balance.keys()),
                 "order_tracking": track,
-                "portfolio_sync": sync_summary,
+                "portfolio_sync": portfolio_sync_summary,
             }
             path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             return MarketLoopResult(
                 ok=True,
                 phase=MarketPhase.AFTERHOURS,
-                summary={"report_path": str(path)},
+                summary={"report_path": str(path), "portfolio_sync": portfolio_sync_summary},
             )
         except Exception as exc:
             logger.exception("afterhours failed")
-            return MarketLoopResult(ok=False, phase=MarketPhase.AFTERHOURS, error=str(exc))
+            portfolio_sync_summary["message"] = str(exc)
+            return MarketLoopResult(
+                ok=False,
+                phase=MarketPhase.AFTERHOURS,
+                summary={"portfolio_sync": portfolio_sync_summary},
+                error=str(exc),
+            )
