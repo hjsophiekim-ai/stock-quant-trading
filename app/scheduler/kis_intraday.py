@@ -17,6 +17,7 @@ from typing import Any
 import pandas as pd
 from zoneinfo import ZoneInfo
 
+from app.clients.kis_contract import TIME_ITEMCHART_FID_ETC_CLS_CODE
 from app.clients.kis_client import KISClient, KISClientError
 from app.clients.kis_parsers import output2_rows
 _KST = ZoneInfo("Asia/Seoul")
@@ -391,7 +392,7 @@ def fetch_today_minute_bars_with_diag(
                 symbol=symbol,
                 input_hour_hhmmss=cursor,
                 include_past_data=include_past_data,
-                etc_cls_code="",
+                etc_cls_code=TIME_ITEMCHART_FID_ETC_CLS_CODE,
             )
         except KISClientError as exc:
             log.warning("time chart failed symbol=%s page=%s err=%s", symbol, page, exc)

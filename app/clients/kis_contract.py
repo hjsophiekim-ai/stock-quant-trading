@@ -80,5 +80,11 @@ class DomesticTrIds:
     time_itemconclusion_live: str = "FHPST01060000"
 
 
+# 주식당일분봉조회(FHKST03010200) FID_ETC_CLS_CODE
+# — KIS Developers 국내주식 기본시세 문서·공식 Python 샘플(koreainvestment/open-trading-api)에서 "00" 사용.
+# — GET 요청 시 빈 문자열은 prune 되어 필드 자체가 빠지므로(OPSQ2001) 반드시 비어 있지 않은 값으로 보냄.
+TIME_ITEMCHART_FID_ETC_CLS_CODE = "00"
+
+
 def pick_tr(*, paper: str, live: str, base_url: str) -> str:
     return paper if is_paper_host(base_url) else live

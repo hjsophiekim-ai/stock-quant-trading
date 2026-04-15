@@ -9,7 +9,13 @@ from typing import Any, Callable
 
 import requests
 
-from app.clients.kis_contract import DomesticStockPaths, DomesticTrIds, is_paper_host, pick_tr
+from app.clients.kis_contract import (
+    TIME_ITEMCHART_FID_ETC_CLS_CODE,
+    DomesticStockPaths,
+    DomesticTrIds,
+    is_paper_host,
+    pick_tr,
+)
 from app.clients.kis_parsers import business_error_detail, is_kis_rate_limit, rt_cd_ok
 
 # 호스트(모의/실전 base URL)별 최소 요청 간격 — KIS EGW00201(초당 거래건수) 완화
@@ -682,12 +688,13 @@ class KISClient:
         symbol: str,
         input_hour_hhmmss: str,
         include_past_data: str = "Y",
-        etc_cls_code: str = "",
+        etc_cls_code: str = TIME_ITEMCHART_FID_ETC_CLS_CODE,
     ) -> dict[str, Any]:
         """
         주식당일분봉조회. 한 호출당 최대 약 30건(공식 안내).
         FID_INPUT_HOUR_1: 조회 기준 시각(HHMMSS). 연속 조회 시 이전 응답의 더 과거 시각을 넣어 페이징.
         FID_PW_DATA_INCU_YN: 과거 데이터 포함(Y/N).
+        FID_ETC_CLS_CODE: 국내 주식 1분봉 기본값 TIME_ITEMCHART_FID_ETC_CLS_CODE("00"). 빈 문자열은 GET prune 으로 제거되어 OPSQ2001 발생.
         """
         params = {
             "FID_COND_MRKT_DIV_CODE": market_div_code,

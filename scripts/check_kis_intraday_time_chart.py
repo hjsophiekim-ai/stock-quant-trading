@@ -22,6 +22,7 @@ if str(_ROOT) not in sys.path:
 
 from zoneinfo import ZoneInfo
 
+from app.clients.kis_contract import TIME_ITEMCHART_FID_ETC_CLS_CODE
 from app.clients.kis_client import KISClientError
 from app.clients.kis_parsers import output2_rows
 from app.logging import setup_logging
@@ -55,15 +56,27 @@ def _main() -> None:
     cursor = datetime.now(_KST).strftime("%H%M%S")
     merged: list[dict] = []
     out_pages: list[dict[str, object]] = []
+    tr_id = client._resolve_tr_id(
+        paper_tr_id=client.tr_ids.time_itemchart_paper,
+        live_tr_id=client.tr_ids.time_itemchart_live,
+    )
+    path = client.endpoints.time_itemchart
 
     for page in range(max(1, int(args.pages))):
+        params_expected = {
+            "FID_COND_MRKT_DIV_CODE": _STOCK_MKT,
+            "FID_INPUT_ISCD": sym,
+            "FID_INPUT_HOUR_1": cursor,
+            "FID_PW_DATA_INCU_YN": str(args.include_past_data).strip() or "Y",
+            "FID_ETC_CLS_CODE": TIME_ITEMCHART_FID_ETC_CLS_CODE,
+        }
         try:
             payload = client.get_time_itemchartprice(
                 market_div_code=_STOCK_MKT,
                 symbol=sym,
                 input_hour_hhmmss=cursor,
                 include_past_data=str(args.include_past_data).strip() or "Y",
-                etc_cls_code="",
+                etc_cls_code=TIME_ITEMCHART_FID_ETC_CLS_CODE,
             )
         except KISClientError as exc:
             ctx = getattr(exc, "kis_context", {}) or {}
@@ -73,15 +86,18 @@ def _main() -> None:
                         "ok": False,
                         "page": page + 1,
                         "symbol": sym,
-                        "error": str(exc),
+                        "path": ctx.get("path") or path,
+                        "tr_id": ctx.get("tr_id") or tr_id,
+                        "params": ctx.get("params") or params_expected,
                         "http_status": ctx.get("http_status"),
-                        "path": ctx.get("path"),
-                        "tr_id": ctx.get("tr_id"),
-                        "params": ctx.get("params"),
-                        "rate_limit": ctx.get("rate_limit"),
                         "rt_cd": ctx.get("rt_cd"),
                         "msg_cd": ctx.get("msg_cd"),
                         "msg1": ctx.get("msg1"),
+                        "error": str(exc),
+                        "output2_row_count": 0,
+                        "first_stck_cntg_hour": None,
+                        "last_stck_cntg_hour": None,
+                        "rate_limit": ctx.get("rate_limit"),
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -99,6 +115,10 @@ def _main() -> None:
         out_pages.append(
             {
                 "page": page + 1,
+                "symbol": sym,
+                "path": path,
+                "tr_id": tr_id,
+                "params": params_expected,
                 "http_status": 200,
                 "rt_cd": str(payload.get("rt_cd") or ""),
                 "msg_cd": str(payload.get("msg_cd") or ""),
@@ -106,18 +126,6 @@ def _main() -> None:
                 "output2_row_count": len(batch),
                 "first_stck_cntg_hour": hours[0] if hours else None,
                 "last_stck_cntg_hour": hours[-1] if hours else None,
-                "path": client.endpoints.time_itemchart,
-                "tr_id": client._resolve_tr_id(
-                    paper_tr_id=client.tr_ids.time_itemchart_paper,
-                    live_tr_id=client.tr_ids.time_itemchart_live,
-                ),
-                "params": {
-                    "FID_COND_MRKT_DIV_CODE": _STOCK_MKT,
-                    "FID_INPUT_ISCD": sym,
-                    "FID_INPUT_HOUR_1": cursor,
-                    "FID_PW_DATA_INCU_YN": str(args.include_past_data).strip() or "Y",
-                    "FID_ETC_CLS_CODE": "",
-                },
             }
         )
         merged.extend(batch)
@@ -136,6 +144,7 @@ def _main() -> None:
             break
         cursor = _cursor_before_minute(_hhmmss_from_ts(oldest_ts))
 
+    first_page = out_pages[0] if out_pages else {}
     print(
         json.dumps(
             {
@@ -146,6 +155,19 @@ def _main() -> None:
                 "pages_requested": int(args.pages),
                 "merged_output2_rows": len(merged),
                 "per_page": out_pages,
+                "summary_page1": {
+                    "symbol": sym,
+                    "path": first_page.get("path"),
+                    "tr_id": first_page.get("tr_id"),
+                    "params": first_page.get("params"),
+                    "http_status": first_page.get("http_status"),
+                    "rt_cd": first_page.get("rt_cd"),
+                    "msg_cd": first_page.get("msg_cd"),
+                    "msg1": first_page.get("msg1"),
+                    "output2_row_count": first_page.get("output2_row_count"),
+                    "first_stck_cntg_hour": first_page.get("first_stck_cntg_hour"),
+                    "last_stck_cntg_hour": first_page.get("last_stck_cntg_hour"),
+                },
             },
             ensure_ascii=False,
             indent=2,
