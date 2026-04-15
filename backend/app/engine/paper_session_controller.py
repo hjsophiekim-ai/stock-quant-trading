@@ -523,6 +523,7 @@ class PaperSessionController:
             "intraday_bar_fetch_summary": list(rep.get("intraday_bar_fetch_summary") or []),
             "fetch_error_summary": rep.get("fetch_error_summary"),
             "intraday_first_api_error": rep.get("intraday_first_api_error"),
+            "multi_strategy_snapshot": rep.get("multi_strategy_snapshot"),
             "krx_session_state": rep.get("krx_session_state"),
             "fetch_allowed": rep.get("fetch_allowed"),
             "order_allowed": rep.get("order_allowed"),

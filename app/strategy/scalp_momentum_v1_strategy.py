@@ -225,13 +225,19 @@ class ScalpMomentumV1Strategy(BaseStrategy):
                     continue
 
                 last_px = last_close
+                from app.strategy.intraday_entry_qty import resolved_intraday_entry_quantity
+
+                sl_pts = float(cfg.paper_intraday_stop_loss_pct)
+                qty = resolved_intraday_entry_quantity(
+                    cfg, self, price_krw=last_px, stop_loss_pct_points=sl_pts
+                )
                 signals.append(
                     StrategySignal(
                         symbol=sym,
                         side="buy",
-                        quantity=int(cfg.paper_intraday_order_quantity),
+                        quantity=qty,
                         price=last_px,
-                        stop_loss_pct=float(cfg.paper_intraday_stop_loss_pct),
+                        stop_loss_pct=sl_pts,
                         reason="scalp_momentum_v1_entry",
                         strategy_name="scalp_momentum_v1",
                     )

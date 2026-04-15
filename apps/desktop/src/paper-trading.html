@@ -725,6 +725,23 @@
                       : "") +
                     (tr.orders_blocked_session != null && tr.orders_blocked_session > 0
                       ? "<br/><b>세션으로 차단된 주문 시도</b> " + escCell(tr.orders_blocked_session)
+                      : "") +
+                    (tr.multi_strategy_snapshot && tr.multi_strategy_snapshot.enabled
+                      ? "<br/><b>멀티 전략</b> 스윙 " +
+                        escCell(tr.multi_strategy_snapshot.swing_strategy_id || "—") +
+                        " · 단타 " +
+                        escCell(tr.multi_strategy_snapshot.scalp_strategy_id || "—") +
+                        " · 노셔널(원) 단타 " +
+                        escCell(
+                          tr.multi_strategy_snapshot.notionals &&
+                            tr.multi_strategy_snapshot.notionals.intraday_notional_krw != null
+                            ? String(
+                                Math.round(
+                                  Number(tr.multi_strategy_snapshot.notionals.intraday_notional_krw)
+                                )
+                              )
+                            : "—"
+                        )
                       : "");
                   paperIntradayBarsTableBody.innerHTML = "";
                   if (ibs.length === 0) {

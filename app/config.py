@@ -2,7 +2,7 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -122,6 +122,54 @@ class Settings(BaseSettings):
         alias="PAPER_INTRADAY_CHART_MIN_INTERVAL_SEC",
     )
     paper_intraday_order_quantity: int = Field(default=1, ge=1, alias="PAPER_INTRADAY_ORDER_QUANTITY")
+    paper_multi_strategy_mode: bool = Field(
+        default=False,
+        alias="PAPER_MULTI_STRATEGY_MODE",
+        description="멀티 전략(스윙+인트라데이) 병렬 틱. false면 기존 단일 전략 경로 유지.",
+    )
+    paper_multi_swing_strategy_id: str = Field(
+        default="swing_relaxed_v1",
+        alias="PAPER_MULTI_SWING_STRATEGY_ID",
+        description="멀티 모드 일봉 스윙 레그 strategy_id (paper_strategy 매핑).",
+    )
+    paper_swing_capital_pct: float = Field(
+        default=60.0,
+        ge=0.0,
+        le=100.0,
+        alias="PAPER_SWING_CAPITAL_PCT",
+        description="평가금 대비 스윙 레그 노셔널 가이드(%).",
+    )
+    paper_intraday_capital_pct: float = Field(
+        default=40.0,
+        ge=0.0,
+        le=100.0,
+        alias="PAPER_INTRADAY_CAPITAL_PCT",
+        description="평가금 대비 인트라데이 레그 노셔널 가이드(%).",
+    )
+    paper_max_capital_per_position_pct: float = Field(
+        default=8.0,
+        ge=0.01,
+        le=100.0,
+        alias="PAPER_MAX_CAPITAL_PER_POSITION_PCT",
+        description="인트라데이 버킷 내 단일 종목 최대 투입(%).",
+    )
+    paper_risk_per_trade_pct: float = Field(
+        default=0.45,
+        ge=0.01,
+        le=10.0,
+        alias="PAPER_RISK_PER_TRADE_PCT",
+        description="평가금 대비 1회 허용 손실(%); 손절폭으로 수량 역산.",
+    )
+    paper_intraday_risk_based_quantity: bool = Field(
+        default=False,
+        alias="PAPER_INTRADAY_RISK_BASED_QUANTITY",
+        description="멀티 없이도 스캘프 매수 수량을 리스크 기반으로.",
+    )
+    paper_multi_router_prefer_scalp_on_overlap: bool = Field(
+        default=True,
+        alias="PAPER_MULTI_ROUTER_PREFER_SCALP_ON_OVERLAP",
+        description="스윙·인트라데이 후보 교집합 시 스캘프 우선 배정.",
+    )
     paper_intraday_duplicate_order_guard_sec: float = Field(
         default=45.0,
         ge=0.0,
@@ -235,6 +283,16 @@ class Settings(BaseSettings):
             and self.live_trading_extra_confirm
             and self.trading_mode == "live"
         )
+
+    @property
+    def paper_uses_intraday_risk_sized_quantity(self) -> bool:
+        return bool(self.paper_multi_strategy_mode or self.paper_intraday_risk_based_quantity)
+
+    @model_validator(mode="after")
+    def _validate_capital_split(self) -> "Settings":
+        if float(self.paper_swing_capital_pct) + float(self.paper_intraday_capital_pct) > 100.01:
+            raise ValueError("PAPER_SWING_CAPITAL_PCT + PAPER_INTRADAY_CAPITAL_PCT must be <= 100")
+        return self
 
 
 @lru_cache(maxsize=1)

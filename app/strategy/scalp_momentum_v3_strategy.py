@@ -232,11 +232,16 @@ class ScalpMomentumV3Strategy(BaseStrategy):
                     self.last_diagnostics.append(diag)
                     continue
 
+                from app.strategy.intraday_entry_qty import resolved_intraday_entry_quantity
+
+                qty = resolved_intraday_entry_quantity(
+                    cfg, self, price_krw=float(last_close), stop_loss_pct_points=sl_pct
+                )
                 signals.append(
                     StrategySignal(
                         symbol=sym,
                         side="buy",
-                        quantity=int(cfg.paper_intraday_order_quantity),
+                        quantity=qty,
                         price=last_close,
                         stop_loss_pct=sl_pct,
                         reason="scalp_momentum_v3_entry",

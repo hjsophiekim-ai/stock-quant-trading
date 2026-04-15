@@ -36,6 +36,7 @@ from backend.app.auth.kis_auth import issue_access_token
 from backend.app.clients.kis_client import build_kis_client_for_paper_user
 from backend.app.core.config import BackendSettings, get_backend_settings
 from backend.app.engine.paper_strategy import strategy_for_paper_id
+from backend.app.engine.portfolio_strategy_router import notionals_for_legs, route_swing_vs_scalp_symbols
 
 logger = logging.getLogger("backend.app.engine.user_paper_loop")
 
@@ -123,7 +124,7 @@ class UserPaperTradingLoop:
             app_secret=self._app_secret,
         )
 
-    def _build_jobs(self, client):
+    def _build_jobs(self, client, *, strategy_id: str | None = None):
         cfg = get_settings()
         broker = KisPaperBroker(
             kis_client=client,
@@ -141,7 +142,8 @@ class UserPaperTradingLoop:
             )
         )
         kill = KillSwitch(rules=rules)
-        strat = strategy_for_paper_id(self._strategy_id)
+        sid = (strategy_id or self._strategy_id or "").strip()
+        strat = strategy_for_paper_id(sid)
         return SchedulerJobs(
             strategy=strat,
             broker=broker,
@@ -151,7 +153,7 @@ class UserPaperTradingLoop:
             logger=logger,
         )
 
-    def _build_intraday_jobs(self, client, *, state_store: IntradayPaperStateStore):
+    def _build_intraday_jobs(self, client, *, state_store: IntradayPaperStateStore, strategy_id: str | None = None):
         cfg = get_settings()
         broker = KisPaperBroker(
             kis_client=client,
@@ -169,7 +171,8 @@ class UserPaperTradingLoop:
             )
         )
         kill = KillSwitch(rules=rules)
-        strat = strategy_for_paper_id(self._strategy_id)
+        sid = (strategy_id or self._strategy_id or "").strip()
+        strat = strategy_for_paper_id(sid)
         return IntradaySchedulerJobs(
             strategy=strat,
             broker=broker,
@@ -180,12 +183,166 @@ class UserPaperTradingLoop:
             logger=logger,
         )
 
-    def _run_intraday_scalp_tick(self) -> dict[str, Any]:
+    def _run_swing_daily_tick(self, client, swing_symbols: list[str], *, swing_strategy_id: str) -> dict[str, Any]:
+        """멀티 모드 스윙 레그: 일봉 유니버스 + run_daily_cycle."""
+        cfg = get_settings()
+        sym = [s.strip() for s in swing_symbols if s and str(s).strip()]
+        if not sym:
+            return {
+                "generated_order_count": 0,
+                "accepted_orders": 0,
+                "rejected_orders": 0,
+                "no_order_reason": "multi_no_swing_symbols",
+            }
+        if cfg.paper_smoke_mode:
+            sym = sym[:1]
+        lookback = min(60, int(cfg.paper_kis_chart_lookback_days)) if cfg.paper_smoke_mode else max(int(cfg.paper_kis_chart_lookback_days), 60)
+        jobs = self._build_jobs(client, strategy_id=swing_strategy_id)
+        universe = build_kis_stock_universe(
+            client,
+            sym,
+            lookback_calendar_days=lookback,
+            logger=logger,
+        )
+        kospi = build_kospi_index_series(
+            client,
+            lookback_calendar_days=lookback,
+            logger=logger,
+        )
+        sp500 = build_mock_sp500_proxy_from_kospi(kospi)
+        return dict(jobs.run_daily_cycle(universe=universe, kospi_index=kospi, sp500_index=sp500))
+
+    def _run_multi_strategy_tick(self) -> dict[str, Any]:
+        """스윙(일봉) + 선택된 스캘프(분봉) 순차 1틱. 단일 브로커·동일 현금 풀."""
+        failed_step = "kis_client"
+        try:
+            client = self._kis_client()
+        except RuntimeError as exc:
+            err_s = str(exc)
+            is_rl = err_s.startswith("TOKEN_RATE_LIMIT:") or "TOKEN_RATE_LIMIT" in err_s
+            fk = "token_rate_limit" if is_rl else "token_failure"
+            return {
+                "ok": False,
+                "error": err_s,
+                "failed_step": "kis_token",
+                "kis_context": {},
+                "token_source": self.token_source_for_diagnostics(),
+                "failure_kind": fk,
+                "token_error_code": "TOKEN_RATE_LIMIT" if is_rl else (self._last_token_error_code or "TOKEN_FAILURE"),
+                "paper_loop_fresh_issue": False,
+                "paper_loop_last_token_failure_at": self._last_token_failure_at_iso,
+                "paper_loop_last_token_http_status": self._last_token_http_status,
+            }
+
+        cfg = get_settings()
+        route = route_swing_vs_scalp_symbols(
+            swing_csv=cfg.paper_trading_symbols,
+            intraday_symbols=cfg.resolved_intraday_symbol_list(),
+            prefer_scalp_on_overlap=cfg.paper_multi_router_prefer_scalp_on_overlap,
+        )
+        swing_sid = (cfg.paper_multi_swing_strategy_id or "swing_relaxed_v1").strip()
+        br = KisPaperBroker(
+            kis_client=client,
+            account_no=self._account_no,
+            account_product_code=self._product_code,
+            logger=logger,
+        )
+        cash = float(br.get_cash())
+        mv = sum(float(p.quantity) * float(p.average_price or 0.0) for p in br.get_positions())
+        equity = cash + mv
+        legs = notionals_for_legs(
+            equity_krw=equity,
+            cash_krw=cash,
+            swing_pct=float(cfg.paper_swing_capital_pct),
+            intraday_pct=float(cfg.paper_intraday_capital_pct),
+        )
+        rep_swing = self._run_swing_daily_tick(client, route.swing_symbols, swing_strategy_id=swing_sid)
+        if not route.scalp_symbols:
+            merged = dict(rep_swing)
+            merged.setdefault("minute_bars_present", False)
+            merged.setdefault("intraday_universe_row_count", 0)
+            merged.setdefault("intraday_universe_symbol_count", 0)
+            merged.setdefault("trade_count_today", merged.get("trade_count_today", 0))
+            merged.setdefault("risk_halt_new_entries", merged.get("risk_halt_new_entries", False))
+            merged["multi_strategy_snapshot"] = {
+                "enabled": True,
+                "swing_strategy_id": swing_sid,
+                "scalp_strategy_id": self._strategy_id,
+                "swing_symbols": route.swing_symbols,
+                "scalp_symbols": [],
+                "router_diagnostics": route.diagnostics,
+                "notionals": legs,
+                "swing_leg": rep_swing,
+                "intraday_leg": None,
+            }
+            merged["paper_intraday_mode"] = True
+            return {
+                "ok": True,
+                "report": merged,
+                "token_source": self.token_source_for_diagnostics(),
+                "token_cache_source": self.token_source_for_diagnostics(),
+                "token_error_code": None,
+                "paper_loop_fresh_issue": self._token_issued_locally,
+                "paper_loop_last_token_failure_at": self._last_token_failure_at_iso,
+                "paper_loop_last_token_error_code": self._last_token_error_code,
+                "paper_loop_last_token_http_status": self._last_token_http_status,
+                "universe_cache_hit": False,
+                "kospi_cache_hit": False,
+                "request_budget_mode": "paper_multi",
+                "throttled_mode": int(cfg.kis_min_request_interval_ms) > 0,
+                "paper_tick_interval_sec": int(cfg.paper_intraday_loop_interval_sec),
+                "paper_intraday_mode": True,
+            }
+
+        intra_out = self._run_intraday_scalp_tick(
+            client_override=client,
+            symbols_override=list(route.scalp_symbols),
+            router_equity_krw=equity,
+            router_intraday_budget_krw=float(legs["intraday_notional_krw"]),
+        )
+        if not intra_out.get("ok"):
+            return intra_out
+        rep_i = dict(intra_out.get("report") or {})
+        rep_s = dict(rep_swing)
+        merged = dict(rep_i)
+        merged["accepted_orders"] = int(rep_s.get("accepted_orders", 0) or 0) + int(rep_i.get("accepted_orders", 0) or 0)
+        merged["rejected_orders"] = int(rep_s.get("rejected_orders", 0) or 0) + int(rep_i.get("rejected_orders", 0) or 0)
+        merged["generated_order_count"] = int(rep_s.get("generated_order_count", 0) or 0) + int(
+            rep_i.get("generated_order_count", 0) or 0
+        )
+        merged["multi_strategy_snapshot"] = {
+            "enabled": True,
+            "swing_strategy_id": swing_sid,
+            "scalp_strategy_id": self._strategy_id,
+            "swing_symbols": route.swing_symbols,
+            "scalp_symbols": route.scalp_symbols,
+            "router_diagnostics": route.diagnostics,
+            "notionals": legs,
+            "swing_leg": rep_swing,
+            "intraday_leg": rep_i,
+        }
+        merged["no_order_reason"] = (
+            f"멀티: 스윙 {rep_s.get('no_order_reason') or ''} | 단타 {rep_i.get('no_order_reason') or ''}".strip()
+        )[:500]
+
+        out = dict(intra_out)
+        out["report"] = merged
+        out["request_budget_mode"] = "paper_multi"
+        return out
+
+    def _run_intraday_scalp_tick(
+        self,
+        *,
+        client_override: Any = None,
+        symbols_override: list[str] | None = None,
+        router_equity_krw: float | None = None,
+        router_intraday_budget_krw: float | None = None,
+    ) -> dict[str, Any]:
         """분봉 단타 전용 — 일봉 유니버스와 분리."""
         failed_step = "kis_client"
         try:
             try:
-                client = self._kis_client()
+                client = client_override if client_override is not None else self._kis_client()
             except RuntimeError as exc:
                 err_s = str(exc)
                 is_rl = err_s.startswith("TOKEN_RATE_LIMIT:") or "TOKEN_RATE_LIMIT" in err_s
@@ -204,7 +361,7 @@ class UserPaperTradingLoop:
                 }
 
             cfg = get_settings()
-            symbols = cfg.resolved_intraday_symbol_list()
+            symbols = list(symbols_override) if symbols_override is not None else cfg.resolved_intraday_symbol_list()
             if not symbols:
                 return {
                     "ok": False,
@@ -289,7 +446,25 @@ class UserPaperTradingLoop:
             forced_flatten = infer_forced_flatten(cfg)
 
             failed_step = "intraday_jobs"
-            jobs = self._build_intraday_jobs(client, state_store=state_store)
+            jobs = self._build_intraday_jobs(client, state_store=state_store, strategy_id=self._strategy_id)
+            if cfg.paper_uses_intraday_risk_sized_quantity:
+                eq_b = router_equity_krw
+                bud = router_intraday_budget_krw
+                if eq_b is None or bud is None:
+                    cash_b = float(jobs.broker.get_cash())
+                    mv_b = sum(
+                        float(p.quantity) * float(p.average_price or 0.0) for p in jobs.broker.get_positions()
+                    )
+                    eq_b = cash_b + mv_b
+                    legs_b = notionals_for_legs(
+                        equity_krw=eq_b,
+                        cash_krw=cash_b,
+                        swing_pct=float(cfg.paper_swing_capital_pct),
+                        intraday_pct=float(cfg.paper_intraday_capital_pct),
+                    )
+                    bud = float(legs_b["intraday_notional_krw"])
+                setattr(jobs.strategy, "_router_equity_krw", float(eq_b))
+                setattr(jobs.strategy, "_router_intraday_budget_krw", float(bud))
             report = jobs.run_intraday_cycle(
                 universe_tf=universe_tf,
                 kospi_index=kospi,
@@ -359,6 +534,12 @@ class UserPaperTradingLoop:
 
     def run_intraday_tick(self) -> dict[str, Any]:
         cfg = get_settings()
+        if (
+            bool(cfg.paper_multi_strategy_mode)
+            and bool(cfg.paper_intraday_enabled)
+            and _is_intraday_scalp_strategy(self._strategy_id)
+        ):
+            return self._run_multi_strategy_tick()
         if _is_intraday_scalp_strategy(self._strategy_id):
             if not bool(cfg.paper_intraday_enabled):
                 return {
