@@ -618,7 +618,40 @@
           outEl.textContent = "불러오는 중…";
           try {
             const res = await authFetch(url, { headers: await authHeaders() });
-            const data = await res.json();
+            const raw = await res.text();
+            const contentType = String(res.headers.get("content-type") || "").toLowerCase();
+            let data = null;
+            if (contentType.indexOf("application/json") >= 0 || /^[\s\r\n]*[\[{]/.test(raw)) {
+              try {
+                data = raw ? JSON.parse(raw) : {};
+              } catch (e) {
+                outEl.textContent =
+                  "JSON 파싱 실패\n" +
+                  "- URL: " +
+                  url +
+                  "\n" +
+                  "- content-type: " +
+                  (contentType || "(none)") +
+                  "\n" +
+                  "- body(head): " +
+                  String(raw || "").slice(0, 220);
+                return;
+              }
+            } else {
+              outEl.textContent =
+                "JSON 응답이 아닙니다.\n" +
+                "- URL: " +
+                url +
+                "\n" +
+                "- content-type: " +
+                (contentType || "(none)") +
+                "\n" +
+                "- body(head): " +
+                String(raw || "").slice(0, 220) +
+                "\n\n" +
+                "서버 주소가 백엔드 API인지 확인하세요. (예: https://stock-quant-backend.onrender.com)";
+              return;
+            }
             if (!res.ok) {
               outEl.textContent = parseDetail(data, res.status);
               return;
