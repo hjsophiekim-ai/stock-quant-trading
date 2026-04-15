@@ -4,7 +4,6 @@ import { ActivityIndicator, Button, SafeAreaView, View } from "react-native";
 import BrokerSettingsScreen from "./screens/BrokerSettingsScreen";
 import { APP_ENV, BACKEND_URL } from "./config/env";
 import DashboardScreen from "./screens/DashboardScreen";
-import LiveTradingSettingsScreen from "./screens/LiveTradingSettingsScreen";
 import LoginScreen from "./screens/LoginScreen";
 import OnboardingScreen from "./screens/OnboardingScreen";
 import PaperTradingScreen from "./screens/PaperTradingScreen";
@@ -20,11 +19,11 @@ import {
 } from "./lib/session";
 import { AuthState, getAuthState, setAuth, subscribeAuth } from "./store/authStore";
 
+type MainTab = "dashboard" | "domestic-trading" | "us-trading" | "performance" | "broker-settings";
+
 export default function App() {
   const [auth, setAuthView] = useState<AuthState>(getAuthState());
-  const [tab, setTab] = useState<
-    "dashboard" | "broker-settings" | "paper-trading" | "us-trading" | "live-settings" | "performance"
-  >("dashboard");
+  const [tab, setTab] = useState<MainTab>("dashboard");
   const [bootPhase, setBootPhase] = useState<"loading" | "onboarding" | "ready">("loading");
   const [showOnboarding, setShowOnboarding] = useState(false);
 
@@ -106,7 +105,7 @@ export default function App() {
       <View style={{ flex: 1 }}>
         {tab === "dashboard" ? (
           <DashboardScreen backendUrl={BACKEND_URL} onOpenBrokerSettings={() => setTab("broker-settings")} />
-        ) : tab === "paper-trading" ? (
+        ) : tab === "domestic-trading" ? (
           <PaperTradingScreen
             backendUrl={BACKEND_URL}
             onOpenDashboard={() => setTab("dashboard")}
@@ -118,8 +117,6 @@ export default function App() {
             onOpenDashboard={() => setTab("dashboard")}
             onOpenPerformance={() => setTab("performance")}
           />
-        ) : tab === "live-settings" ? (
-          <LiveTradingSettingsScreen backendUrl={BACKEND_URL} />
         ) : tab === "performance" ? (
           <PerformanceScreen backendUrl={BACKEND_URL} />
         ) : (
@@ -128,10 +125,9 @@ export default function App() {
       </View>
       <View style={{ flexDirection: "row", justifyContent: "space-around", padding: 8 }}>
         <Button title="대시보드" onPress={() => setTab("dashboard")} />
-        <Button title="Domestic" onPress={() => setTab("paper-trading")} />
-        <Button title="US" onPress={() => setTab("us-trading")} />
+        <Button title="국내" onPress={() => setTab("domestic-trading")} />
+        <Button title="미국" onPress={() => setTab("us-trading")} />
         <Button title="성과" onPress={() => setTab("performance")} />
-        <Button title="Live" onPress={() => setTab("live-settings")} />
         <Button title="브로커" onPress={() => setTab("broker-settings")} />
       </View>
     </SafeAreaView>

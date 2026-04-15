@@ -131,9 +131,9 @@
         <p id="user"></p>
         <p class="muted" id="pollStatus"></p>
         <button id="dashboardBtn">Dashboard</button>
+        <button id="domesticPaperBtn">국내 Paper</button>
+        <button id="usPaperBtn">미국 Paper</button>
         <button id="performanceBtn">Performance</button>
-        <button id="paperTradingBtn">Paper Trading</button>
-        <button id="liveSettingsBtn">Live Settings</button>
         <button id="brokerSettingsBtn">Broker Settings</button>
         <button id="logoutBtn">Logout</button>
       </aside>
@@ -156,6 +156,11 @@
           <div id="storageDiagText" class="muted" style="margin-top: 6px; color: #92400e"></div>
         </div>
         <div id="brokerGate" class="card" style="display: none; background: #fffbeb; border-color: #fbbf24; margin-bottom: 12px"></div>
+        <div class="card" id="marketSplitCard" style="margin-bottom: 12px">
+          <b>국내 / 미국 Paper 상태</b>
+          <p class="muted" id="activePaperMarketLine" style="margin: 8px 0 4px"></p>
+          <div id="marketCardsBody"></div>
+        </div>
         <div class="cards">
           <div class="card">
             <b>현재 모드</b>
@@ -418,6 +423,47 @@
           }
           setScopeBanner("serverRuntimeBanner", summary.server_runtime_banner);
           setScopeBanner("userPaperBanner", summary.user_paper_banner);
+
+          var apm = summary.active_paper_market;
+          document.getElementById("activePaperMarketLine").innerText =
+            "현재 실행 중 Paper market (서버): " + (apm != null && apm !== "" ? String(apm) : "없음 (세션 미가동)");
+          var mcards = summary.market_status_cards || [];
+          if (!mcards.length) {
+            var ps0 = summary.paper_trading || {};
+            mcards = [
+              {
+                market: "domestic",
+                title: "국내 (fallback)",
+                status: ps0.status || "unknown",
+                session_state: ps0.krx_session_state || summary.runtime_engine?.market_phase_now || "closed",
+                message: ps0.strategy_id ? "strategy=" + ps0.strategy_id : "Paper 미실행",
+              },
+              {
+                market: "us",
+                title: "미국",
+                status: "unknown",
+                session_state: "closed",
+                message: "요약 필드 없음 — 미국 Paper 화면에서 확인",
+              },
+            ];
+          }
+          document.getElementById("marketCardsBody").innerHTML = mcards
+            .map(function (c) {
+              return (
+                '<div style="border:1px solid #e2e8f0;border-radius:8px;padding:8px;margin-top:6px;background:#f8fafc">' +
+                "<b>" +
+                String(c.title || c.market || "market").replace(/</g, "&lt;") +
+                "</b><br/>status: " +
+                String(c.status ?? "—") +
+                " · session: " +
+                String(c.session_state ?? "—") +
+                '<br/><span class="muted">' +
+                String(c.message || "").replace(/</g, "&lt;") +
+                "</span></div>"
+              );
+            })
+            .join("");
+
           const pr = document.getElementById("paperRunningCard");
           const prm = document.getElementById("paperRunningMeta");
           const ps = summary.paper_trading || {};
@@ -725,14 +771,14 @@
       document.getElementById("brokerSettingsBtn").addEventListener("click", () => {
         window.location.href = "./broker-settings.html";
       });
-      document.getElementById("paperTradingBtn").addEventListener("click", () => {
+      document.getElementById("domesticPaperBtn").addEventListener("click", () => {
         window.location.href = "./paper-trading.html";
+      });
+      document.getElementById("usPaperBtn").addEventListener("click", () => {
+        window.location.href = "./us-paper-trading.html";
       });
       document.getElementById("performanceBtn").addEventListener("click", () => {
         window.location.href = "./performance.html";
-      });
-      document.getElementById("liveSettingsBtn").addEventListener("click", () => {
-        window.location.href = "./live-settings.html";
       });
       document.getElementById("dashboardBtn").addEventListener("click", () => {
         window.location.href = "./dashboard.html";

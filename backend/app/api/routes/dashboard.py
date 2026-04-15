@@ -35,6 +35,33 @@ _broker_probe_cache: tuple[float, dict[str, Any]] | None = None
 _open_orders_cache: tuple[float, list[dict[str, Any]], str | None] | None = None
 
 
+def _build_market_status_cards(
+    paper_trading_status: dict[str, Any],
+    psd: dict[str, Any] | None,
+    rt: dict[str, Any],
+) -> list[dict[str, Any]]:
+    tick = (psd or {}).get("tick_report") or {}
+    domestic_session = tick.get("krx_session_state") or rt.get("market_phase_now") or "closed"
+    sid = paper_trading_status.get("strategy_id")
+    dom_msg = f"strategy={sid}" if sid else "Paper 미실행"
+    return [
+        {
+            "market": "domestic",
+            "title": "국내 (KRX · Paper)",
+            "status": str(paper_trading_status.get("status") or "unknown"),
+            "session_state": str(domestic_session),
+            "message": dom_msg,
+        },
+        {
+            "market": "us",
+            "title": "미국 (Paper)",
+            "status": "unavailable",
+            "session_state": "closed",
+            "message": "US paper·검색은 백엔드 별도 구현 전입니다. 모바일은 market=us 호출만 분리합니다.",
+        },
+    ]
+
+
 def _try_current_user(authorization: str | None) -> Any:
     if not authorization or not str(authorization).strip():
         return None
@@ -559,6 +586,13 @@ def dashboard_summary(authorization: str | None = Header(default=None)) -> dict[
         "user_paper_banner": paper_usr_banner,
         "storage_diagnostics": storage_diag,
         "paper_session_dashboard": paper_session_dashboard,
+        "market_status_cards": _build_market_status_cards(paper_trading_status, psd, rt),
+        "active_paper_market": (
+            "domestic"
+            if paper_trading_status.get("user_session_active")
+            and str(paper_trading_status.get("status") or "") in ("running", "risk_off")
+            else None
+        ),
         "dashboard_scope": {
             "positions_open_orders_fills": "user_paper_session" if psd else "server_env",
             "paper_active": bool(psd),

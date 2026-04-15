@@ -1,8 +1,19 @@
-import React, { useCallback, useEffect, useState } from "react";
-import { Button, SafeAreaView, ScrollView, Text, TouchableOpacity, View } from "react-native";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { Picker } from "@react-native-picker/picker";
+import { Button, SafeAreaView, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 
 import { getAuthState } from "../store/authStore";
-import { STRATEGY_OPTIONS, type SessionState, type StrategyId, type TradingMarket } from "../types/trading";
+import {
+  type MarketId,
+  type SessionState,
+  type SymbolSearchMatch,
+  type SymbolSearchResponse,
+  type TradingLogItem,
+  type TradingPositionItem,
+  type USStrategyId,
+  US_PAPER_STRATEGIES_IMPLEMENTED,
+  US_STRATEGY_OPTIONS,
+} from "../types/trading";
 
 type Props = {
   backendUrl: string;
@@ -10,26 +21,42 @@ type Props = {
   onOpenPerformance?: () => void;
 };
 
-type LogItem = { ts?: string; level?: string; message?: string };
-
-type PositionItem = { symbol: string; quantity: number; average_price: number };
-
 function text(v: unknown, fallback = "—"): string {
   if (v == null || v === "") return fallback;
   return String(v);
 }
 
+const US_SESSION_LABELS: SessionState[] = ["premarket", "regular", "after_hours", "closed"];
+
+function normalizeUsSessionState(raw: unknown): SessionState {
+  const s = String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, "_");
+  if (US_SESSION_LABELS.includes(s as SessionState)) return s as SessionState;
+  if (s === "pre_open" || s === "preopen" || s === "pre_market") return "premarket";
+  if (s === "afterhours" || s === "after") return "after_hours";
+  return "closed";
+}
+
 export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPerformance }: Props) {
-  const market: TradingMarket = "us";
-  const [strategyId, setStrategyId] = useState<StrategyId>("swing_relaxed_v2");
+  const market: MarketId = "us";
+  const [strategyId, setStrategyId] = useState<USStrategyId>("us_swing_relaxed_v1");
   const [status, setStatus] = useState("stopped");
   const [sessionState, setSessionState] = useState<SessionState>("closed");
   const [strategyRunning, setStrategyRunning] = useState<string | null>(null);
   const [message, setMessage] = useState("");
-  const [positions, setPositions] = useState<PositionItem[]>([]);
-  const [logs, setLogs] = useState<LogItem[]>([]);
+  const [positions, setPositions] = useState<TradingPositionItem[]>([]);
+  const [logs, setLogs] = useState<TradingLogItem[]>([]);
   const [pnlText, setPnlText] = useState("");
   const [diagSummary, setDiagSummary] = useState("진단 정보 없음");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SymbolSearchMatch[]>([]);
+  const [searchBanner, setSearchBanner] = useState<string | null>(null);
+  const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
+  const [selectedSymbolDiag, setSelectedSymbolDiag] = useState("종목을 선택하면 quote/status 진단을 표시합니다.");
+  const lastDiagRef = useRef<Record<string, unknown>>({});
+  const lastDashRef = useRef<Record<string, unknown>>({});
 
   const authHeaders = useCallback((): HeadersInit => {
     const token = getAuthState().accessToken;
@@ -41,6 +68,40 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
   const paperApiUrl = useCallback(
     (path: string) => `${backendUrl}/api/paper-trading/${path}?market=${market}`,
     [backendUrl, market],
+  );
+
+  const updateSymbolDiagnostic = useCallback(
+    (symbol: string | null, diagData: Record<string, unknown>, dashData: Record<string, unknown>) => {
+      if (!symbol) {
+        setSelectedSymbolDiag("종목을 선택하면 quote/status 진단을 표시합니다.");
+        return;
+      }
+      const quoteItems = [
+        ...(Array.isArray(diagData?.quotes) ? (diagData.quotes as Record<string, unknown>[]) : []),
+        ...(Array.isArray(dashData?.quotes) ? (dashData.quotes as Record<string, unknown>[]) : []),
+      ];
+      const barItems = [
+        ...(Array.isArray(diagData?.bars) ? (diagData.bars as Record<string, unknown>[]) : []),
+        ...(Array.isArray(dashData?.bars) ? (dashData.bars as Record<string, unknown>[]) : []),
+      ];
+      const quote =
+        quoteItems.find((q) => String(q?.symbol || "").toUpperCase() === symbol.toUpperCase()) ??
+        (diagData?.latest_quote as Record<string, unknown> | undefined) ??
+        (dashData?.latest_quote as Record<string, unknown> | undefined);
+      const bar =
+        barItems.find((b) => String(b?.symbol || "").toUpperCase() === symbol.toUpperCase()) ??
+        (diagData?.latest_bar as Record<string, unknown> | undefined) ??
+        (dashData?.latest_bar as Record<string, unknown> | undefined);
+
+      const quoteText = quote
+        ? `quote: ${text(quote.symbol)} ${text(quote.price)}`
+        : `quote: ${symbol} 데이터 없음`;
+      const barText = bar
+        ? `bars: ${text(bar.time)} O:${text(bar.open)} H:${text(bar.high)} L:${text(bar.low)} C:${text(bar.close)}`
+        : "bars: 데이터 없음";
+      setSelectedSymbolDiag(`${quoteText}\n${barText}`);
+    },
+    [],
   );
 
   const refresh = useCallback(async () => {
@@ -55,51 +116,51 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
         fetch(paperApiUrl("dashboard-data"), { headers }),
       ]);
 
-      const statusData = await statusRes.json();
-      const posData = await posRes.json();
-      const logsData = await logsRes.json();
-      const pnlData = await pnlRes.json();
-      const diagData = await diagRes.json();
-      const dashData = await dashRes.json();
+      const statusData = (await statusRes.json()) as Record<string, unknown>;
+      const posData = (await posRes.json()) as Record<string, unknown>;
+      const logsData = (await logsRes.json()) as Record<string, unknown>;
+      const pnlData = (await pnlRes.json()) as Record<string, unknown>;
+      const diagData = (await diagRes.json()) as Record<string, unknown>;
+      const dashData = (await dashRes.json()) as Record<string, unknown>;
+
+      lastDiagRef.current = diagData;
+      lastDashRef.current = dashData;
 
       if (statusRes.ok) {
         setStatus(text(statusData.status, "stopped"));
         setStrategyRunning((statusData.strategy_id as string | null) ?? null);
       }
-      if (posRes.ok) setPositions((posData.items ?? []) as PositionItem[]);
-      if (logsRes.ok) setLogs((logsData.items ?? []) as LogItem[]);
+      if (posRes.ok) setPositions((posData.items ?? []) as TradingPositionItem[]);
+      if (logsRes.ok) setLogs((logsData.items ?? []) as TradingLogItem[]);
       if (pnlRes.ok) {
         setPnlText(
           `당일 ${Number(pnlData.today_return_pct ?? 0).toFixed(2)}% · 누적 ${Number(pnlData.cumulative_return_pct ?? 0).toFixed(2)}% · 포지션 ${Number(pnlData.position_count ?? 0)}개`,
         );
       }
 
-      const session =
-        (statusData?.session_state as SessionState | undefined) ??
-        (diagData?.session_state as SessionState | undefined) ??
-        (dashData?.session_state as SessionState | undefined) ??
-        "closed";
-      setSessionState(session);
+      const rawSession =
+        statusData.session_state ??
+        diagData.session_state ??
+        dashData.session_state ??
+        (statusData as { tick_report?: { krx_session_state?: string } }).tick_report?.krx_session_state;
+      setSessionState(normalizeUsSessionState(rawSession));
 
-      const quote =
-        diagData?.latest_quote ??
-        dashData?.latest_quote ??
-        dashData?.quote ??
-        (diagData?.quotes && Array.isArray(diagData.quotes) ? diagData.quotes[0] : null);
-      const bar =
-        diagData?.latest_bar ??
-        dashData?.latest_bar ??
-        dashData?.bar ??
-        (diagData?.bars && Array.isArray(diagData.bars) ? diagData.bars[0] : null);
-      const quoteText = quote ? `quote: ${text((quote as Record<string, unknown>).symbol)} ${text((quote as Record<string, unknown>).price)}` : "quote: 없음";
-      const barText = bar
-        ? `bars: ${text((bar as Record<string, unknown>).time)} O:${text((bar as Record<string, unknown>).open)} H:${text((bar as Record<string, unknown>).high)} L:${text((bar as Record<string, unknown>).low)} C:${text((bar as Record<string, unknown>).close)}`
+      const fallbackQuote = (diagData?.latest_quote ?? dashData?.latest_quote ?? dashData?.quote) as
+        | Record<string, unknown>
+        | undefined;
+      const fallbackBar = (diagData?.latest_bar ?? dashData?.latest_bar ?? dashData?.bar) as
+        | Record<string, unknown>
+        | undefined;
+      const quoteText = fallbackQuote ? `quote: ${text(fallbackQuote.symbol)} ${text(fallbackQuote.price)}` : "quote: 없음";
+      const barText = fallbackBar
+        ? `bars: ${text(fallbackBar.time)} O:${text(fallbackBar.open)} H:${text(fallbackBar.high)} L:${text(fallbackBar.low)} C:${text(fallbackBar.close)}`
         : "bars: 없음";
       setDiagSummary(`${quoteText}\n${barText}`);
+      updateSymbolDiagnostic(selectedSymbol, diagData, dashData);
     } catch {
       setMessage("network error");
     }
-  }, [authHeaders, paperApiUrl]);
+  }, [authHeaders, paperApiUrl, selectedSymbol, updateSymbolDiagnostic]);
 
   useEffect(() => {
     void refresh();
@@ -108,6 +169,7 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
   }, [refresh]);
 
   const start = async () => {
+    if (!US_PAPER_STRATEGIES_IMPLEMENTED) return;
     setMessage("");
     try {
       const res = await fetch(paperApiUrl("start"), {
@@ -145,44 +207,121 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
     }
   };
 
+  const searchUSSymbols = async () => {
+    const q = searchQuery.trim();
+    setSearchBanner(null);
+    if (!q) {
+      setSearchResults([]);
+      return;
+    }
+    try {
+      const headers = authHeaders();
+      const u = new URL(`${backendUrl}/api/stocks/search-by-symbol`);
+      u.searchParams.set("q", q);
+      u.searchParams.set("limit", "25");
+      u.searchParams.set("market", market);
+      const res = await fetch(u.toString(), { headers });
+      const data = (await res.json()) as SymbolSearchResponse;
+      if (!res.ok) {
+        setSearchBanner("미국 종목 검색 API 오류 — 서버 응답을 확인하세요.");
+        setSearchResults([]);
+        return;
+      }
+      if (data.market !== "us") {
+        setSearchBanner(
+          "미국 종목 검색 API 미구현 또는 레거시 서버입니다. 응답이 market=us 가 아니므로 국내 목록을 표시하지 않습니다.",
+        );
+        setSearchResults([]);
+        return;
+      }
+      if (data.us_search_supported !== true) {
+        setSearchBanner(
+          data.us_search_supported === false
+            ? "미국 종목 검색 API 미구현 — 국내 25종 fallback 을 사용하지 않습니다."
+            : "미국 종목 검색이 아직 활성화되지 않았습니다(us_search_supported≠true).",
+        );
+        setSearchResults([]);
+        return;
+      }
+      const matches = data.matches ?? [];
+      setSearchResults(matches);
+      if (matches.length === 0) {
+        setSearchBanner("검색 결과 없음.");
+      }
+    } catch {
+      setMessage("network error");
+    }
+  };
+
+  const onPickSearchResult = (symbol: string) => {
+    setSelectedSymbol(symbol);
+    updateSymbolDiagnostic(symbol, lastDiagRef.current, lastDashRef.current);
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#f8fafc" }}>
       <ScrollView style={{ padding: 12 }}>
         <Text style={{ fontSize: 20, fontWeight: "bold", marginBottom: 6 }}>US Trading (Paper)</Text>
         <Text style={{ color: "#64748b", fontSize: 12, marginBottom: 10 }}>
-          모든 호출은 market=us 로 전송됩니다.
+          모든 paper API 호출에 <Text style={{ fontWeight: "700" }}>market=us</Text> 쿼리를 붙입니다. (백엔드가 아직 분기하지
+          않을 수 있습니다.)
         </Text>
 
         <View style={{ backgroundColor: "#eff6ff", padding: 10, borderRadius: 8, marginBottom: 10 }}>
           <Text style={{ fontWeight: "700" }}>상태: {status}</Text>
           <Text style={{ fontSize: 13, marginTop: 4 }}>전략: {strategyRunning ?? "—"}</Text>
-          <Text style={{ fontSize: 13, marginTop: 4 }}>session_state: {sessionState}</Text>
+          <Text style={{ fontSize: 13, marginTop: 4 }}>
+            session_state (US 라벨): <Text style={{ fontWeight: "700" }}>{sessionState}</Text>
+          </Text>
+          <Text style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
+            premarket / regular / after_hours / closed — 백엔드가 US 전용 필드를 주지 않으면 closed 로 표시됩니다.
+          </Text>
         </View>
+
+        {!US_PAPER_STRATEGIES_IMPLEMENTED ? (
+          <View
+            style={{
+              backgroundColor: "#fff7ed",
+              borderColor: "#fdba74",
+              borderWidth: 1,
+              borderRadius: 8,
+              padding: 10,
+              marginBottom: 10,
+            }}
+          >
+            <Text style={{ fontWeight: "700", color: "#9a3412", marginBottom: 4 }}>미국 전략 백엔드 미구현</Text>
+            <Text style={{ fontSize: 13, color: "#9a3412" }}>
+              `us_swing_relaxed_v1`, `us_scalp_momentum_v1` 는 서버 `paper_strategy` 에 매핑되어 있지 않습니다. 시작 버튼은
+              비활성입니다.
+            </Text>
+          </View>
+        ) : null}
 
         <Text style={{ fontWeight: "600", marginBottom: 4 }}>미국 전략 선택</Text>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", marginBottom: 10 }}>
-          {STRATEGY_OPTIONS.map((option) => {
-            const selected = option === strategyId;
-            return (
-              <TouchableOpacity
-                key={option}
-                onPress={() => setStrategyId(option)}
-                style={{
-                  backgroundColor: selected ? "#1d4ed8" : "#e2e8f0",
-                  borderRadius: 999,
-                  paddingVertical: 6,
-                  paddingHorizontal: 10,
-                  marginRight: 6,
-                  marginBottom: 6,
-                }}
-              >
-                <Text style={{ color: selected ? "#ffffff" : "#0f172a", fontSize: 12, fontWeight: "600" }}>{option}</Text>
-              </TouchableOpacity>
-            );
-          })}
+        <View
+          style={{
+            borderWidth: 1,
+            borderColor: "#cbd5e1",
+            borderRadius: 8,
+            marginBottom: 10,
+            backgroundColor: "#fff",
+            overflow: "hidden",
+          }}
+        >
+          <Picker
+            enabled={US_PAPER_STRATEGIES_IMPLEMENTED}
+            selectedValue={strategyId}
+            onValueChange={(v) => setStrategyId(v as USStrategyId)}
+            mode="dropdown"
+            style={{ width: "100%" }}
+          >
+            {US_STRATEGY_OPTIONS.map((id) => (
+              <Picker.Item key={id} label={id} value={id} />
+            ))}
+          </Picker>
         </View>
 
-        <Button title="US 자동매매 시작" onPress={start} />
+        <Button title="US 자동매매 시작" onPress={start} disabled={!US_PAPER_STRATEGIES_IMPLEMENTED} />
         <View style={{ height: 8 }} />
         <Button title="US 자동매매 중지" onPress={stop} />
         <View style={{ height: 8 }} />
@@ -193,7 +332,51 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
           </Text>
         ) : null}
 
-        <Text style={{ marginTop: 16, fontWeight: "bold" }}>포지션</Text>
+        <Text style={{ marginTop: 16, fontWeight: "bold" }}>미국 종목 검색</Text>
+        <View style={{ marginTop: 6, marginBottom: 10 }}>
+          <TextInput
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder="예: NVDA, AAPL"
+            autoCapitalize="characters"
+            style={{ borderWidth: 1, borderColor: "#cbd5e1", padding: 8, borderRadius: 8, backgroundColor: "#fff" }}
+          />
+          <View style={{ height: 8 }} />
+          <Button title="미국 종목 검색" onPress={searchUSSymbols} />
+          {searchBanner ? (
+            <Text style={{ fontSize: 12, color: "#b45309", marginTop: 8, lineHeight: 18 }}>{searchBanner}</Text>
+          ) : (
+            <Text style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>
+              `/api/stocks/search-by-symbol?market=us` — 미구현 시 빈 결과만 표시합니다.
+            </Text>
+          )}
+        </View>
+        {searchResults.length === 0 && !searchBanner ? (
+          <Text style={{ fontSize: 12, color: "#94a3b8" }}>검색 전입니다.</Text>
+        ) : null}
+        {searchResults.slice(0, 20).map((item, idx) => {
+          const symbol = String(item.symbol || "");
+          const selected = symbol.toUpperCase() === String(selectedSymbol || "").toUpperCase();
+          return (
+            <TouchableOpacity
+              key={`${symbol}-${idx}`}
+              onPress={() => onPickSearchResult(symbol)}
+              style={{
+                borderWidth: 1,
+                borderColor: selected ? "#1d4ed8" : "#cbd5e1",
+                borderRadius: 8,
+                padding: 8,
+                marginTop: 6,
+                backgroundColor: selected ? "#eff6ff" : "#fff",
+              }}
+            >
+              <Text style={{ fontWeight: "700", color: "#0f172a" }}>{symbol || "-"}</Text>
+              <Text style={{ fontSize: 12, color: "#64748b" }}>{item.name_en ?? item.name_kr ?? "—"}</Text>
+            </TouchableOpacity>
+          );
+        })}
+
+        <Text style={{ marginTop: 16, fontWeight: "bold" }}>포지션 (market=us)</Text>
         {positions.length === 0 ? (
           <Text style={{ color: "#94a3b8", marginTop: 4 }}>없음</Text>
         ) : (
@@ -209,6 +392,9 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
 
         <Text style={{ marginTop: 14, fontWeight: "bold" }}>Quote / Bars 진단 요약</Text>
         <Text style={{ marginTop: 4, color: "#334155", lineHeight: 18 }}>{diagSummary}</Text>
+
+        <Text style={{ marginTop: 14, fontWeight: "bold" }}>선택 종목 진단</Text>
+        <Text style={{ marginTop: 4, color: "#334155", lineHeight: 18 }}>{selectedSymbolDiag}</Text>
 
         <Text style={{ marginTop: 14, fontWeight: "bold" }}>최근 로그</Text>
         {logs.slice(0, 25).map((l, idx) => (

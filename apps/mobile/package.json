@@ -15,6 +15,7 @@
     "build:ios:prod": "npx eas build --platform ios --profile production"
   },
   "dependencies": {
+    "@react-native-picker/picker": "2.7.5",
     "@react-native-async-storage/async-storage": "1.23.1",
     "expo": "^51.0.0",
     "react": "^18.2.0",

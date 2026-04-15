@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from app.clients.kis_client import KISClientError, sanitize_kis_params_for_log
@@ -104,6 +104,10 @@ class StartPaperTradingRequest(BaseModel):
         default=True,
         description="true 이면 paper start 시 전역 runtime engine도 함께 start",
     )
+    market: str | None = Field(
+        default=None,
+        description="모바일에서 domestic | us 로 명시(예약). 현재 세션 엔진은 단일 domestic paper 만 사용.",
+    )
 
 
 @router.post("/start")
@@ -195,7 +199,13 @@ def start_paper_trading(
 
 
 @router.post("/stop")
-def stop_paper_trading(authorization: str | None = Header(default=None)) -> dict[str, object]:
+def stop_paper_trading(
+    authorization: str | None = Header(default=None),
+    market: str | None = Query(
+        default=None,
+        description="모바일에서 domestic | us 로 명시(예약). 현재는 쿼리를 읽기만 하고 동작은 동일.",
+    ),
+) -> dict[str, object]:
     user = _paper_user(authorization)
     ctrl = get_paper_session_controller()
     try:
@@ -212,7 +222,10 @@ def stop_paper_trading(authorization: str | None = Header(default=None)) -> dict
 
 
 @router.post("/risk-reset")
-def paper_trading_risk_reset(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+def paper_trading_risk_reset(
+    authorization: str | None = Header(default=None),
+    market: str | None = Query(default=None, description="예약: domestic | us"),
+) -> dict[str, Any]:
     """paper 세션 risk_off 해제(시작한 사용자만)."""
     user = _paper_user(authorization)
     ctrl = get_paper_session_controller()
@@ -228,7 +241,9 @@ def paper_trading_risk_reset(authorization: str | None = Header(default=None)) -
 
 
 @router.get("/status")
-def get_paper_trading_status() -> dict[str, object]:
+def get_paper_trading_status(
+    market: str | None = Query(default=None, description="예약: domestic | us"),
+) -> dict[str, object]:
     return {
         **get_paper_session_controller().status_payload(),
         "runtime_engine": get_runtime_engine().status(),
@@ -242,31 +257,42 @@ def paper_engine_status() -> dict[str, Any]:
 
 
 @router.get("/positions")
-def get_paper_positions() -> dict[str, object]:
+def get_paper_positions(
+    market: str | None = Query(default=None, description="예약: domestic | us"),
+) -> dict[str, object]:
     items = get_paper_session_controller().get_positions()
     return {"items": items}
 
 
 @router.get("/pnl")
-def get_paper_pnl() -> dict[str, object]:
+def get_paper_pnl(
+    market: str | None = Query(default=None, description="예약: domestic | us"),
+) -> dict[str, object]:
     return get_paper_session_controller().pnl_from_last_report()
 
 
 @router.get("/diagnostics")
-def get_paper_diagnostics() -> dict[str, object]:
+def get_paper_diagnostics(
+    market: str | None = Query(default=None, description="예약: domestic | us"),
+) -> dict[str, object]:
     """Paper 세션 마지막 KIS 실패 맥락·토큰 출처(민감값 제외)."""
     return get_paper_session_controller().diagnostics_payload()
 
 
 @router.get("/dashboard-data")
-def get_paper_dashboard_data(authorization: str | None = Header(default=None)) -> dict[str, object]:
+def get_paper_dashboard_data(
+    authorization: str | None = Header(default=None),
+    market: str | None = Query(default=None, description="예약: domestic | us"),
+) -> dict[str, object]:
     """사용자 Paper 계정 기준 포지션·미체결·체결·틱 리포트(대시보드와 동일 소스)."""
     user = _paper_user(authorization)
     return get_paper_session_controller().get_dashboard_payload(user.id)
 
 
 @router.get("/logs")
-def get_paper_logs() -> dict[str, object]:
+def get_paper_logs(
+    market: str | None = Query(default=None, description="예약: domestic | us"),
+) -> dict[str, object]:
     ctrl = get_paper_session_controller()
     logs = ctrl.get_logs()
     if not logs:

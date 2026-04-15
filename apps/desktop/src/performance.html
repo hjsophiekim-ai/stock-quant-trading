@@ -21,9 +21,9 @@
       <aside class="sidebar">
         <h3>Auto Trading</h3>
         <button id="dashboardBtn">Dashboard</button>
+        <button id="domesticPaperBtn">국내 Paper</button>
+        <button id="usPaperBtn">미국 Paper</button>
         <button id="performanceBtn">Performance</button>
-        <button id="paperTradingBtn">Paper Trading</button>
-        <button id="liveSettingsBtn">Live Settings</button>
         <button id="brokerSettingsBtn">Broker Settings</button>
       </aside>
       <main class="main">
@@ -139,8 +139,8 @@
       document.getElementById("applyFilterBtn").addEventListener("click", loadData);
       document.getElementById("dashboardBtn").addEventListener("click", () => (window.location.href = "./dashboard.html"));
       document.getElementById("performanceBtn").addEventListener("click", () => (window.location.href = "./performance.html"));
-      document.getElementById("paperTradingBtn").addEventListener("click", () => (window.location.href = "./paper-trading.html"));
-      document.getElementById("liveSettingsBtn").addEventListener("click", () => (window.location.href = "./live-settings.html"));
+      document.getElementById("domesticPaperBtn").addEventListener("click", () => (window.location.href = "./paper-trading.html"));
+      document.getElementById("usPaperBtn").addEventListener("click", () => (window.location.href = "./us-paper-trading.html"));
       document.getElementById("brokerSettingsBtn").addEventListener("click", () => (window.location.href = "./broker-settings.html"));
 
       loadData();

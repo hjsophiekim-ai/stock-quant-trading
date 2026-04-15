@@ -1,4 +1,4 @@
-import type { MarketStatusCard } from "./trading";
+import type { MarketId, MarketStatusCard } from "./trading";
 
 export type DashboardSystemStatus = "running" | "stopped" | "risk-off";
 
@@ -37,6 +37,8 @@ export interface MobileDashboardSummary {
     user_session_active?: boolean;
   };
   market_status_cards?: MarketStatusCard[];
+  /** 서버가 알려 주는 현재 Paper 시장 (US 분리 전이면 domestic 또는 null) */
+  active_paper_market?: MarketId | string | null;
   screener?: Record<string, unknown>;
 }
 

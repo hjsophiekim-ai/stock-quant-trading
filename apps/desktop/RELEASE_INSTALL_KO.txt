@@ -1,0 +1,23 @@
+Stock Quant Desktop — 설치 번들 안내
+=====================================
+
+이 ZIP 안에는 `electron-builder` 가 생성한 Windows 산출물(NSIS 설치 프로그램, portable zip 등)이 `dist` 폴더 구조 그대로 포함되어 있습니다.
+
+설치 방법
+---------
+1. ZIP 압축을 풉니다.
+2. `dist` 폴더 안의 `Stock Quant Desktop-Setup-<버전>.exe` (또는 유사한 이름의 NSIS 설치 파일)를 실행합니다.
+3. 설치가 끝나면 바로가기에서 앱을 실행합니다.
+
+백엔드 URL
+----------
+`release:zip` 빌드 시 `npm run build:win:local` 과 동일하게 **BACKEND_URL** 이 실행 파일에 포함됩니다.
+기본(로컬 번들): `http://127.0.0.1:8000`  
+원격 서버용으로 다시 만들려면 `BACKEND_URL` 과 `APP_ENV=production` 을 설정한 뒤 `npm run build:win` 을 사용하세요.
+
+화면 구성 (국내 / 미국)
+-----------------------
+- **국내 Paper**: `paper-trading.html` — API에 `market=domestic` 쿼리를 붙입니다.
+- **미국 Paper**: `us-paper-trading.html` — API에 `market=us` 쿼리를 붙입니다. (서버 US 전략·검색 미구현 시 안내만 표시)
+
+Live Settings 화면은 제거되었습니다. Live 관련 API는 백엔드·운영 도구에서 관리하세요.

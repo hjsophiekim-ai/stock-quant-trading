@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Paper Trading</title>
+    <title>국내 Paper Trading (KIS 모의)</title>
     <style>
       body {
         font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -147,18 +147,18 @@
       <aside class="sidebar">
         <h3>Auto Trading</h3>
         <button type="button" id="dashboardBtn">Dashboard</button>
+        <button type="button" id="domesticPaperBtn">국내 Paper</button>
+        <button type="button" id="usPaperBtn">미국 Paper</button>
         <button type="button" id="performanceBtn">Performance</button>
         <button type="button" id="brokerSettingsBtn">Broker Settings</button>
-        <button type="button" id="paperTradingBtn">Paper Trading</button>
-        <button type="button" id="liveSettingsBtn">Live Settings</button>
         <button type="button" id="logoutBtn">Logout</button>
       </aside>
       <main class="main">
-        <h2>Paper Trading (KIS 모의)</h2>
+        <h2>국내 Paper Trading (KIS 모의) · market=domestic</h2>
         <p class="row" style="color: #64748b; font-size: 0.88rem; line-height: 1.45">
-          앱에 저장한 <b>paper</b> 브로커로만 동작합니다. live 주문 경로와 혼합되지 않습니다. 전역
-          <b>/api/runtime-engine</b> 과는 별도 세션입니다. 시작은 <b>trading_mode=paper</b> 및 연결 테스트 성공 후에만
-          허용됩니다.
+          앱에 저장한 <b>paper</b> 브로커로만 동작합니다. 이 화면의 API 호출에는 모두 <b>market=domestic</b> 이 붙습니다. live 주문
+          경로와 혼합되지 않습니다. 전역 <b>/api/runtime-engine</b> 과는 별도 세션입니다. 시작은 <b>trading_mode=paper</b> 및 연결
+          테스트 성공 후에만 허용됩니다.
         </p>
         <div id="brokerGate" class="broker-gate" style="display: none"></div>
         <div class="panel" style="background: #eff6ff; border-color: #bfdbfe">
@@ -297,6 +297,10 @@
     <script>
       (async function () {
         const backendUrl = effectiveBackendUrl();
+        const MARKET = "domestic";
+        function paperApiUrl(segment) {
+          return backendUrl + "/api/paper-trading/" + segment + "?market=" + encodeURIComponent(MARKET);
+        }
         const pre = await ensureValidBackendSession(backendUrl);
         if (!pre.ok) {
           window.location.href = "./login.html";
@@ -502,11 +506,11 @@
           await checkBrokerGate();
           try {
             const [statusRes, posRes, pnlRes, logsRes, dashRes] = await Promise.all([
-              fetch(backendUrl + "/api/paper-trading/status"),
-              fetch(backendUrl + "/api/paper-trading/positions"),
-              fetch(backendUrl + "/api/paper-trading/pnl"),
-              fetch(backendUrl + "/api/paper-trading/logs"),
-              authFetch(backendUrl + "/api/paper-trading/dashboard-data", { headers: await authHeaders() }),
+              fetch(paperApiUrl("status")),
+              fetch(paperApiUrl("positions")),
+              fetch(paperApiUrl("pnl")),
+              fetch(paperApiUrl("logs")),
+              authFetch(paperApiUrl("dashboard-data"), { headers: await authHeaders() }),
             ]);
             const statusData = await statusRes.json();
             const posData = await posRes.json();
@@ -972,7 +976,7 @@
         }, 15000);
 
         riskResetBtn.addEventListener("click", async function () {
-          const res = await authFetch(backendUrl + "/api/paper-trading/risk-reset", {
+          const res = await authFetch(paperApiUrl("risk-reset"), {
             method: "POST",
             headers: await authHeaders(),
           });
@@ -993,10 +997,10 @@
         document.getElementById("startBtn").addEventListener("click", async function () {
           if (startBtn.disabled) return;
           const strategyId = document.getElementById("strategyId").value;
-          const res = await authFetch(backendUrl + "/api/paper-trading/start", {
+          const res = await authFetch(paperApiUrl("start"), {
             method: "POST",
             headers: await authHeaders({ "Content-Type": "application/json" }),
-            body: JSON.stringify({ strategy_id: strategyId }),
+            body: JSON.stringify({ strategy_id: strategyId, market: MARKET }),
           });
           const data = await res.json().catch(function () {
             return {};
@@ -1016,7 +1020,7 @@
         });
 
         document.getElementById("stopBtn").addEventListener("click", async function () {
-          const res = await authFetch(backendUrl + "/api/paper-trading/stop", { method: "POST", headers: await authHeaders() });
+          const res = await authFetch(paperApiUrl("stop"), { method: "POST", headers: await authHeaders() });
           const data = await res.json().catch(function () {
             return {};
           });
@@ -1042,11 +1046,11 @@
         document.getElementById("brokerSettingsBtn").addEventListener("click", function () {
           window.location.href = "./broker-settings.html";
         });
-        document.getElementById("paperTradingBtn").addEventListener("click", function () {
+        document.getElementById("domesticPaperBtn").addEventListener("click", function () {
           window.location.href = "./paper-trading.html";
         });
-        document.getElementById("liveSettingsBtn").addEventListener("click", function () {
-          window.location.href = "./live-settings.html";
+        document.getElementById("usPaperBtn").addEventListener("click", function () {
+          window.location.href = "./us-paper-trading.html";
         });
         document.getElementById("logoutBtn").addEventListener("click", async function () {
           await clearDesktopSession();

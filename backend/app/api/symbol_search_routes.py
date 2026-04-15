@@ -47,11 +47,31 @@ def search_stocks_by_name(
 def search_stocks_by_symbol(
     q: str = Query("", description="6자리 숫자 종목코드 또는 일부 (예: 005930)"),
     limit: int = Query(40, ge=1, le=200),
+    market: str = Query(
+        "domestic",
+        description="domestic=앱 내 국내 목록, us=미국(별도 구현 전까지 빈 결과)",
+    ),
 ) -> dict[str, object]:
-    """**2) 심볼(종목코드) 검색** — 숫자 코드 접두·부분 일치."""
+    """**2) 심볼(종목코드) 검색** — 숫자 코드 접두·부분 일치 (국내)."""
+    m = (market or "domestic").strip().lower()
+    if m in ("us", "usa", "nyse", "nasdaq", "us_equity", "us_equities"):
+        return {
+            "api_role": "symbol_search",
+            "market": "us",
+            "us_search_supported": False,
+            "title_ko": "미국 심볼 검색",
+            "kis_official_search": False,
+            "description_ko": "미국 종목 검색 API 미구현 — 국내 `data/domestic_liquid_symbols.json` 카탈로그는 사용하지 않습니다.",
+            "catalog_entry_count": 0,
+            "query": q.strip(),
+            "match_count": 0,
+            "matches": [],
+        }
     matches = search_by_symbol_code(query=q, limit=limit)
     return {
         "api_role": "symbol_search",
+        "market": "domestic",
+        "us_search_supported": False,
         "title_ko": "심볼(종목코드) 검색 (앱 내 목록)",
         "kis_official_search": False,
         "description_ko": _BASE_KO + " 코드를 알 때·접두로 찾을 때 사용하세요.",

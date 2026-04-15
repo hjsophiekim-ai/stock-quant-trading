@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>미국 Paper Trading</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        margin: 0;
+        background: #f8fafc;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 220px 1fr;
+        min-height: 100vh;
+      }
+      .sidebar {
+        background: #0f172a;
+        color: #e2e8f0;
+        padding: 16px;
+      }
+      .sidebar button {
+        width: 100%;
+        margin-bottom: 8px;
+        padding: 8px;
+        cursor: pointer;
+      }
+      .main {
+        padding: 16px;
+      }
+      .panel {
+        background: white;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        padding: 10px;
+        margin-bottom: 10px;
+      }
+      .warn {
+        background: #fff7ed;
+        border: 1px solid #fdba74;
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-bottom: 12px;
+        color: #9a3412;
+        font-size: 0.9rem;
+        line-height: 1.45;
+      }
+      .muted {
+        color: #64748b;
+        font-size: 0.85rem;
+      }
+      input[type="text"] {
+        width: min(420px, 100%);
+        padding: 8px 10px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+      }
+      #startBtn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar">
+        <h3>Auto Trading</h3>
+        <button type="button" id="dashboardBtn">Dashboard</button>
+        <button type="button" id="domesticPaperBtn">국내 Paper</button>
+        <button type="button" id="usPaperBtn">미국 Paper</button>
+        <button type="button" id="performanceBtn">Performance</button>
+        <button type="button" id="brokerSettingsBtn">Broker Settings</button>
+        <button type="button" id="logoutBtn">Logout</button>
+      </aside>
+      <main class="main">
+        <h2>미국 Paper Trading · market=us</h2>
+        <p class="muted" style="line-height: 1.45">
+          이 화면의 Paper API 호출에는 <b>market=us</b> 쿼리를 붙입니다. 백엔드가 아직 US 세션을 분리하지 않으면 국내 Paper와
+          동일 스냅샷이 보일 수 있습니다. 미국 전용 전략·검색은 서버 구현 상태를 확인하세요.
+        </p>
+
+        <div class="warn">
+          <b>미국 전략 백엔드 미구현</b><br />
+          <code>us_swing_relaxed_v1</code>, <code>us_scalp_momentum_v1</code> 는 서버 <code>paper_strategy</code> 에 없습니다.
+          아래 「시작」은 비활성입니다. 구현 후 상수 <code>US_PAPER_IMPLEMENTED</code> 를 true 로 바꾸세요.
+        </div>
+
+        <div class="panel" style="background: #eff6ff; border-color: #bfdbfe">
+          <div><b>상태:</b> <span id="statusText">—</span></div>
+          <div style="margin-top: 6px"><b>전략:</b> <span id="strategyRunning">—</span></div>
+          <div style="margin-top: 6px"><b>session_state (US 라벨):</b> <span id="sessionState">closed</span></div>
+          <p class="muted" style="margin: 8px 0 0">premarket / regular / after_hours / closed — 필드 없으면 closed 로 표시</p>
+        </div>
+
+        <div class="panel">
+          <label><b>미국 전략</b></label><br />
+          <select id="strategyId">
+            <option value="us_swing_relaxed_v1">us_swing_relaxed_v1</option>
+            <option value="us_scalp_momentum_v1">us_scalp_momentum_v1</option>
+          </select>
+          <button type="button" id="startBtn" disabled>US Paper 시작</button>
+          <button type="button" id="stopBtn">US Paper 중지</button>
+          <button type="button" id="refreshBtn">새로고침</button>
+          <p id="message" style="white-space: pre-line; margin-top: 8px; color: #334155"></p>
+        </div>
+
+        <div class="panel">
+          <h3 style="margin-top: 0">미국 종목 검색</h3>
+          <input type="text" id="searchQ" placeholder="예: NVDA" maxlength="32" />
+          <button type="button" id="searchBtn" style="margin-left: 8px">검색</button>
+          <p id="searchBanner" class="muted" style="margin-top: 8px"></p>
+          <ul id="searchList" style="padding-left: 1.1rem"></ul>
+        </div>
+
+        <div class="panel">
+          <h3 style="margin-top: 0">손익 요약</h3>
+          <p id="pnlSummary">—</p>
+        </div>
+        <div class="panel">
+          <h3 style="margin-top: 0">Positions</h3>
+          <ul id="positionsList"></ul>
+        </div>
+        <div class="panel">
+          <h3 style="margin-top: 0">Recent logs</h3>
+          <ul id="logsList"></ul>
+        </div>
+      </main>
+    </div>
+
+    <script src="./runtime-config.js"></script>
+    <script src="./auth-session.js"></script>
+    <script>
+      (async function () {
+        var US_PAPER_IMPLEMENTED = false;
+        var MARKET = "us";
+        var backendUrl = effectiveBackendUrl();
+        function paperApiUrl(segment) {
+          return backendUrl + "/api/paper-trading/" + segment + "?market=" + encodeURIComponent(MARKET);
+        }
+
+        var pre = await ensureValidBackendSession(backendUrl);
+        if (!pre.ok) {
+          window.location.href = "./login.html";
+          return;
+        }
+
+        async function authHeaders(extra) {
+          var s = await resolveDesktopSession();
+          var t = s && s.accessToken ? s.accessToken : "";
+          return { Authorization: "Bearer " + t, ...(extra || {}) };
+        }
+
+        async function authFetch(url, options) {
+          var opt = options || {};
+          var hdrIn = opt.headers || {};
+          var h0 = await authHeaders(hdrIn);
+          var res = await fetch(url, Object.assign({}, opt, { headers: h0 }));
+          if (res.status !== 401) return res;
+          var chk = await ensureValidBackendSession(backendUrl);
+          if (!chk.ok) {
+            await clearDesktopSession();
+            window.location.href = "./login.html";
+            throw new Error("session_expired");
+          }
+          var h1 = await authHeaders(hdrIn);
+          res = await fetch(url, Object.assign({}, opt, { headers: h1 }));
+          if (res.status === 401) {
+            await clearDesktopSession();
+            window.location.href = "./login.html";
+            throw new Error("session_expired");
+          }
+          return res;
+        }
+
+        function normalizeSession(raw) {
+          var s = String(raw || "")
+            .toLowerCase()
+            .replace(/-/g, "_");
+          if (["premarket", "regular", "after_hours", "closed"].indexOf(s) >= 0) return s;
+          if (s === "pre_open" || s === "preopen") return "premarket";
+          if (s === "afterhours") return "after_hours";
+          return "closed";
+        }
+
+        async function refresh() {
+          try {
+            var h = await authHeaders();
+            var res = await Promise.all([
+              fetch(paperApiUrl("status")),
+              fetch(paperApiUrl("positions")),
+              fetch(paperApiUrl("pnl")),
+              fetch(paperApiUrl("logs")),
+              authFetch(paperApiUrl("dashboard-data"), { headers: h }),
+            ]);
+            var statusData = await res[0].json();
+            var posData = await res[1].json();
+            var pnlData = await res[2].json();
+            var logsData = await res[3].json();
+            var dashData = await res[4].json().catch(function () {
+              return {};
+            });
+
+            if (res[0].ok) {
+              document.getElementById("statusText").innerText = statusData.status || "stopped";
+              document.getElementById("strategyRunning").innerText = statusData.strategy_id || "—";
+              var rawS =
+                statusData.session_state ||
+                (dashData && dashData.tick_report && dashData.tick_report.krx_session_state) ||
+                "";
+              document.getElementById("sessionState").innerText = normalizeSession(rawS);
+            }
+            if (res[2].ok) {
+              var tc = Number(pnlData.today_return_pct != null ? pnlData.today_return_pct : 0);
+              var cc = Number(pnlData.cumulative_return_pct != null ? pnlData.cumulative_return_pct : 0);
+              var pc = Number(pnlData.position_count != null ? pnlData.position_count : 0);
+              document.getElementById("pnlSummary").innerText =
+                "당일 " + tc.toFixed(2) + "% · 누적 " + cc.toFixed(2) + "% · 포지션 " + pc + "개";
+            }
+            var pl = document.getElementById("positionsList");
+            pl.innerHTML = "";
+            (posData.items || []).forEach(function (p) {
+              var li = document.createElement("li");
+              li.innerText = p.symbol + " qty=" + p.quantity + " avg=" + p.average_price;
+              pl.appendChild(li);
+            });
+            var ll = document.getElementById("logsList");
+            ll.innerHTML = "";
+            (logsData.items || []).slice(0, 30).forEach(function (l) {
+              var li = document.createElement("li");
+              li.innerText = (l.level || "") + ": " + (l.message || "");
+              ll.appendChild(li);
+            });
+          } catch (e) {
+            document.getElementById("message").innerText = "network error";
+          }
+        }
+
+        document.getElementById("refreshBtn").addEventListener("click", refresh);
+
+        document.getElementById("startBtn").addEventListener("click", async function () {
+          if (!US_PAPER_IMPLEMENTED) return;
+          var strategyId = document.getElementById("strategyId").value;
+          var r = await authFetch(paperApiUrl("start"), {
+            method: "POST",
+            headers: await authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify({ strategy_id: strategyId, market: MARKET }),
+          });
+          var data = await r.json().catch(function () {
+            return {};
+          });
+          document.getElementById("message").innerText = r.ok ? "시작 요청 완료" : JSON.stringify(data.detail || data);
+          refresh();
+        });
+
+        document.getElementById("stopBtn").addEventListener("click", async function () {
+          var r = await authFetch(paperApiUrl("stop"), { method: "POST", headers: await authHeaders() });
+          var data = await r.json().catch(function () {
+            return {};
+          });
+          document.getElementById("message").innerText = r.ok ? "중지 완료" : JSON.stringify(data.detail || data);
+          refresh();
+        });
+
+        document.getElementById("searchBtn").addEventListener("click", async function () {
+          var q = document.getElementById("searchQ").value.trim();
+          var banner = document.getElementById("searchBanner");
+          var list = document.getElementById("searchList");
+          list.innerHTML = "";
+          if (!q) {
+            banner.innerText = "검색어를 입력하세요.";
+            return;
+          }
+          try {
+            var u =
+              backendUrl +
+              "/api/stocks/search-by-symbol?q=" +
+              encodeURIComponent(q) +
+              "&limit=25&market=" +
+              encodeURIComponent(MARKET);
+            var r = await fetch(u, { headers: await authHeaders() });
+            var data = await r.json();
+            if (!r.ok) {
+              banner.innerText = "검색 API 오류";
+              return;
+            }
+            if (data.market !== "us") {
+              banner.innerText = "응답이 market=us 가 아닙니다. 국내 목록을 표시하지 않습니다.";
+              return;
+            }
+            if (data.us_search_supported !== true) {
+              banner.innerText = "미국 종목 검색 API 미구현 (us_search_supported≠true). 국내 fallback 미사용.";
+              return;
+            }
+            banner.innerText = "검색 결과 " + (data.matches || []).length + "건";
+            (data.matches || []).forEach(function (m) {
+              var li = document.createElement("li");
+              li.innerText = (m.symbol || "") + " — " + (m.name_en || m.name_kr || "");
+              list.appendChild(li);
+            });
+          } catch (e) {
+            banner.innerText = "network error";
+          }
+        });
+
+        document.getElementById("dashboardBtn").addEventListener("click", function () {
+          window.location.href = "./dashboard.html";
+        });
+        document.getElementById("domesticPaperBtn").addEventListener("click", function () {
+          window.location.href = "./paper-trading.html";
+        });
+        document.getElementById("usPaperBtn").addEventListener("click", function () {
+          window.location.href = "./us-paper-trading.html";
+        });
+        document.getElementById("performanceBtn").addEventListener("click", function () {
+          window.location.href = "./performance.html";
+        });
+        document.getElementById("brokerSettingsBtn").addEventListener("click", function () {
+          window.location.href = "./broker-settings.html";
+        });
+        document.getElementById("logoutBtn").addEventListener("click", async function () {
+          await clearDesktopSession();
+          window.location.href = "./login.html";
+        });
+
+        await refresh();
+        setInterval(refresh, 15000);
+      })();
+    </script>
+  </body>
+</html>

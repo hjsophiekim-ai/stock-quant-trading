@@ -158,14 +158,14 @@ export default function DashboardScreen({ backendUrl, onOpenBrokerSettings }: Pr
       session_state: summary?.paper_trading?.krx_session_state ?? summary?.runtime_engine?.market_phase_now ?? "closed",
       message: summary?.paper_trading?.strategy_id
         ? `strategy=${summary.paper_trading.strategy_id}`
-        : "세션 정보 없음",
+        : "Domestic 상태 필드 미지원 또는 세션 정보 없음",
     },
     {
       market: "us",
       title: "US",
       status: "unknown",
       session_state: "closed",
-      message: "US 상태 카드를 아직 제공하지 않으면 US 화면에서 직접 확인하세요.",
+      message: "US 상태 필드 미지원 — 미국 화면에서 session/상태를 직접 확인하세요.",
     },
   ];
   const marketCards = marketCardsFromApi.length > 0 ? marketCardsFromApi : fallbackMarketCards;
@@ -277,6 +277,14 @@ export default function DashboardScreen({ backendUrl, onOpenBrokerSettings }: Pr
 
             <View style={cardStyle}>
               <Text style={{ fontWeight: "800", marginBottom: 6 }}>시장 상태 (Domestic / US)</Text>
+              <Text style={{ fontSize: 12, color: "#334155", marginBottom: 8 }}>
+                현재 실행 중 Paper market (서버):{" "}
+                <Text style={{ fontWeight: "800" }}>
+                  {summary?.active_paper_market != null && summary.active_paper_market !== ""
+                    ? String(summary.active_paper_market)
+                    : "없음 (세션 미가동)"}
+                </Text>
+              </Text>
               {marketCards.map((card, idx) => (
                 <View
                   key={`${card.market ?? "market"}-${idx}`}

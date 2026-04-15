@@ -1,15 +1,13 @@
 import React, { useCallback, useEffect, useState } from "react";
-import {
-  Button,
-  SafeAreaView,
-  ScrollView,
-  Text,
-  TouchableOpacity,
-  View,
-} from "react-native";
+import { Picker } from "@react-native-picker/picker";
+import { Button, SafeAreaView, ScrollView, Text, TouchableOpacity, View } from "react-native";
 
 import { getAuthState } from "../store/authStore";
-import { STRATEGY_OPTIONS, type StrategyId, type TradingMarket } from "../types/trading";
+import {
+  type DomesticStrategyId,
+  type MarketId,
+  DOMESTIC_STRATEGY_OPTIONS,
+} from "../types/trading";
 
 type Props = {
   backendUrl: string;
@@ -92,8 +90,8 @@ async function appendKisBalanceDebugLines(
 }
 
 export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpenPerformance }: Props) {
-  const market: TradingMarket = "domestic";
-  const [strategyId, setStrategyId] = useState<StrategyId>("swing_v1");
+  const market: MarketId = "domestic";
+  const [strategyId, setStrategyId] = useState<DomesticStrategyId>("swing_v1");
   const [status, setStatus] = useState("stopped");
   const [strategyRunning, setStrategyRunning] = useState<string | null>(null);
   const [failureStreak, setFailureStreak] = useState(0);
@@ -306,30 +304,30 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
           </View>
         ) : null}
 
-        <Text style={{ fontWeight: "600", marginBottom: 4 }}>전략 ID (Domestic)</Text>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", marginBottom: 10 }}>
-          {STRATEGY_OPTIONS.map((option) => {
-            const selected = option === strategyId;
-            return (
-              <TouchableOpacity
-                key={option}
-                onPress={() => setStrategyId(option)}
-                style={{
-                  backgroundColor: selected ? "#1d4ed8" : "#e2e8f0",
-                  borderRadius: 999,
-                  paddingVertical: 6,
-                  paddingHorizontal: 10,
-                  marginRight: 6,
-                  marginBottom: 6,
-                }}
-              >
-                <Text style={{ color: selected ? "#ffffff" : "#0f172a", fontSize: 12, fontWeight: "600" }}>{option}</Text>
-              </TouchableOpacity>
-            );
-          })}
+        <Text style={{ fontWeight: "600", marginBottom: 4 }}>전략 (국내 Paper)</Text>
+        <View
+          style={{
+            borderWidth: 1,
+            borderColor: "#cbd5e1",
+            borderRadius: 8,
+            marginBottom: 10,
+            backgroundColor: "#fff",
+            overflow: "hidden",
+          }}
+        >
+          <Picker
+            selectedValue={strategyId}
+            onValueChange={(v) => setStrategyId(v as DomesticStrategyId)}
+            mode="dropdown"
+            style={{ width: "100%" }}
+          >
+            {DOMESTIC_STRATEGY_OPTIONS.map((id) => (
+              <Picker.Item key={id} label={id} value={id} />
+            ))}
+          </Picker>
         </View>
         <Text style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>
-          최신 전략 8종을 선택할 수 있습니다. 모든 호출은 market=domestic 로 전송됩니다.
+          데스크톱과 동일한 8종 전략입니다. 모든 호출은 쿼리·본문에 market=domestic 을 명시합니다.
         </Text>
 
         <Button title="모의 자동매매 시작" onPress={start} disabled={!canStart || riskOff} />

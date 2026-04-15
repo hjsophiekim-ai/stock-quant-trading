@@ -11,7 +11,8 @@
     "run": "electron .",
     "pack": "npx electron-builder --dir",
     "build:win": "node scripts/build-win.js",
-    "build:win:local": "cross-env APP_ENV=production ALLOW_LOCAL_BACKEND=1 BACKEND_URL=http://127.0.0.1:8000 node scripts/build-win.js"
+    "build:win:local": "cross-env APP_ENV=production ALLOW_LOCAL_BACKEND=1 BACKEND_URL=http://127.0.0.1:8000 node scripts/build-win.js",
+    "release:zip": "node scripts/package-release-zip.js"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
@@ -40,6 +41,12 @@
       "target": [
         {
           "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
           "arch": [
             "x64"
           ]
