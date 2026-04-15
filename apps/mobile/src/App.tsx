@@ -9,6 +9,7 @@ import LoginScreen from "./screens/LoginScreen";
 import OnboardingScreen from "./screens/OnboardingScreen";
 import PaperTradingScreen from "./screens/PaperTradingScreen";
 import PerformanceScreen from "./screens/PerformanceScreen";
+import USTradingScreen from "./screens/USTradingScreen";
 import {
   clearPersistedAuth,
   getOnboardingDone,
@@ -22,7 +23,7 @@ import { AuthState, getAuthState, setAuth, subscribeAuth } from "./store/authSto
 export default function App() {
   const [auth, setAuthView] = useState<AuthState>(getAuthState());
   const [tab, setTab] = useState<
-    "dashboard" | "broker-settings" | "paper-trading" | "live-settings" | "performance"
+    "dashboard" | "broker-settings" | "paper-trading" | "us-trading" | "live-settings" | "performance"
   >("dashboard");
   const [bootPhase, setBootPhase] = useState<"loading" | "onboarding" | "ready">("loading");
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -111,6 +112,12 @@ export default function App() {
             onOpenDashboard={() => setTab("dashboard")}
             onOpenPerformance={() => setTab("performance")}
           />
+        ) : tab === "us-trading" ? (
+          <USTradingScreen
+            backendUrl={BACKEND_URL}
+            onOpenDashboard={() => setTab("dashboard")}
+            onOpenPerformance={() => setTab("performance")}
+          />
         ) : tab === "live-settings" ? (
           <LiveTradingSettingsScreen backendUrl={BACKEND_URL} />
         ) : tab === "performance" ? (
@@ -121,7 +128,8 @@ export default function App() {
       </View>
       <View style={{ flexDirection: "row", justifyContent: "space-around", padding: 8 }}>
         <Button title="대시보드" onPress={() => setTab("dashboard")} />
-        <Button title="Paper" onPress={() => setTab("paper-trading")} />
+        <Button title="Domestic" onPress={() => setTab("paper-trading")} />
+        <Button title="US" onPress={() => setTab("us-trading")} />
         <Button title="성과" onPress={() => setTab("performance")} />
         <Button title="Live" onPress={() => setTab("live-settings")} />
         <Button title="브로커" onPress={() => setTab("broker-settings")} />

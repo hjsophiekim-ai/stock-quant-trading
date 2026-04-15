@@ -1,3 +1,5 @@
+import type { MarketStatusCard } from "./trading";
+
 export type DashboardSystemStatus = "running" | "stopped" | "risk-off";
 
 /** /api/dashboard/summary — 평탄 필드 + 중첩 운영 필드 병행 */
@@ -28,6 +30,13 @@ export interface MobileDashboardSummary {
   recent_logs?: { source: string; message: string }[];
   alerts?: { portfolio_sync_risk_review?: boolean; runtime_risk_off?: boolean; broker_ok?: boolean };
   paper_trading_demo?: Record<string, unknown>;
+  paper_trading?: {
+    status?: string;
+    strategy_id?: string | null;
+    krx_session_state?: string | null;
+    user_session_active?: boolean;
+  };
+  market_status_cards?: MarketStatusCard[];
   screener?: Record<string, unknown>;
 }
 

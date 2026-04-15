@@ -4,20 +4,18 @@ import {
   SafeAreaView,
   ScrollView,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
 
 import { getAuthState } from "../store/authStore";
+import { STRATEGY_OPTIONS, type StrategyId, type TradingMarket } from "../types/trading";
 
 type Props = {
   backendUrl: string;
   onOpenDashboard?: () => void;
   onOpenPerformance?: () => void;
 };
-
-type StrategyOption = "swing_v1" | "bull_focus_v1" | "defensive_v1";
 
 type LogItem = { ts?: string; level?: string; message?: string };
 
@@ -94,7 +92,8 @@ async function appendKisBalanceDebugLines(
 }
 
 export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpenPerformance }: Props) {
-  const [strategyId, setStrategyId] = useState<StrategyOption>("swing_v1");
+  const market: TradingMarket = "domestic";
+  const [strategyId, setStrategyId] = useState<StrategyId>("swing_v1");
   const [status, setStatus] = useState("stopped");
   const [strategyRunning, setStrategyRunning] = useState<string | null>(null);
   const [failureStreak, setFailureStreak] = useState(0);
@@ -113,6 +112,11 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
     if (token) h.Authorization = `Bearer ${token}`;
     return h;
   }, []);
+
+  const paperApiUrl = useCallback(
+    (path: string) => `${backendUrl}/api/paper-trading/${path}?market=${market}`,
+    [backendUrl, market],
+  );
 
   const checkBrokerGate = useCallback(async () => {
     const token = getAuthState().accessToken;
@@ -162,10 +166,10 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
     try {
       const headers = authHeaders();
       const [statusRes, posRes, pnlRes, logsRes] = await Promise.all([
-        fetch(`${backendUrl}/api/paper-trading/status`),
-        fetch(`${backendUrl}/api/paper-trading/positions`),
-        fetch(`${backendUrl}/api/paper-trading/pnl`),
-        fetch(`${backendUrl}/api/paper-trading/logs`),
+        fetch(paperApiUrl("status"), { headers }),
+        fetch(paperApiUrl("positions"), { headers }),
+        fetch(paperApiUrl("pnl"), { headers }),
+        fetch(paperApiUrl("logs"), { headers }),
       ]);
       const statusData = await statusRes.json();
       const posData = await posRes.json();
@@ -188,7 +192,7 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
     } catch {
       setMessage("network error");
     }
-  }, [authHeaders, backendUrl, checkBrokerGate]);
+  }, [authHeaders, checkBrokerGate, paperApiUrl]);
 
   useEffect(() => {
     void refresh();
@@ -200,10 +204,10 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
     if (!canStart) return;
     setMessage("");
     try {
-      const res = await fetch(`${backendUrl}/api/paper-trading/start`, {
+      const res = await fetch(paperApiUrl("start"), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ strategy_id: strategyId }),
+        body: JSON.stringify({ strategy_id: strategyId, market }),
       });
       const data = (await res.json()) as { detail?: unknown };
       if (!res.ok) {
@@ -221,7 +225,7 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
 
   const stop = async () => {
     try {
-      const res = await fetch(`${backendUrl}/api/paper-trading/stop`, {
+      const res = await fetch(paperApiUrl("stop"), {
         method: "POST",
         headers: authHeaders(),
       });
@@ -240,7 +244,7 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
 
   const riskReset = async () => {
     try {
-      const res = await fetch(`${backendUrl}/api/paper-trading/risk-reset`, {
+      const res = await fetch(paperApiUrl("risk-reset"), {
         method: "POST",
         headers: authHeaders(),
       });
@@ -262,7 +266,7 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#f8fafc" }}>
       <ScrollView style={{ padding: 12 }}>
-        <Text style={{ fontSize: 20, fontWeight: "bold", marginBottom: 6 }}>Paper Trading (KIS 모의)</Text>
+        <Text style={{ fontSize: 20, fontWeight: "bold", marginBottom: 6 }}>Domestic Paper Trading (KIS 모의)</Text>
         <Text style={{ color: "#64748b", fontSize: 12, marginBottom: 10, lineHeight: 18 }}>
           앱에 저장한 <Text style={{ fontWeight: "700" }}>paper</Text> 브로커로만 동작합니다. live 계정·live 주문 경로는 사용하지
           않습니다. 전역 <Text style={{ fontWeight: "700" }}>/api/runtime-engine</Text> 과 별도 세션입니다.
@@ -302,13 +306,31 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
           </View>
         ) : null}
 
-        <Text style={{ fontWeight: "600", marginBottom: 4 }}>전략 ID</Text>
-        <TextInput
-          value={strategyId}
-          onChangeText={(v) => setStrategyId((v as StrategyOption) || "swing_v1")}
-          placeholder="swing_v1 | bull_focus_v1 | defensive_v1"
-          style={{ borderWidth: 1, borderColor: "#cbd5e1", padding: 8, marginBottom: 10, borderRadius: 8 }}
-        />
+        <Text style={{ fontWeight: "600", marginBottom: 4 }}>전략 ID (Domestic)</Text>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", marginBottom: 10 }}>
+          {STRATEGY_OPTIONS.map((option) => {
+            const selected = option === strategyId;
+            return (
+              <TouchableOpacity
+                key={option}
+                onPress={() => setStrategyId(option)}
+                style={{
+                  backgroundColor: selected ? "#1d4ed8" : "#e2e8f0",
+                  borderRadius: 999,
+                  paddingVertical: 6,
+                  paddingHorizontal: 10,
+                  marginRight: 6,
+                  marginBottom: 6,
+                }}
+              >
+                <Text style={{ color: selected ? "#ffffff" : "#0f172a", fontSize: 12, fontWeight: "600" }}>{option}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        <Text style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>
+          최신 전략 8종을 선택할 수 있습니다. 모든 호출은 market=domestic 로 전송됩니다.
+        </Text>
 
         <Button title="모의 자동매매 시작" onPress={start} disabled={!canStart || riskOff} />
         <View style={{ height: 8 }} />

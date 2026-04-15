@@ -13,6 +13,7 @@ import {
 
 import { clearPersistedAuth } from "../lib/session";
 import { clearAuth, getAuthState } from "../store/authStore";
+import { type MarketStatusCard } from "../types/trading";
 
 const POLL_MS = 12_000;
 
@@ -148,6 +149,26 @@ export default function DashboardScreen({ backendUrl, onOpenBrokerSettings }: Pr
   const paperDemo = summary?.paper_trading_demo ?? {};
   const todos: string[] = summary?.dashboard_todos ?? [];
   const candidates = (summary?.selected_candidates ?? summary?.screener?.candidates ?? []) as any[];
+  const marketCardsFromApi = (summary?.market_status_cards ?? []) as MarketStatusCard[];
+  const fallbackMarketCards: MarketStatusCard[] = [
+    {
+      market: "domestic",
+      title: "Domestic",
+      status: summary?.paper_trading?.status ?? summary?.paper_trading_demo?.status ?? "unknown",
+      session_state: summary?.paper_trading?.krx_session_state ?? summary?.runtime_engine?.market_phase_now ?? "closed",
+      message: summary?.paper_trading?.strategy_id
+        ? `strategy=${summary.paper_trading.strategy_id}`
+        : "세션 정보 없음",
+    },
+    {
+      market: "us",
+      title: "US",
+      status: "unknown",
+      session_state: "closed",
+      message: "US 상태 카드를 아직 제공하지 않으면 US 화면에서 직접 확인하세요.",
+    },
+  ];
+  const marketCards = marketCardsFromApi.length > 0 ? marketCardsFromApi : fallbackMarketCards;
 
   const tabBtn = (k: TabKey, label: string) => (
     <Pressable
@@ -252,6 +273,29 @@ export default function DashboardScreen({ backendUrl, onOpenBrokerSettings }: Pr
                 포트폴리오: {summary.portfolio?.synced ? "동기화됨" : "스냅샷 없음 — POST /api/portfolio/sync"}{" "}
                 {summary.portfolio?.updated_at_utc ? `(${summary.portfolio.updated_at_utc})` : ""}
               </Text>
+            </View>
+
+            <View style={cardStyle}>
+              <Text style={{ fontWeight: "800", marginBottom: 6 }}>시장 상태 (Domestic / US)</Text>
+              {marketCards.map((card, idx) => (
+                <View
+                  key={`${card.market ?? "market"}-${idx}`}
+                  style={{
+                    backgroundColor: "#f8fafc",
+                    borderColor: "#e2e8f0",
+                    borderWidth: 1,
+                    borderRadius: 8,
+                    padding: 8,
+                    marginBottom: 6,
+                  }}
+                >
+                  <Text style={{ fontWeight: "700" }}>{card.title ?? String(card.market ?? "market").toUpperCase()}</Text>
+                  <Text style={{ fontSize: 12, marginTop: 2 }}>
+                    status: {card.status ?? "unknown"} · session: {card.session_state ?? "closed"}
+                  </Text>
+                  {card.message ? <Text style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>{card.message}</Text> : null}
+                </View>
+              ))}
             </View>
 
             <View style={cardStyle}>
