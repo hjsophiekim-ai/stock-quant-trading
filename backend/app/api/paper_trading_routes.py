@@ -222,6 +222,11 @@ def start_paper_trading(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="브로커 계정이 등록되어 있지 않습니다.",
             ) from exc
+        if code == "FINAL_BETTING_DISABLED":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="final_betting_v1 은 서버 환경에서 PAPER_FINAL_BETTING_ENABLED=true 로 켠 뒤 시작할 수 있습니다.",
+            ) from exc
         raise HTTPException(status_code=400, detail=code) from exc
     except RuntimeError as exc:
         if "OTHER_SESSION_ACTIVE" in str(exc):

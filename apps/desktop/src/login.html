@@ -158,6 +158,16 @@
         }
       }
 
+      async function readJsonOrDetail(res) {
+        const text = await res.text();
+        if (!text) return {};
+        try {
+          return JSON.parse(text);
+        } catch {
+          return { detail: "서버 응답이 JSON이 아닙니다 (HTTP " + res.status + "). 로그를 확인하세요." };
+        }
+      }
+
       document.getElementById("registerBtn").addEventListener("click", async () => {
         const email = document.getElementById("email").value.trim();
         const password = document.getElementById("password").value;
@@ -170,7 +180,7 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ email, password, display_name: displayName, role: "user" }),
           });
-          const data = await res.json();
+          const data = await readJsonOrDetail(res);
           if (!res.ok) {
             msg.innerText = data?.detail || "회원가입 실패";
             return;
@@ -193,7 +203,7 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ email, password }),
           });
-          const data = await res.json();
+          const data = await readJsonOrDetail(res);
           if (!res.ok) {
             msg.innerText = data?.detail || "로그인 실패";
             return;

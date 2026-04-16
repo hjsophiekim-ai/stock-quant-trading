@@ -18,6 +18,7 @@ from app.config import get_settings
 from app.risk.kill_switch import KillSwitch
 from app.risk.rules import RiskLimits, RiskRules
 from app.scheduler.equity_tracker import EquityTracker
+from app.scheduler.final_betting_intraday_jobs import FinalBettingIntradayJobs
 from app.scheduler.intraday_jobs import IntradaySchedulerJobs, fetch_quotes_throttled, infer_forced_flatten
 from app.scheduler.jobs import SchedulerJobs
 from app.scheduler.kis_intraday import (
@@ -45,6 +46,10 @@ logger = logging.getLogger("backend.app.engine.user_paper_loop")
 def _is_intraday_scalp_strategy(strategy_id: str) -> bool:
     s = (strategy_id or "").lower().strip()
     return s in ("scalp_momentum_v1", "scalp_momentum_v2", "scalp_momentum_v3")
+
+
+def _is_final_betting_strategy(strategy_id: str) -> bool:
+    return (strategy_id or "").lower().strip() == "final_betting_v1"
 
 
 class UserPaperTradingLoop:
@@ -177,6 +182,36 @@ class UserPaperTradingLoop:
         sid = (strategy_id or self._strategy_id or "").strip()
         strat = strategy_for_paper_id(sid)
         return IntradaySchedulerJobs(
+            strategy=strat,
+            broker=broker,
+            risk_rules=rules,
+            kill_switch=kill,
+            equity_tracker=tracker,
+            state_store=state_store,
+            logger=logger,
+        )
+
+    def _build_final_betting_jobs(self, client, *, state_store: IntradayPaperStateStore, strategy_id: str | None = None):
+        cfg = get_settings()
+        broker = KisPaperBroker(
+            kis_client=client,
+            account_no=self._account_no,
+            account_product_code=self._product_code,
+            logger=logger,
+        )
+        eq_path = Path(cfg.paper_session_state_path).parent / f"equity_tracker_{self._user_tag}.json"
+        tracker = EquityTracker(eq_path, logger=logger)
+        rules = RiskRules(
+            RiskLimits(
+                daily_loss_limit_pct=cfg.daily_loss_limit_pct,
+                total_loss_limit_pct=cfg.total_loss_limit_pct,
+                default_stop_loss_pct=cfg.default_stop_loss_pct,
+            )
+        )
+        kill = KillSwitch(rules=rules)
+        sid = (strategy_id or self._strategy_id or "").strip()
+        strat = strategy_for_paper_id(sid)
+        return FinalBettingIntradayJobs(
             strategy=strat,
             broker=broker,
             risk_rules=rules,
@@ -332,6 +367,181 @@ class UserPaperTradingLoop:
         out["report"] = merged
         out["request_budget_mode"] = "paper_multi"
         return out
+
+    def _run_close_betting_tick(self) -> dict[str, Any]:
+        """종가베팅(T+1) — 분봉 파이프라인은 재사용하되 장마감 scalp 강제청산(forced_flatten) 비사용."""
+        failed_step = "kis_client"
+        try:
+            try:
+                client = self._kis_client()
+            except RuntimeError as exc:
+                err_s = str(exc)
+                is_rl = err_s.startswith("TOKEN_RATE_LIMIT:") or "TOKEN_RATE_LIMIT" in err_s
+                fk = "token_rate_limit" if is_rl else "token_failure"
+                return {
+                    "ok": False,
+                    "error": err_s,
+                    "failed_step": "kis_token",
+                    "kis_context": {},
+                    "token_source": self.token_source_for_diagnostics(),
+                    "failure_kind": fk,
+                    "token_error_code": "TOKEN_RATE_LIMIT" if is_rl else (self._last_token_error_code or "TOKEN_FAILURE"),
+                    "paper_loop_fresh_issue": False,
+                    "paper_loop_last_token_failure_at": self._last_token_failure_at_iso,
+                    "paper_loop_last_token_http_status": self._last_token_http_status,
+                }
+
+            cfg = get_settings()
+            symbols = cfg.resolved_final_betting_symbol_list()
+            if not symbols:
+                return {
+                    "ok": False,
+                    "error": "final_betting: PAPER_TRADING_SYMBOLS 가 비어 있습니다.",
+                    "failed_step": "config",
+                    "kis_context": {},
+                    "token_source": self.token_source_for_diagnostics(),
+                    "failure_kind": "config",
+                }
+            if cfg.paper_smoke_mode:
+                symbols = symbols[:1]
+
+            state_path = Path(cfg.paper_session_state_path).parent / f"paper_final_betting_state_{self._user_tag}.json"
+            state_store = IntradayPaperStateStore(state_path, logger=logger)
+            chart_cache = IntradayChartCache(
+                ttl_sec=float(cfg.paper_intraday_chart_cache_ttl_sec),
+                min_interval_sec=float(cfg.paper_intraday_chart_min_interval_sec),
+            )
+
+            failed_step = "intraday_universe"
+            scfg = krx_session_config_from_settings(cfg)
+            session_snap = analyze_krx_intraday_session(session_config=scfg)
+            universe_1m, intraday_bar_fetch_summary = build_intraday_universe_1m(
+                client,
+                symbols,
+                target_bars_per_symbol=140,
+                logger=logger,
+                cache=chart_cache,
+                intraday_fetch_allowed=session_snap.fetch_allowed,
+                intraday_fetch_block_reason=session_snap.fetch_block_reason,
+                session_state=session_snap.state,
+                order_allowed=session_snap.order_allowed,
+            )
+            intraday_universe_row_count = int(len(universe_1m))
+            intraday_universe_symbol_count = (
+                int(universe_1m["symbol"].nunique()) if not universe_1m.empty and "symbol" in universe_1m.columns else 0
+            )
+            paper_trading_symbols_resolved = list(symbols)
+            regular_session_kst = session_snap.regular_session_kst
+            universe_tf = universe_1m
+            timeframe = "1m"
+
+            failed_step = "kospi_series"
+            now_m = time.monotonic()
+            ttl_u = int(cfg.paper_kis_kospi_cache_ttl_sec)
+            lookback = max(int(cfg.paper_kis_chart_lookback_days), 60)
+            univ_key = f"kospi|{lookback}"
+            kospi_cache_hit = False
+            if (
+                ttl_u > 0
+                and self._kospi_df is not None
+                and self._kospi_sig == univ_key
+                and (now_m - self._kospi_ts) < float(ttl_u)
+            ):
+                kospi = self._kospi_df
+                kospi_cache_hit = True
+            else:
+                kospi = build_kospi_index_series(
+                    client,
+                    lookback_calendar_days=lookback,
+                    logger=logger,
+                )
+                self._kospi_sig = univ_key
+                self._kospi_ts = time.monotonic()
+                self._kospi_df = kospi
+
+            sp500 = build_mock_sp500_proxy_from_kospi(kospi)
+
+            failed_step = "intraday_quotes"
+            quote_by_symbol = fetch_quotes_throttled(
+                client,
+                symbols,
+                min_interval_sec=max(0.15, float(cfg.paper_intraday_chart_min_interval_sec)),
+                logger=logger,
+            )
+
+            failed_step = "intraday_jobs"
+            jobs = self._build_final_betting_jobs(client, state_store=state_store, strategy_id=self._strategy_id)
+            cash_b = float(jobs.broker.get_cash())
+            mv_b = sum(float(p.quantity) * float(p.average_price or 0.0) for p in jobs.broker.get_positions())
+            eq_b = cash_b + mv_b
+            setattr(jobs.strategy, "_final_betting_equity_krw", float(eq_b))
+
+            report = jobs.run_intraday_cycle(
+                universe_tf=universe_tf,
+                kospi_index=kospi,
+                sp500_index=sp500,
+                timeframe=timeframe,
+                quote_by_symbol=quote_by_symbol,
+                forced_flatten=False,
+                paper_trading_symbols_resolved=paper_trading_symbols_resolved,
+                intraday_bar_fetch_summary=intraday_bar_fetch_summary,
+                intraday_universe_row_count=intraday_universe_row_count,
+                regular_session_kst=regular_session_kst,
+                intraday_session_snapshot=session_snap,
+            )
+            report = dict(report)
+            report["paper_trading_symbols_resolved"] = paper_trading_symbols_resolved
+            report["intraday_symbols_source"] = "PAPER_TRADING_SYMBOLS(final_betting)"
+            report["intraday_universe_symbol_count"] = intraday_universe_symbol_count
+            report["intraday_universe_row_count"] = intraday_universe_row_count
+            report["intraday_bar_fetch_summary"] = intraday_bar_fetch_summary
+            report["forced_flatten"] = False
+            report["flatten_before_close_armed"] = False
+            report["strategy_profile"] = "final_betting_v1"
+            report["close_betting_forced_flatten"] = False
+
+            return {
+                "ok": True,
+                "report": report,
+                "token_source": self.token_source_for_diagnostics(),
+                "token_cache_source": self.token_source_for_diagnostics(),
+                "token_error_code": None,
+                "paper_loop_fresh_issue": self._token_issued_locally,
+                "paper_loop_last_token_failure_at": self._last_token_failure_at_iso,
+                "paper_loop_last_token_error_code": self._last_token_error_code,
+                "paper_loop_last_token_http_status": self._last_token_http_status,
+                "universe_cache_hit": False,
+                "kospi_cache_hit": kospi_cache_hit,
+                "request_budget_mode": "paper_close_betting",
+                "throttled_mode": int(cfg.kis_min_request_interval_ms) > 0,
+                "paper_tick_interval_sec": int(cfg.paper_final_betting_loop_interval_sec),
+                "paper_intraday_mode": True,
+            }
+        except KISClientError as exc:
+            ctx = getattr(exc, "kis_context", {}) or {}
+            if ctx.get("rate_limit"):
+                fk = "rate_limit"
+            elif "business error" in str(exc).lower():
+                fk = "kis_business_error"
+            else:
+                fk = "kis_client_error"
+            return {
+                "ok": False,
+                "error": str(exc),
+                "failed_step": failed_step,
+                "kis_context": ctx,
+                "token_source": self.token_source_for_diagnostics(),
+                "failure_kind": fk,
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": str(exc),
+                "failed_step": failed_step,
+                "kis_context": {},
+                "token_source": self.token_source_for_diagnostics(),
+                "failure_kind": type(exc).__name__,
+            }
 
     def _run_intraday_scalp_tick(
         self,
@@ -545,6 +755,17 @@ class UserPaperTradingLoop:
             and _is_intraday_scalp_strategy(self._strategy_id)
         ):
             return self._run_multi_strategy_tick()
+        if _is_final_betting_strategy(self._strategy_id):
+            if not bool(cfg.paper_final_betting_enabled):
+                return {
+                    "ok": False,
+                    "error": "final_betting_v1 은 PAPER_FINAL_BETTING_ENABLED=true 일 때만 실행됩니다.",
+                    "failed_step": "config",
+                    "kis_context": {},
+                    "token_source": self.token_source_for_diagnostics(),
+                    "failure_kind": "config",
+                }
+            return self._run_close_betting_tick()
         if _is_intraday_scalp_strategy(self._strategy_id):
             if not bool(cfg.paper_intraday_enabled):
                 return {

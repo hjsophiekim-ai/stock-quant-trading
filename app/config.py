@@ -178,6 +178,40 @@ class Settings(BaseSettings):
         alias="PAPER_INTRADAY_DUPLICATE_ORDER_GUARD_SEC",
     )
 
+    # Paper 종가베팅(T+1 overnight, scalp 강제청산과 무관) — final_betting_v1 전용
+    paper_final_betting_enabled: bool = Field(default=False, alias="PAPER_FINAL_BETTING_ENABLED")
+    paper_final_betting_entry_start_hhmm: str = Field(default="151000", alias="PAPER_FINAL_BETTING_ENTRY_START_HHMM")
+    paper_final_betting_entry_end_hhmm: str = Field(default="151800", alias="PAPER_FINAL_BETTING_ENTRY_END_HHMM")
+    paper_final_betting_max_new_positions: int = Field(default=2, ge=1, le=10, alias="PAPER_FINAL_BETTING_MAX_NEW_POSITIONS")
+    paper_final_betting_max_capital_per_position_pct: float = Field(
+        default=6.5,
+        ge=0.5,
+        le=30.0,
+        alias="PAPER_FINAL_BETTING_MAX_CAPITAL_PER_POSITION_PCT",
+    )
+    paper_final_betting_target_pct: float = Field(default=2.0, ge=0.1, le=20.0, alias="PAPER_FINAL_BETTING_TARGET_PCT")
+    paper_final_betting_stop_loss_pct: float = Field(default=0.45, ge=0.05, le=5.0, alias="PAPER_FINAL_BETTING_STOP_LOSS_PCT")
+    paper_final_betting_exit_deadline_hhmm: str = Field(default="103000", alias="PAPER_FINAL_BETTING_EXIT_DEADLINE_HHMM")
+    paper_final_betting_min_trade_value_krw: float = Field(
+        default=3_000_000_000.0,
+        ge=0.0,
+        alias="PAPER_FINAL_BETTING_MIN_TRADE_VALUE_KRW",
+    )
+    paper_final_betting_day_high_zone_pct: float = Field(
+        default=30.0,
+        ge=5.0,
+        le=80.0,
+        alias="PAPER_FINAL_BETTING_DAY_HIGH_ZONE_PCT",
+    )
+    paper_final_betting_reentry_cooldown_days: int = Field(default=3, ge=0, le=60, alias="PAPER_FINAL_BETTING_REENTRY_COOLDOWN_DAYS")
+    paper_final_betting_loop_interval_sec: int = Field(
+        default=90,
+        ge=20,
+        le=600,
+        alias="PAPER_FINAL_BETTING_LOOP_INTERVAL_SEC",
+        description="종가베팅 전용 Paper 틱 간격(초). 장마감 직전 8분 창을 커버하도록 권장.",
+    )
+
     # KRX 세션(장전/정규/장후) — Paper 인트라데이 분봉·주문 게이트
     paper_krx_preopen_enabled: bool = Field(default=False, alias="PAPER_KRX_PREOPEN_ENABLED")
     paper_krx_afterhours_enabled: bool = Field(default=False, alias="PAPER_KRX_AFTERHOURS_ENABLED")
@@ -263,6 +297,13 @@ class Settings(BaseSettings):
         if explicit:
             return [x.strip() for x in explicit.split(",") if x.strip()][:60]
         return self.intraday_fallback_symbols()
+
+    def resolved_final_betting_symbol_list(self) -> list[str]:
+        """종가베팅 후보 유니버스: 국내 Paper 일봉 심볼 목록과 동일(스캘프 인트라데이 심볼과 분리)."""
+        raw = (self.paper_trading_symbols or "").strip()
+        if not raw:
+            return []
+        return [x.strip() for x in raw.split(",") if x.strip()][:50]
 
     @property
     def resolved_account_no(self) -> str:

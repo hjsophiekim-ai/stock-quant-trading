@@ -12,7 +12,8 @@ export type DomesticStrategyId =
   | "defensive_v1"
   | "scalp_momentum_v1"
   | "scalp_momentum_v2"
-  | "scalp_momentum_v3";
+  | "scalp_momentum_v3"
+  | "final_betting_v1";
 
 export const DOMESTIC_STRATEGY_OPTIONS: DomesticStrategyId[] = [
   "swing_v1",
@@ -23,6 +24,7 @@ export const DOMESTIC_STRATEGY_OPTIONS: DomesticStrategyId[] = [
   "scalp_momentum_v1",
   "scalp_momentum_v2",
   "scalp_momentum_v3",
+  "final_betting_v1",
 ];
 
 /** 미국 Paper용 (백엔드 구현 시 연결) */

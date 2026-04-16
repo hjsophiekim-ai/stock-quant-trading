@@ -26,6 +26,8 @@ class IntradayPaperState:
     entry_ts_iso: dict[str, str] = field(default_factory=dict)
     peak_price: dict[str, float] = field(default_factory=dict)
     halted_new_entries_today: bool = False
+    # final_betting_v1: 일자 롤 시에도 유지(overnight 메타·쿨다운). 스캘프 일카운터와 분리.
+    final_betting_carry: dict[str, Any] = field(default_factory=dict)
 
     def to_jsonable(self) -> dict[str, Any]:
         return asdict(self)
@@ -40,6 +42,7 @@ class IntradayPaperState:
             entry_ts_iso=dict(raw.get("entry_ts_iso") or {}),
             peak_price={k: float(v) for k, v in (raw.get("peak_price") or {}).items()},
             halted_new_entries_today=bool(raw.get("halted_new_entries_today")),
+            final_betting_carry=dict(raw.get("final_betting_carry") or {}),
         )
 
 
@@ -70,7 +73,11 @@ class IntradayPaperStateStore:
         today = _today_kst()
         if state.day_kst == today:
             return state
-        return IntradayPaperState(day_kst=today)
+        carry: dict[str, Any] = dict(state.final_betting_carry or {})
+        # 신규 진입 일카운터만 초기화. overnight positions / last_exit 는 유지.
+        carry["entered_symbols_today"] = []
+        carry["entries_kst_date"] = today
+        return IntradayPaperState(day_kst=today, final_betting_carry=carry)
 
 
 def iso_now_utc() -> str:

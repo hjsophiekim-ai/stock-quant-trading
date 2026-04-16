@@ -49,3 +49,15 @@ def test_paper_session_interval_uses_app_settings(monkeypatch: pytest.MonkeyPatc
     c = PaperSessionController()
     assert c._interval_sec() == 333
     get_settings.cache_clear()
+
+
+def test_paper_session_interval_final_betting(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PAPER_FINAL_BETTING_LOOP_INTERVAL_SEC", "77")
+    monkeypatch.setenv("PAPER_FINAL_BETTING_ENABLED", "true")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    c = PaperSessionController()
+    c._strategy_id = "final_betting_v1"
+    assert c._interval_sec() == 77
+    get_settings.cache_clear()

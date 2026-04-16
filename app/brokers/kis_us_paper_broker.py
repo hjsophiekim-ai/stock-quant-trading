@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import logging
 from datetime import datetime, timezone
-from typing import Any
 
-from app.brokers.base_broker import BaseBroker, Fill, OpenOrder, OrderRequest, OrderResult, OrderStatus, PositionView
+from app.brokers.base_broker import BaseBroker, Fill, OpenOrder, PositionView
+from app.orders.models import OrderRequest, OrderResult, OrderStatus
 from app.clients.kis_client import KISClient, KISClientError
 from app.clients.kis_mask import format_masked_payload_json
 from app.clients.kis_parsers import (

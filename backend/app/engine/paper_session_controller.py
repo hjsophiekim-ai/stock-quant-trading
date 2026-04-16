@@ -81,6 +81,8 @@ class PaperSessionController:
         # Paper 세션 틱 간격: 인트라데이(scalp)는 PAPER_INTRADAY_LOOP_INTERVAL_SEC, 그 외 PAPER_TRADING_INTERVAL_SEC.
         acfg = app_get_settings()
         sid = (self._strategy_id or "").lower().strip()
+        if sid == "final_betting_v1" and bool(acfg.paper_final_betting_enabled):
+            return max(25, int(acfg.paper_final_betting_loop_interval_sec))
         if bool(acfg.paper_intraday_enabled) and sid in ("scalp_momentum_v1", "scalp_momentum_v2", "scalp_momentum_v3"):
             return max(20, int(acfg.paper_intraday_loop_interval_sec))
         return max(25, int(acfg.paper_trading_interval_sec))
@@ -345,6 +347,10 @@ class PaperSessionController:
         mk = (market or "domestic").strip().lower()
         self._paper_market = "us" if mk in ("us", "usa", "nyse", "nasdaq", "us_equity", "us_equities") else "domestic"
 
+        sid_l = (strategy_id or "").lower().strip()
+        if sid_l == "final_betting_v1" and not bool(app_get_settings().paper_final_betting_enabled):
+            raise ValueError("FINAL_BETTING_DISABLED")
+
         with self._lock:
             if self._run_flag and self._thread is not None and self._thread.is_alive():
                 if self._user_id == user_id:
@@ -542,6 +548,8 @@ class PaperSessionController:
             "fetch_block_reason": rep.get("fetch_block_reason"),
             "order_block_reason": rep.get("order_block_reason"),
             "orders_blocked_session": rep.get("orders_blocked_session"),
+            "strategy_profile": rep.get("strategy_profile"),
+            "close_betting_forced_flatten": rep.get("close_betting_forced_flatten"),
         }
 
         return {
