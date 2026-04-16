@@ -57,6 +57,7 @@ class RuntimeEngine:
         self._last_error: str | None = None
         self._loop_interval = max(10, int(self._settings.runtime_loop_interval_sec))
         self._max_failures = max(1, int(self._settings.runtime_max_consecutive_failures))
+        self._manual_override_enabled = False
         self._state_path = Path(self._settings.runtime_state_path)
         self._error_log_path = Path(self._settings.runtime_error_log_path)
         self._reports_dir = Path(self._settings.runtime_reports_dir)
@@ -133,7 +134,7 @@ class RuntimeEngine:
         self._last_result_summary["last_loop_at"] = now_kst().isoformat()
 
         with self._lock:
-            risk_halt = self._state == EngineState.RISK_OFF
+            risk_halt = self._state == EngineState.RISK_OFF and not self._manual_override_enabled
         if risk_halt:
             return
 
@@ -188,7 +189,8 @@ class RuntimeEngine:
         self._append_runtime_log("error", f"phase={res.phase} error={err}")
         if self._failure_streak >= self._max_failures:
             with self._lock:
-                self._state = EngineState.RISK_OFF
+                if not self._manual_override_enabled:
+                    self._state = EngineState.RISK_OFF
             self._append_runtime_log("critical", "STATE -> risk_off (max consecutive failures)")
 
     def _main_loop(self) -> None:
@@ -250,6 +252,28 @@ class RuntimeEngine:
         self._persist()
         return {"ok": True, "state": self._state.value, "failure_streak": 0}
 
+    def toggle_manual_override(self) -> dict[str, Any]:
+        """
+        수동 거래 재개 토글:
+        - ON: risk_off 상태라도 루프를 진행(운영자 강제 재개)
+        - OFF: 원래 리스크 차단 로직 복구
+        """
+        with self._lock:
+            self._manual_override_enabled = not self._manual_override_enabled
+            if self._manual_override_enabled:
+                self._failure_streak = 0
+                self._last_error = None
+                if self._state == EngineState.RISK_OFF:
+                    self._state = EngineState.RUNNING if self._run_flag else EngineState.IDLE
+            else:
+                # OFF 시점에 현재가 risk_off이면 그대로 유지, 아니면 다음 루프부터 일반 정책 적용.
+                pass
+            enabled = self._manual_override_enabled
+            state = self._state.value
+        self._append_runtime_log("warning", f"manual_override toggled enabled={enabled}")
+        self._persist()
+        return {"ok": True, "manual_override_enabled": enabled, "state": state}
+
     def force_risk_off(self) -> dict[str, Any]:
         with self._lock:
             self._state = EngineState.RISK_OFF
@@ -280,6 +304,7 @@ class RuntimeEngine:
             "persisted": disk,
             "volatile_summary": dict(self._last_result_summary),
             "last_kis_token_failure": get_last_kis_token_failure_diag(),
+            "manual_override_enabled": self._manual_override_enabled,
         }
 
 

@@ -39,6 +39,7 @@ class ScalpMomentumV2Strategy(BaseStrategy):
     intraday_state: IntradayPaperState | None = None
     intraday_session_context: dict[str, Any] = field(default_factory=dict)
     risk_halt_new_entries: bool = False
+    manual_override_enabled: bool = False
     timeframe_label: str = "1m"
 
     _risk_tighten: float = 0.90
@@ -152,7 +153,7 @@ class ScalpMomentumV2Strategy(BaseStrategy):
             self.last_intraday_signal_breakdown["blocked"] = "max_open_positions"
             return signals
 
-        if high_vol_block:
+        if high_vol_block and (not self.manual_override_enabled):
             self.last_intraday_signal_breakdown["blocked"] = "high_volatility_risk_no_entry"
             return signals
 

@@ -63,6 +63,7 @@ class SchedulerJobs:
     kill_switch: KillSwitch | None = None
     equity_tracker: EquityTracker | None = None
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger("app.scheduler.jobs"))
+    manual_override_enabled: bool = False
 
     def run_daily_cycle(
         self,
@@ -119,7 +120,7 @@ class SchedulerJobs:
                 attach_kill_switch_event_logging(self.kill_switch)
             except Exception:
                 pass
-        if self.kill_switch is not None and self.kill_switch.evaluate(snapshot_gate):
+        if (not self.manual_override_enabled) and self.kill_switch is not None and self.kill_switch.evaluate(snapshot_gate):
             self.logger.warning(
                 "[HALT] Kill switch active state=%s reason=%s",
                 self.kill_switch.state,

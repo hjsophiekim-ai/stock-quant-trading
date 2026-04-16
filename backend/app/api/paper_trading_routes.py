@@ -283,6 +283,22 @@ def paper_trading_risk_reset(
     return out
 
 
+@router.post("/manual-override-toggle")
+def paper_trading_manual_override_toggle(
+    authorization: str | None = Header(default=None),
+    market: str | None = Query(default=None),
+) -> dict[str, object]:
+    _ = market
+    user = _paper_user(authorization)
+    ctrl = get_paper_session_controller()
+    try:
+        return ctrl.toggle_manual_override(user.id)
+    except RuntimeError as exc:
+        if "NOT_OWNER" in str(exc):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="세션 소유자만 수동 오버라이드를 변경할 수 있습니다.") from exc
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
 @router.get("/status")
 def get_paper_trading_status(
     market: str | None = Query(default=None, description="예약: domestic | us"),

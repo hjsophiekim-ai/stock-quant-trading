@@ -62,6 +62,7 @@ class PaperSessionController:
         self._started_at_utc: str | None = None
         self._desired_running: bool = False
         self._paper_market: str = "domestic"
+        self._manual_override_enabled: bool = False
         self._resume_info: dict[str, Any] = {
             "enabled": True,
             "restored_from_state": False,
@@ -255,6 +256,7 @@ class PaperSessionController:
                         initial_access_token=cached_token,
                         initial_token_source_label=self._last_paper_initial_token_source,
                         paper_market=self._paper_market,
+                        manual_override_enabled=self._manual_override_enabled,
                     )
                     self._user_loop_identity = identity
                     self._append_log(
@@ -262,6 +264,8 @@ class PaperSessionController:
                         "Paper 루프 재초기화 (자격/전략 변경 또는 첫 시작)"
                         + (" · test-connection 토큰 재사용" if cached_token else ""),
                     )
+                else:
+                    self._user_loop.set_manual_override(self._manual_override_enabled)
                 loop = self._user_loop
                 out = loop.run_intraday_tick()
                 self._last_tick_at = datetime.now(timezone.utc).isoformat()
@@ -310,9 +314,13 @@ class PaperSessionController:
                 logger.exception("paper session tick error (streak=%s)", self._failure_streak)
                 self._append_log("error", f"{type(exc).__name__}: {exc}")
                 if self._failure_streak >= self._max_failures():
-                    self._status = "risk_off"
-                    self._append_log("error", "연속 실패 한도 → risk_off (paper-trading/risk-reset 또는 stop 후 재시작)")
-                    self._save_desired_state()
+                    if self._manual_override_enabled:
+                        self._append_log("warning", "연속 실패 한도 도달했지만 manual override ON으로 risk_off 전환 생략")
+                        self._failure_streak = 0
+                    else:
+                        self._status = "risk_off"
+                        self._append_log("error", "연속 실패 한도 → risk_off (paper-trading/risk-reset 또는 stop 후 재시작)")
+                        self._save_desired_state()
             end = time.monotonic() + float(self._interval_sec())
             while self._run_flag and time.monotonic() < end:
                 time.sleep(min(1.0, end - time.monotonic()))
@@ -393,6 +401,7 @@ class PaperSessionController:
             self._user_loop_identity = None
             self._desired_running = False
             self._paper_market = "domestic"
+            self._manual_override_enabled = False
         self._last_paper_initial_token_source = None
         self._save_desired_state()
         self._clear_desired_state()
@@ -443,7 +452,26 @@ class PaperSessionController:
                 "desired_state_path": str(self._state_path),
                 "resume_info": dict(self._resume_info),
                 "diagnostics": dict(self._paper_diagnostics),
+                "manual_override_enabled": self._manual_override_enabled,
             }
+
+    def toggle_manual_override(self, requester_id: str) -> dict[str, Any]:
+        if self._user_id and self._user_id != requester_id:
+            raise RuntimeError("NOT_OWNER")
+        with self._lock:
+            self._manual_override_enabled = not self._manual_override_enabled
+            if self._manual_override_enabled:
+                self._failure_streak = 0
+                self._last_error = None
+                if self._status == "risk_off":
+                    self._status = "running"
+            enabled = self._manual_override_enabled
+            loop = self._user_loop
+            if loop is not None:
+                loop.set_manual_override(enabled)
+            self._save_desired_state()
+        self._append_log("warning", f"Paper manual override toggled enabled={enabled}")
+        return {"ok": True, "manual_override_enabled": enabled, "status": self._status}
 
     def diagnostics_payload(self) -> dict[str, Any]:
         from backend.app.core.version_info import get_backend_version_payload

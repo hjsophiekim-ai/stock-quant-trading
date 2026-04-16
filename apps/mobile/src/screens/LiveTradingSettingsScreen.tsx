@@ -27,6 +27,7 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
   });
   const [reason, setReason] = useState("운영자 수동 승인");
   const [killMessage, setKillMessage] = useState("");
+  const [runtimeManualOverride, setRuntimeManualOverride] = useState(false);
   const [history, setHistory] = useState<Array<{ ts: string; actor: string; reason: string }>>([]);
   const [msg, setMsg] = useState("");
 
@@ -43,6 +44,12 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
           ? `손실 제한 초과 경고: daily=${killData.daily_loss_pct}% total=${killData.total_loss_pct}%`
           : "손실 제한 정상 범위",
       );
+    }
+
+    const rtRes = await fetch(`${backendUrl}/api/runtime-engine/status`);
+    const rtData = await rtRes.json();
+    if (rtRes.ok) {
+      setRuntimeManualOverride(Boolean(rtData.manual_override_enabled));
     }
 
     const histRes = await fetch(`${backendUrl}/api/live-trading/settings-history`);
@@ -69,6 +76,18 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
     }
     setStatus(data);
     setMsg(data.warning_message ?? "저장 완료");
+    await refresh();
+  };
+
+  const toggleRuntimeManualOverride = async () => {
+    const res = await fetch(`${backendUrl}/api/runtime-engine/manual-override-toggle`, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) {
+      setMsg(typeof data?.detail === "string" ? data.detail : "runtime 수동 재개 토글 실패");
+      return;
+    }
+    setRuntimeManualOverride(Boolean(data.manual_override_enabled));
+    setMsg(Boolean(data.manual_override_enabled) ? "runtime 수동 재개 ON" : "runtime 수동 재개 OFF");
     await refresh();
   };
 
@@ -105,6 +124,13 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
         <Button title="Refresh Status" onPress={refresh} />
         <Text style={{ marginTop: 8 }}>{msg}</Text>
         <Text style={{ marginTop: 8, color: "#b91c1c" }}>{killMessage}</Text>
+        <Text style={{ marginTop: 8, color: runtimeManualOverride ? "#b91c1c" : "#334155" }}>
+          Runtime 수동 재개 토글: {runtimeManualOverride ? "ON" : "OFF"}
+        </Text>
+        <Button
+          title={runtimeManualOverride ? "Runtime 수동 재개 토글 OFF" : "Runtime 수동 재개 토글 ON"}
+          onPress={toggleRuntimeManualOverride}
+        />
 
         <Text style={{ marginTop: 12, fontWeight: "bold" }}>Settings Change History</Text>
         {history.slice(0, 10).map((h, idx) => (

@@ -97,6 +97,7 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
   const [failureStreak, setFailureStreak] = useState(0);
   const [lastError, setLastError] = useState<string | null>(null);
   const [lastTick, setLastTick] = useState<string | null>(null);
+  const [manualOverride, setManualOverride] = useState(false);
   const [message, setMessage] = useState("");
   const [positions, setPositions] = useState<Array<{ symbol: string; quantity: number; average_price: number }>>([]);
   const [pnlText, setPnlText] = useState("");
@@ -179,6 +180,7 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
         setFailureStreak(Number(statusData.failure_streak ?? 0));
         setLastError(statusData.last_error ?? null);
         setLastTick(statusData.last_tick_at ?? null);
+        setManualOverride(Boolean(statusData.manual_override_enabled));
       }
       if (posRes.ok) setPositions(posData.items ?? []);
       if (pnlRes.ok) {
@@ -259,6 +261,26 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
     }
   };
 
+  const toggleManualOverride = async () => {
+    try {
+      const res = await fetch(paperApiUrl("manual-override-toggle"), {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      const data = (await res.json()) as { detail?: unknown; manual_override_enabled?: boolean };
+      if (!res.ok) {
+        const shown = formatApiErrorDetail(data?.detail) || "수동 재개 토글 실패";
+        setMessage(shown);
+        return;
+      }
+      const on = Boolean(data.manual_override_enabled);
+      setMessage(on ? "수동 재개 ON (리스크 차단 우회)." : "수동 재개 OFF (기본 차단 복구).");
+      await refresh();
+    } catch {
+      setMessage("network error");
+    }
+  };
+
   const riskOff = status === "risk_off";
 
   return (
@@ -275,6 +297,9 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
           <Text style={{ fontSize: 13, marginTop: 4 }}>전략: {strategyRunning ?? "—"}</Text>
           <Text style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
             마지막 틱(UTC): {lastTick ?? "—"} · 실패 연속 {failureStreak}
+          </Text>
+          <Text style={{ fontSize: 12, marginTop: 4, color: manualOverride ? "#b91c1c" : "#64748b" }}>
+            수동 재개 토글: {manualOverride ? "ON" : "OFF"}
           </Text>
           {lastError ? <Text style={{ fontSize: 12, color: "#b91c1c", marginTop: 6 }}>{lastError}</Text> : null}
         </View>
@@ -301,6 +326,8 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
               연속 오류 한도 초과. 원인 확인 후 risk-reset 또는 중지하세요.
             </Text>
             <Button title="risk-reset (소유자만)" onPress={riskReset} />
+            <View style={{ height: 8 }} />
+            <Button title={manualOverride ? "수동 재개 토글 OFF" : "수동 재개 토글 ON"} onPress={toggleManualOverride} />
           </View>
         ) : null}
 
@@ -333,6 +360,8 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
         <Button title="모의 자동매매 시작" onPress={start} disabled={!canStart || riskOff} />
         <View style={{ height: 8 }} />
         <Button title="모의 자동매매 중지" onPress={stop} />
+        <View style={{ height: 8 }} />
+        <Button title={manualOverride ? "수동 재개 토글 OFF" : "수동 재개 토글 ON"} onPress={toggleManualOverride} />
         <View style={{ height: 8 }} />
         <Button title="새로고침" onPress={refresh} />
         {message ? (

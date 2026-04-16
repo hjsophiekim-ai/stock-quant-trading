@@ -141,6 +141,7 @@
         <h2>운영 대시보드</h2>
         <div class="toolbar">
           <button type="button" id="refreshNowBtn">지금 새로고침</button>
+          <button type="button" id="runtimeManualToggleBtn">런타임 수동 재개 토글: OFF</button>
           <span class="load-state" id="loadState"></span>
         </div>
         <p class="muted" id="updatedAt"></p>
@@ -543,6 +544,14 @@
             "/" +
             (rt.max_failures ?? 0) +
             (rt.last_error ? " · " + rt.last_error : "");
+          var rtBtn = document.getElementById("runtimeManualToggleBtn");
+          if (rtBtn) {
+            var rtOn = !!rt.manual_override_enabled;
+            rtBtn.innerText = "런타임 수동 재개 토글: " + (rtOn ? "ON" : "OFF");
+            rtBtn.style.background = rtOn ? "#fee2e2" : "";
+            rtBtn.style.color = rtOn ? "#991b1b" : "";
+            rtBtn.style.borderColor = rtOn ? "#ef4444" : "";
+          }
 
           document.getElementById("todayReturn").innerText = Number(summary.today_return_pct || 0).toFixed(2) + "%";
           document.getElementById("monthlyReturn").innerText =
@@ -762,6 +771,21 @@
 
       document.getElementById("refreshNowBtn").addEventListener("click", function () {
         void loadDashboard();
+      });
+      document.getElementById("runtimeManualToggleBtn").addEventListener("click", async function () {
+        try {
+          const r = await authFetch(backendUrl + "/api/runtime-engine/manual-override-toggle", { method: "POST" });
+          const j = await r.json().catch(function () {
+            return {};
+          });
+          if (!r.ok) {
+            alert((j && (j.detail || j.error)) || "runtime manual override toggle failed");
+            return;
+          }
+          void loadDashboard();
+        } catch (e) {
+          alert("network error");
+        }
       });
 
       document.getElementById("logoutBtn").addEventListener("click", async () => {

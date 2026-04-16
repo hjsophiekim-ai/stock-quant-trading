@@ -37,3 +37,9 @@ def runtime_risk_reset() -> dict[str, Any]:
 def runtime_force_risk_off() -> dict[str, Any]:
     """즉시 risk_off (주문 루프는 구간 처리만 스킵)."""
     return get_runtime_engine().force_risk_off()
+
+
+@router.post("/manual-override-toggle")
+def runtime_manual_override_toggle() -> dict[str, Any]:
+    """리스크 차단 수동 해제/복구 토글 (한 번 ON, 다시 누르면 OFF)."""
+    return get_runtime_engine().toggle_manual_override()

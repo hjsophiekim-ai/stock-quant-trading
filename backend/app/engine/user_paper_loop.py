@@ -67,6 +67,7 @@ class UserPaperTradingLoop:
         initial_access_token: str | None = None,
         initial_token_source_label: str | None = None,
         paper_market: str = "domestic",
+        manual_override_enabled: bool = False,
     ) -> None:
         self._app_key = app_key
         self._app_secret = app_secret
@@ -81,6 +82,7 @@ class UserPaperTradingLoop:
         self._token_issued_locally: bool = False
         self._initial_token_source_label: str | None = initial_token_source_label
         self._paper_market = (paper_market or "domestic").strip().lower()
+        self._manual_override_enabled = bool(manual_override_enabled)
         self._univ_sig: str | None = None
         self._univ_ts: float = 0.0
         self._univ_df: Any = None
@@ -152,6 +154,7 @@ class UserPaperTradingLoop:
         kill = KillSwitch(rules=rules)
         sid = (strategy_id or self._strategy_id or "").strip()
         strat = strategy_for_paper_id(sid)
+        setattr(strat, "manual_override_enabled", bool(self._manual_override_enabled))
         return SchedulerJobs(
             strategy=strat,
             broker=broker,
@@ -159,6 +162,7 @@ class UserPaperTradingLoop:
             kill_switch=kill,
             equity_tracker=tracker,
             logger=logger,
+            manual_override_enabled=bool(self._manual_override_enabled),
         )
 
     def _build_intraday_jobs(self, client, *, state_store: IntradayPaperStateStore, strategy_id: str | None = None):
@@ -181,6 +185,7 @@ class UserPaperTradingLoop:
         kill = KillSwitch(rules=rules)
         sid = (strategy_id or self._strategy_id or "").strip()
         strat = strategy_for_paper_id(sid)
+        setattr(strat, "manual_override_enabled", bool(self._manual_override_enabled))
         return IntradaySchedulerJobs(
             strategy=strat,
             broker=broker,
@@ -189,6 +194,7 @@ class UserPaperTradingLoop:
             equity_tracker=tracker,
             state_store=state_store,
             logger=logger,
+            manual_override_enabled=bool(self._manual_override_enabled),
         )
 
     def _build_final_betting_jobs(self, client, *, state_store: IntradayPaperStateStore, strategy_id: str | None = None):
@@ -211,6 +217,7 @@ class UserPaperTradingLoop:
         kill = KillSwitch(rules=rules)
         sid = (strategy_id or self._strategy_id or "").strip()
         strat = strategy_for_paper_id(sid)
+        setattr(strat, "manual_override_enabled", bool(self._manual_override_enabled))
         return FinalBettingIntradayJobs(
             strategy=strat,
             broker=broker,
@@ -219,7 +226,11 @@ class UserPaperTradingLoop:
             equity_tracker=tracker,
             state_store=state_store,
             logger=logger,
+            manual_override_enabled=bool(self._manual_override_enabled),
         )
+
+    def set_manual_override(self, enabled: bool) -> None:
+        self._manual_override_enabled = bool(enabled)
 
     def _run_swing_daily_tick(self, client, swing_symbols: list[str], *, swing_strategy_id: str) -> dict[str, Any]:
         """멀티 모드 스윙 레그: 일봉 유니버스 + run_daily_cycle."""

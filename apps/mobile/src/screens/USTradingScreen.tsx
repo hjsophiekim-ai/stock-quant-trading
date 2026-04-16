@@ -45,6 +45,7 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
   const [status, setStatus] = useState("stopped");
   const [sessionState, setSessionState] = useState<SessionState>("closed");
   const [strategyRunning, setStrategyRunning] = useState<string | null>(null);
+  const [manualOverride, setManualOverride] = useState(false);
   const [message, setMessage] = useState("");
   const [positions, setPositions] = useState<TradingPositionItem[]>([]);
   const [logs, setLogs] = useState<TradingLogItem[]>([]);
@@ -129,6 +130,7 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
       if (statusRes.ok) {
         setStatus(text(statusData.status, "stopped"));
         setStrategyRunning((statusData.strategy_id as string | null) ?? null);
+        setManualOverride(Boolean(statusData.manual_override_enabled));
       }
       if (posRes.ok) setPositions((posData.items ?? []) as TradingPositionItem[]);
       if (logsRes.ok) setLogs((logsData.items ?? []) as TradingLogItem[]);
@@ -207,6 +209,24 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
     }
   };
 
+  const toggleManualOverride = async () => {
+    try {
+      const res = await fetch(paperApiUrl("manual-override-toggle"), {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      const data = (await res.json()) as { detail?: unknown; manual_override_enabled?: boolean };
+      if (!res.ok) {
+        setMessage(typeof data.detail === "string" ? data.detail : "수동 재개 토글 실패");
+        return;
+      }
+      setMessage(Boolean(data.manual_override_enabled) ? "수동 재개 ON (리스크 차단 우회)." : "수동 재개 OFF (기본 차단 복구).");
+      await refresh();
+    } catch {
+      setMessage("network error");
+    }
+  };
+
   const searchUSSymbols = async () => {
     const q = searchQuery.trim();
     setSearchBanner(null);
@@ -276,6 +296,9 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
           <Text style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
             premarket / regular / after_hours / closed — 백엔드가 US 전용 필드를 주지 않으면 closed 로 표시됩니다.
           </Text>
+          <Text style={{ fontSize: 12, marginTop: 4, color: manualOverride ? "#b91c1c" : "#64748b" }}>
+            수동 재개 토글: {manualOverride ? "ON" : "OFF"}
+          </Text>
         </View>
 
         {!US_PAPER_STRATEGIES_IMPLEMENTED ? (
@@ -324,6 +347,8 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
         <Button title="US 자동매매 시작" onPress={start} disabled={!US_PAPER_STRATEGIES_IMPLEMENTED} />
         <View style={{ height: 8 }} />
         <Button title="US 자동매매 중지" onPress={stop} />
+        <View style={{ height: 8 }} />
+        <Button title={manualOverride ? "수동 재개 토글 OFF" : "수동 재개 토글 ON"} onPress={toggleManualOverride} />
         <View style={{ height: 8 }} />
         <Button title="새로고침" onPress={refresh} />
         {message ? (

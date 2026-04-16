@@ -175,6 +175,7 @@
         <div id="riskOffPanel" class="panel" style="display: none; background: #fef2f2; border-color: #fecaca">
           <b>risk_off</b> — 연속 실패 한도에 도달했습니다. 원인을 확인한 뒤 아래에서 해제하거나 중지하세요.
           <button type="button" id="riskResetBtn" style="margin-left: 12px">risk 해제 후 재개</button>
+          <button type="button" id="manualOverrideToggleBtn" style="margin-left: 8px">수동 재개 토글: OFF</button>
         </div>
         <div class="row">
           <label>시작 시 전략: </label>
@@ -345,6 +346,7 @@
         const lastErrorText = document.getElementById("lastErrorText");
         const riskOffPanel = document.getElementById("riskOffPanel");
         const riskResetBtn = document.getElementById("riskResetBtn");
+        const manualOverrideToggleBtn = document.getElementById("manualOverrideToggleBtn");
         const pnlSummary = document.getElementById("pnlSummary");
         const message = document.getElementById("message");
         const positionsList = document.getElementById("positionsList");
@@ -535,6 +537,13 @@
                 lastErrorText.innerText = "";
               }
               riskOffPanel.style.display = st === "risk_off" ? "block" : "none";
+              var mo = !!statusData.manual_override_enabled;
+              if (manualOverrideToggleBtn) {
+                manualOverrideToggleBtn.innerText = "수동 재개 토글: " + (mo ? "ON" : "OFF");
+                manualOverrideToggleBtn.style.background = mo ? "#fee2e2" : "";
+                manualOverrideToggleBtn.style.color = mo ? "#991b1b" : "";
+                manualOverrideToggleBtn.style.borderColor = mo ? "#ef4444" : "";
+              }
             }
             if (pnlRes.ok) {
               var tc = Number(pnlData.today_return_pct != null ? pnlData.today_return_pct : 0);
@@ -992,6 +1001,26 @@
             return;
           }
           toast("ok", "risk_off 해제됨.");
+          refreshPaper();
+        });
+
+        manualOverrideToggleBtn.addEventListener("click", async function () {
+          const res = await authFetch(paperApiUrl("manual-override-toggle"), {
+            method: "POST",
+            headers: await authHeaders(),
+          });
+          const data = await res.json().catch(function () {
+            return {};
+          });
+          if (!res.ok) {
+            var md = formatApiErrorDetail(data.detail);
+            if (md === "요청이 거절되었습니다." && !data.detail) md = "수동 재개 토글 실패";
+            message.innerText = md;
+            toast("err", md);
+            return;
+          }
+          var on = !!data.manual_override_enabled;
+          toast("ok", on ? "수동 재개 ON (리스크 차단 우회)" : "수동 재개 OFF (기본 차단 복구)");
           refreshPaper();
         });
 

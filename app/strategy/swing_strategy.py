@@ -43,6 +43,7 @@ class SwingStrategy(BaseStrategy):
     last_ranking_report: list[RankingReportRow] = field(default_factory=list)
     last_regime_label: str | None = field(default=None, repr=False)
     last_diagnostics: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    manual_override_enabled: bool = field(default=False, repr=False)
 
     def paper_candidate_symbols(self, prices: pd.DataFrame) -> list[str]:
         """Paper/스케줄러 공통: 품질 필터 후보. 서브클래스에서 완화판 오버라이드."""
@@ -78,8 +79,11 @@ class SwingStrategy(BaseStrategy):
             signals = self.sideways_strategy.generate_signals(reduced_context)
         else:
             # high_volatility_risk: block new entries, only allow risk-reduction exits.
-            defensive = BearStrategy(config=BearStrategyConfig(allow_new_entries=False, order_quantity=0, stop_loss_pct=2.0))
-            signals = defensive.generate_signals(reduced_context)
+            if self.manual_override_enabled:
+                signals = self.sideways_strategy.generate_signals(reduced_context)
+            else:
+                defensive = BearStrategy(config=BearStrategyConfig(allow_new_entries=False, order_quantity=0, stop_loss_pct=2.0))
+                signals = defensive.generate_signals(reduced_context)
 
         self._build_last_diagnostics(context, regime.regime, signals)
         return signals

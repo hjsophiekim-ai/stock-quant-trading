@@ -101,6 +101,7 @@
           </select>
           <button type="button" id="startBtn" disabled>US Paper 시작</button>
           <button type="button" id="stopBtn">US Paper 중지</button>
+          <button type="button" id="manualOverrideToggleBtn">수동 재개 토글: OFF</button>
           <button type="button" id="refreshBtn">새로고침</button>
           <p id="message" style="white-space: pre-line; margin-top: 8px; color: #334155"></p>
         </div>
@@ -204,6 +205,14 @@
             if (res[0].ok) {
               document.getElementById("statusText").innerText = statusData.status || "stopped";
               document.getElementById("strategyRunning").innerText = statusData.strategy_id || "—";
+              var mo = !!statusData.manual_override_enabled;
+              var mob = document.getElementById("manualOverrideToggleBtn");
+              if (mob) {
+                mob.innerText = "수동 재개 토글: " + (mo ? "ON" : "OFF");
+                mob.style.background = mo ? "#fee2e2" : "";
+                mob.style.color = mo ? "#991b1b" : "";
+                mob.style.borderColor = mo ? "#ef4444" : "";
+              }
               var rawS =
                 statusData.session_state ||
                 (dashData && dashData.tick_report && dashData.tick_report.krx_session_state) ||
@@ -259,6 +268,17 @@
             return {};
           });
           document.getElementById("message").innerText = r.ok ? "중지 완료" : JSON.stringify(data.detail || data);
+          refresh();
+        });
+
+        document.getElementById("manualOverrideToggleBtn").addEventListener("click", async function () {
+          var r = await authFetch(paperApiUrl("manual-override-toggle"), { method: "POST", headers: await authHeaders() });
+          var data = await r.json().catch(function () {
+            return {};
+          });
+          document.getElementById("message").innerText = r.ok
+            ? ((data.manual_override_enabled ? "수동 재개 ON (리스크 차단 우회)" : "수동 재개 OFF (기본 차단 복구)"))
+            : JSON.stringify(data.detail || data);
           refresh();
         });
 

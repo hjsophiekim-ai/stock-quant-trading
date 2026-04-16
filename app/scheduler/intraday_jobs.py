@@ -123,6 +123,7 @@ class IntradaySchedulerJobs:
     equity_tracker: EquityTracker | None = None
     state_store: IntradayPaperStateStore | None = None
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger("app.scheduler.intraday_jobs"))
+    manual_override_enabled: bool = False
 
     def run_intraday_cycle(
         self,
@@ -176,10 +177,11 @@ class IntradaySchedulerJobs:
 
         snapshot_gate = self._build_risk_snapshot(universe_tf)
         daily_pct = float(snapshot_gate.daily_pnl_pct)
-        risk_halt = daily_pct <= -float(cfg.paper_intraday_max_daily_loss_pct)
+        risk_halt = (not self.manual_override_enabled) and (daily_pct <= -float(cfg.paper_intraday_max_daily_loss_pct))
         self.strategy.intraday_state = state
         self.strategy.quote_by_symbol = quote_by_symbol
         self.strategy.risk_halt_new_entries = risk_halt
+        setattr(self.strategy, "manual_override_enabled", bool(self.manual_override_enabled))
         self.strategy.intraday_session_context = {
             "krx_session_state": snap.state,
             "fetch_allowed": snap.fetch_allowed,
@@ -198,7 +200,7 @@ class IntradaySchedulerJobs:
                 attach_kill_switch_event_logging(self.kill_switch)
             except Exception:
                 pass
-        if self.kill_switch is not None and self.kill_switch.evaluate(snapshot_gate):
+        if (not self.manual_override_enabled) and self.kill_switch is not None and self.kill_switch.evaluate(snapshot_gate):
             pos_n = len(self.broker.get_positions())
             halt_msg = f"킬스위치 활성 — {self.kill_switch.last_reason}"
             return self._report(

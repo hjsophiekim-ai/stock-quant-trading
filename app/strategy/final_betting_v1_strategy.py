@@ -228,6 +228,7 @@ class FinalBettingV1Strategy(BaseStrategy):
     intraday_state: IntradayPaperState | None = None
     intraday_session_context: dict[str, Any] = field(default_factory=dict)
     risk_halt_new_entries: bool = False
+    manual_override_enabled: bool = False
     timeframe_label: str = "1m"
     pending_carry_updates: dict[str, dict[str, Any]] = field(default_factory=dict, repr=False)
     _final_betting_equity_krw: float = 0.0
@@ -379,7 +380,7 @@ class FinalBettingV1Strategy(BaseStrategy):
         if self.risk_halt_new_entries:
             self.last_intraday_signal_breakdown["blocked"] = "daily_loss_halt"
             return signals
-        if high_vol_block:
+        if high_vol_block and (not self.manual_override_enabled):
             self.last_intraday_signal_breakdown["blocked"] = "high_volatility_risk_no_entry"
             return signals
         # 지수 필터: KOSPI 수익률이 음수이고 5일 EMA 아래면 보수화(신규 진입 중단).
@@ -387,7 +388,7 @@ class FinalBettingV1Strategy(BaseStrategy):
             kclose = context.kospi_index.sort_values("date")["close"].astype(float)
             if len(kclose) >= 6:
                 ema5 = _ema(kclose, 5)
-                if float(kclose.iloc[-1]) < float(ema5.iloc[-1]) and kospi_day_ret <= -0.35:
+                if (not self.manual_override_enabled) and float(kclose.iloc[-1]) < float(ema5.iloc[-1]) and kospi_day_ret <= -0.35:
                     self.last_intraday_signal_breakdown["blocked"] = "index_filter_risk_off"
                     return signals
         if not in_entry_window:
