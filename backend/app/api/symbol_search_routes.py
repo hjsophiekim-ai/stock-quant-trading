@@ -4,8 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 
+from app.clients.kis_client import KISClient
+
+from app.config import get_settings as get_app_settings
+
+from backend.app.api.auth_routes import get_current_user_from_auth_header
+from backend.app.api.broker_routes import get_broker_service
+from backend.app.auth.kis_auth import issue_access_token
 from backend.app.services.local_symbol_catalog import (
     catalog_size,
     name_by_symbol,
@@ -15,6 +22,7 @@ from backend.app.services.local_symbol_catalog import (
 )
 from backend.app.strategy.screener import get_screener_engine
 from backend.app.strategy.signal_engine import get_swing_signal_engine, snapshot_to_jsonable
+from backend.app.services.us_symbol_search_service import search_us_symbols_via_kis
 
 router = APIRouter(prefix="/stocks", tags=["stocks"])
 
@@ -49,23 +57,75 @@ def search_stocks_by_symbol(
     limit: int = Query(40, ge=1, le=200),
     market: str = Query(
         "domestic",
-        description="domestic=앱 내 국내 목록, us=미국(별도 구현 전까지 빈 결과)",
+        description="domestic=앱 내 국내 목록, us=KIS 해외주식 상품기본정보(search-info)",
     ),
+    authorization: str | None = Header(default=None),
 ) -> dict[str, object]:
     """**2) 심볼(종목코드) 검색** — 숫자 코드 접두·부분 일치 (국내)."""
     m = (market or "domestic").strip().lower()
     if m in ("us", "usa", "nyse", "nasdaq", "us_equity", "us_equities"):
+        if not authorization:
+            raise HTTPException(
+                status_code=401,
+                detail="미국 심볼 검색은 Authorization 헤더(로그인 토큰)가 필요합니다.",
+            )
+        try:
+            user = get_current_user_from_auth_header(authorization)
+        except ValueError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        svc = get_broker_service()
+        try:
+            app_key, app_secret, _acct, _prod, mode = svc.get_plain_credentials(user.id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=403,
+                detail="브로커 계정이 없습니다. 설정에서 한국투자 정보를 저장하세요.",
+            ) from exc
+        api_base = svc._resolve_kis_api_base(mode)
+        tr = issue_access_token(
+            app_key=app_key,
+            app_secret=app_secret,
+            base_url=api_base,
+            timeout_sec=12,
+        )
+        if not tr.ok or not tr.access_token:
+            raise HTTPException(
+                status_code=503,
+                detail=tr.message or "KIS OAuth 토큰 발급 실패",
+            )
+        acfg = get_app_settings()
+        client = KISClient(
+            base_url=api_base.rstrip("/"),
+            timeout_sec=10,
+            token_provider=lambda: tr.access_token or "",
+            app_key=app_key,
+            app_secret=app_secret,
+            live_execution_unlocked=False,
+            kis_min_request_interval_ms=int(acfg.kis_min_request_interval_ms),
+            kis_rate_limit_max_retries=int(acfg.kis_rate_limit_max_retries),
+            kis_rate_limit_backoff_base_sec=float(acfg.kis_rate_limit_backoff_base_sec),
+            kis_rate_limit_backoff_cap_sec=float(acfg.kis_rate_limit_backoff_cap_sec),
+        )
+        try:
+            matches = search_us_symbols_via_kis(client, q, limit=limit)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"US KIS search failed: {exc}") from exc
         return {
             "api_role": "symbol_search",
             "market": "us",
-            "us_search_supported": False,
-            "title_ko": "미국 심볼 검색",
-            "kis_official_search": False,
-            "description_ko": "미국 종목 검색 API 미구현 — 국내 `data/domestic_liquid_symbols.json` 카탈로그는 사용하지 않습니다.",
+            "us_search_supported": True,
+            "title_ko": "미국 심볼 검색 (KIS 해외주식 상품기본정보)",
+            "kis_official_search": True,
+            "kis_reference_ko": (
+                "한국투자 `open-trading-api` examples_user/overseas_stock/overseas_stock_functions.py 의 "
+                "`search_info` — TR CTPF1702R, GET /uapi/overseas-price/v1/quotations/search-info, "
+                "prdt_type_cd 512·513·529(미국) 순회."
+            ),
+            "description_ko": "저장된 브로커 자격으로 토큰을 발급한 뒤, 티커 정확 일치 시에만 결과를 반환합니다.",
             "catalog_entry_count": 0,
             "query": q.strip(),
-            "match_count": 0,
-            "matches": [],
+            "match_count": len(matches),
+            "matches": matches,
         }
     matches = search_by_symbol_code(query=q, limit=limit)
     return {

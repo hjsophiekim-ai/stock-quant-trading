@@ -41,7 +41,7 @@ def _require_broker_ready_for_start(user_id: str) -> None:
         )
 
 
-def _run_balance_preflight(user_id: str) -> dict[str, object]:
+def _run_balance_preflight(user_id: str, *, market: str | None = None) -> dict[str, object]:
     svc = get_broker_service()
     app_key, app_secret, account_no, product_code, trading_mode = svc.get_plain_credentials(user_id)
     api_base = svc._resolve_kis_api_base(trading_mode)
@@ -65,6 +65,44 @@ def _run_balance_preflight(user_id: str) -> dict[str, object]:
         app_key=app_key,
         app_secret=app_secret,
     )
+    mkt = (market or "domestic").strip().lower()
+    if mkt in ("us", "usa", "nyse", "nasdaq", "us_equity", "us_equities"):
+        req_params = {
+            "CANO": account_no,
+            "ACNT_PRDT_CD": product_code,
+            "OVRS_EXCG_CD": "NASD",
+            "TR_CRCY_CD": "USD",
+        }
+        tr_id = client._resolve_tr_id(
+            paper_tr_id=client.overseas_tr_ids.balance_paper,
+            live_tr_id=client.overseas_tr_ids.balance_live,
+        )
+        path = client.overseas_paths.inquire_balance
+        try:
+            client.get_overseas_inquire_balance(
+                account_no=account_no,
+                account_product_code=product_code,
+                ovrs_excg_cd="NASD",
+                tr_crcy_cd="USD",
+            )
+        except KISClientError as exc:
+            ctx = getattr(exc, "kis_context", {}) or {}
+            return {
+                "ok": False,
+                "failure_kind": "kis_error",
+                "error": str(exc),
+                "path": ctx.get("path") or path,
+                "tr_id": ctx.get("tr_id") or tr_id,
+                "sanitized_params": ctx.get("params") or sanitize_kis_params_for_log(req_params),
+                "http_status": ctx.get("http_status"),
+            }
+        return {
+            "ok": True,
+            "path": path,
+            "tr_id": tr_id,
+            "sanitized_params": sanitize_kis_params_for_log(req_params),
+        }
+
     req_params = {
         "CANO": account_no,
         "ACNT_PRDT_CD": product_code,
@@ -106,7 +144,7 @@ class StartPaperTradingRequest(BaseModel):
     )
     market: str | None = Field(
         default=None,
-        description="모바일에서 domestic | us 로 명시(예약). 현재 세션 엔진은 단일 domestic paper 만 사용.",
+        description="domestic | us — us 이면 해외주식(미국) Paper 틱 경로(동일 KIS 모의 자격).",
     )
 
 
@@ -121,7 +159,7 @@ def start_paper_trading(
     """
     user = _paper_user(authorization)
     _require_broker_ready_for_start(user.id)
-    preflight = _run_balance_preflight(user.id)
+    preflight = _run_balance_preflight(user.id, market=payload.market)
     if not preflight.get("ok"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -140,7 +178,7 @@ def start_paper_trading(
         raise HTTPException(status_code=400, detail="strategy_id 'live' 는 사용할 수 없습니다 (live 차단).")
     ctrl = get_paper_session_controller()
     try:
-        ctrl.start(user.id, payload.strategy_id.strip())
+        ctrl.start(user.id, payload.strategy_id.strip(), market=payload.market)
     except ValueError as exc:
         code = str(exc)
         snap = ctrl.paper_token_ensure_snapshot()

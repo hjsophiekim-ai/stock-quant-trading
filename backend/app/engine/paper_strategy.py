@@ -29,4 +29,7 @@ def strategy_for_paper_id(strategy_id: str) -> BaseStrategy:
         return ScalpMomentumV2Strategy()
     if sid == "scalp_momentum_v3":
         return ScalpMomentumV3Strategy()
+    if sid in ("us_swing_relaxed_v1", "us_scalp_momentum_v1"):
+        # US Paper 틱은 `UserPaperTradingLoop._run_us_equity_tick`에서 전략 신호 없이 시세·세션만 처리.
+        return SwingStrategy()
     return SwingStrategy()

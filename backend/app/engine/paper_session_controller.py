@@ -61,6 +61,7 @@ class PaperSessionController:
         self._last_paper_initial_token_source: str | None = None
         self._started_at_utc: str | None = None
         self._desired_running: bool = False
+        self._paper_market: str = "domestic"
         self._resume_info: dict[str, Any] = {
             "enabled": True,
             "restored_from_state": False,
@@ -95,6 +96,7 @@ class PaperSessionController:
             "status": self._status,
             "user_id": self._user_id,
             "strategy_id": self._strategy_id,
+            "paper_market": self._paper_market,
             "started_at_utc": self._started_at_utc,
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
         }
@@ -125,6 +127,7 @@ class PaperSessionController:
             self._desired_running = bool(raw.get("desired_running"))
             self._user_id = str(raw.get("user_id") or "").strip() or None
             self._strategy_id = str(raw.get("strategy_id") or "").strip() or None
+            self._paper_market = str(raw.get("paper_market") or "domestic").strip().lower() or "domestic"
             self._started_at_utc = str(raw.get("started_at_utc") or "").strip() or None
             if self._desired_running and self._user_id and self._strategy_id:
                 self._resume_info["restored_from_state"] = True
@@ -249,6 +252,7 @@ class PaperSessionController:
                         user_tag=uid[:12].replace("/", "_").replace("\\", "_"),
                         initial_access_token=cached_token,
                         initial_token_source_label=self._last_paper_initial_token_source,
+                        paper_market=self._paper_market,
                     )
                     self._user_loop_identity = identity
                     self._append_log(
@@ -311,7 +315,7 @@ class PaperSessionController:
             while self._run_flag and time.monotonic() < end:
                 time.sleep(min(1.0, end - time.monotonic()))
 
-    def start(self, user_id: str, strategy_id: str) -> dict[str, Any]:
+    def start(self, user_id: str, strategy_id: str, market: str | None = None) -> dict[str, Any]:
         svc = get_broker_service()
         try:
             account = svc.get_account(user_id)
@@ -338,6 +342,9 @@ class PaperSessionController:
             raise ValueError(ens.failure_code or "PAPER_TOKEN_NOT_READY")
         self._last_paper_initial_token_source = ens.token_cache_source or None
 
+        mk = (market or "domestic").strip().lower()
+        self._paper_market = "us" if mk in ("us", "usa", "nyse", "nasdaq", "us_equity", "us_equities") else "domestic"
+
         with self._lock:
             if self._run_flag and self._thread is not None and self._thread.is_alive():
                 if self._user_id == user_id:
@@ -358,7 +365,10 @@ class PaperSessionController:
             self._thread = threading.Thread(target=self._loop, name="paper-user-session", daemon=True)
             self._thread.start()
             self._save_desired_state()
-        self._append_log("info", f"Paper 세션 시작 strategy={strategy_id} (KIS 모의)")
+            self._append_log(
+                "info",
+                f"Paper 세션 시작 strategy={strategy_id} market={self._paper_market} (KIS 모의)",
+            )
         return {"ok": True, "status": self._status}
 
     def stop(self, requester_id: str) -> dict[str, Any]:
@@ -376,6 +386,7 @@ class PaperSessionController:
             self._user_loop = None
             self._user_loop_identity = None
             self._desired_running = False
+            self._paper_market = "domestic"
         self._last_paper_initial_token_source = None
         self._save_desired_state()
         self._clear_desired_state()
@@ -409,6 +420,7 @@ class PaperSessionController:
                 "status": self._status,
                 "session_user_id": self._user_id,
                 "strategy_id": self._strategy_id,
+                "paper_market": self._paper_market,
                 "user_session_active": bool(self._run_flag and self._thread and self._thread.is_alive()),
                 "failure_streak": self._failure_streak,
                 "max_failures": self._max_failures(),

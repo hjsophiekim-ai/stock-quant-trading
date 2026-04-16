@@ -88,3 +88,54 @@ TIME_ITEMCHART_FID_ETC_CLS_CODE = "00"
 
 def pick_tr(*, paper: str, live: str, base_url: str) -> str:
     return paper if is_paper_host(base_url) else live
+
+
+# --- 해외주식 (미국 등): koreainvestment/open-trading-api examples_user/overseas_stock/overseas_stock_functions.py 기준 ---
+
+
+@dataclass(frozen=True)
+class OverseasPricePaths:
+    """해외주식 시세 (overseas-price v1)."""
+
+    price: str = "/uapi/overseas-price/v1/quotations/price"
+    search_info: str = "/uapi/overseas-price/v1/quotations/search-info"
+    inquire_time_itemchartprice: str = "/uapi/overseas-price/v1/quotations/inquire-time-itemchartprice"
+
+
+@dataclass(frozen=True)
+class OverseasStockPaths:
+    """해외주식 주문·계좌 (overseas-stock v1)."""
+
+    inquire_balance: str = "/uapi/overseas-stock/v1/trading/inquire-balance"
+    inquire_nccs: str = "/uapi/overseas-stock/v1/trading/inquire-nccs"
+    inquire_ccnl: str = "/uapi/overseas-stock/v1/trading/inquire-ccnl"
+    order: str = "/uapi/overseas-stock/v1/trading/order"
+    order_rvsecncl: str = "/uapi/overseas-stock/v1/trading/order-rvsecncl"
+
+
+@dataclass(frozen=True)
+class OverseasTrIds:
+    """
+    TR_ID: 공식 예제 overseas_stock_functions.py 및 legacy Sample01/kis_ovrseastk.py 주석과 동일.
+    모의 호스트에서는 pick_tr 로 *_paper TR 을 선택.
+    """
+
+    # 해외주식 현재체결가 — 예제: 실전·모의 공통 HHDFS00000300
+    price: str = "HHDFS00000300"
+    # 해외주식 상품기본정보
+    search_info: str = "CTPF1702R"
+    # 해외주식분봉조회
+    time_itemchart: str = "HHDFS76950200"
+    balance_paper: str = "VTTS3012R"
+    balance_live: str = "TTTS3012R"
+    # legacy 주석: 모의 VTTS3018R
+    nccs_paper: str = "VTTS3018R"
+    nccs_live: str = "TTTS3018R"
+    ccnl_paper: str = "VTTS3035R"
+    ccnl_live: str = "TTTS3035R"
+    us_buy_paper: str = "VTTT1002U"
+    us_buy_live: str = "TTTT1002U"
+    us_sell_paper: str = "VTTT1006U"
+    us_sell_live: str = "TTTT1006U"
+    us_order_rvsecncl_paper: str = "VTTT1004U"
+    us_order_rvsecncl_live: str = "TTTT1004U"

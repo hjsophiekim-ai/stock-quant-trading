@@ -38,6 +38,7 @@ def _ensure_full_stack(app: FastAPI) -> None:
         from .api.runtime_engine_routes import router as runtime_engine_router
         from .api.screening_routes import router as screening_router
         from .api.symbol_search_routes import router as symbol_search_router
+        from .api.us_equity_routes import router as us_equity_router
         from .api.strategy_signal_routes import router as strategy_signal_router
         from .api.routes.dashboard import router as dashboard_router
         from .api.debug_routes import router as debug_router
@@ -57,6 +58,7 @@ def _ensure_full_stack(app: FastAPI) -> None:
         app.include_router(runtime_engine_router, prefix="/api")
         app.include_router(screening_router, prefix="/api")
         app.include_router(symbol_search_router, prefix="/api")
+        app.include_router(us_equity_router, prefix="/api")
         app.include_router(strategy_signal_router, prefix="/api")
         app.include_router(risk_router, prefix="/api")
         app.include_router(order_engine_router, prefix="/api")

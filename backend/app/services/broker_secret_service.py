@@ -11,7 +11,7 @@ from uuid import uuid4
 from cryptography.fernet import Fernet
 
 from app.clients.kis_client import KISClient, KISClientError
-from app.clients.kis_parsers import balance_cash_summary, rt_cd_ok
+from app.clients.kis_parsers import balance_cash_summary, overseas_balance_cash_usd, rt_cd_ok
 
 from ..auth.kis_auth import issue_access_token, validate_kis_inputs
 from ..models.broker_account import (
@@ -357,7 +357,7 @@ class BrokerSecretService:
             failure_code=None,
         )
 
-    def test_connection(self, user_id: str) -> BrokerConnectionTestResponse:
+    def test_connection(self, user_id: str, *, market: str | None = None) -> BrokerConnectionTestResponse:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM broker_accounts WHERE user_id = ?", (user_id,)).fetchone()
         if row is None:
@@ -376,11 +376,13 @@ class BrokerSecretService:
         balance_check_ok: bool | None = None
         balance_rt_cd: str | None = None
         balance_cash_hint: str | None = None
+        mkt = (market or "domestic").strip().lower()
         debug: dict[str, object] = {
             "stage": "init",
             "api_base_host": api_base,
             "api_base_kind": api_kind,
             "trading_mode": str(row["trading_mode"] or "paper"),
+            "market": mkt,
         }
 
         validation_issues = validate_kis_inputs(
@@ -422,7 +424,20 @@ class BrokerSecretService:
                     live_execution_unlocked=False,
                 )
                 try:
-                    bal = client.get_balance(account_no, account_product_code)
+                    if mkt in ("us", "usa", "nyse", "nasdaq", "us_equity", "us_equities"):
+                        debug["balance_path"] = "/uapi/overseas-stock/v1/trading/inquire-balance"
+                        debug["balance_tr_id"] = client._resolve_tr_id(
+                            paper_tr_id=client.overseas_tr_ids.balance_paper,
+                            live_tr_id=client.overseas_tr_ids.balance_live,
+                        )
+                        bal = client.get_overseas_inquire_balance(
+                            account_no=account_no,
+                            account_product_code=account_product_code,
+                            ovrs_excg_cd="NASD",
+                            tr_crcy_cd="USD",
+                        )
+                    else:
+                        bal = client.get_balance(account_no, account_product_code)
                 except KISClientError as exc:
                     debug["stage"] = "balance_exception"
                     debug["balance_error"] = str(exc)
@@ -436,9 +451,14 @@ class BrokerSecretService:
                     debug["balance_rt_cd"] = balance_rt_cd
                     if rt_cd_ok(bal):
                         balance_check_ok = True
-                        snap = balance_cash_summary(bal)
-                        cash_bits = [f"{k}={v}" for k, v in snap.items() if v is not None and str(v).strip() != ""]
-                        balance_cash_hint = ", ".join(cash_bits[:4]) if cash_bits else "(요약 필드 없음)"
+                        if mkt in ("us", "usa", "nyse", "nasdaq", "us_equity", "us_equities"):
+                            usd = overseas_balance_cash_usd(bal)
+                            balance_cash_hint = f"usd_orderable_hint={usd}"
+                            debug["us_balance_sample"] = balance_cash_hint
+                        else:
+                            snap = balance_cash_summary(bal)
+                            cash_bits = [f"{k}={v}" for k, v in snap.items() if v is not None and str(v).strip() != ""]
+                            balance_cash_hint = ", ".join(cash_bits[:4]) if cash_bits else "(요약 필드 없음)"
                         ok = True
                         status = "success"
                         debug["stage"] = "success"

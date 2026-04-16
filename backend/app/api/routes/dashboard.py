@@ -44,6 +44,13 @@ def _build_market_status_cards(
     domestic_session = tick.get("krx_session_state") or rt.get("market_phase_now") or "closed"
     sid = paper_trading_status.get("strategy_id")
     dom_msg = f"strategy={sid}" if sid else "Paper 미실행"
+    pm = str(paper_trading_status.get("paper_market") or "domestic").lower()
+    us_state = str(tick.get("us_session_state") or tick.get("krx_session_state") or "")
+    us_msg = (
+        f"US Paper 시세 틱 (strategy={sid})"
+        if pm == "us"
+        else "국내 Paper 세션 — US는 /api/paper-trading/start body market=us 로 시작"
+    )
     return [
         {
             "market": "domestic",
@@ -54,10 +61,10 @@ def _build_market_status_cards(
         },
         {
             "market": "us",
-            "title": "미국 (Paper)",
-            "status": "unavailable",
-            "session_state": "closed",
-            "message": "US paper·검색은 백엔드 별도 구현 전입니다. 모바일은 market=us 호출만 분리합니다.",
+            "title": "미국 (Paper · KIS overseas)",
+            "status": "active" if pm == "us" else "idle",
+            "session_state": us_state or "—",
+            "message": us_msg,
         },
     ]
 

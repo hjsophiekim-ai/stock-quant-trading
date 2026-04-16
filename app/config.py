@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     paper_trading_loop: bool = Field(default=False, alias="PAPER_TRADING_LOOP")
     paper_trading_interval_sec: int = Field(default=600, ge=30, alias="PAPER_TRADING_INTERVAL_SEC")
     paper_trading_symbols: str = Field(default="005930,000660", alias="PAPER_TRADING_SYMBOLS")
+    # Paper market=us 일 때 조회할 미국 티커(쉼표). 공식 시세 API만 호출, 전량 유니버스 로드 없음.
+    paper_us_symbols: str = Field(default="NVDA", alias="PAPER_US_SYMBOLS")
     # 비어 있으면 인트라데이 전용 기본 대표 유동 종목 fallback 사용
     paper_intraday_symbols: str = Field(default="", alias="PAPER_INTRADAY_SYMBOLS")
     paper_session_state_path: str = Field(default="data/paper_trading_session.json", alias="PAPER_SESSION_STATE_PATH")

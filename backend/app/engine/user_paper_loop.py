@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from app.brokers.kis_paper_broker import KisPaperBroker
+from app.brokers.kis_us_paper_broker import KisUsPaperBroker
 from app.clients.kis_client import KISClientError
 from app.config import get_settings
 from app.risk.kill_switch import KillSwitch
@@ -60,6 +61,7 @@ class UserPaperTradingLoop:
         backend_settings: BackendSettings | None = None,
         initial_access_token: str | None = None,
         initial_token_source_label: str | None = None,
+        paper_market: str = "domestic",
     ) -> None:
         self._app_key = app_key
         self._app_secret = app_secret
@@ -73,6 +75,7 @@ class UserPaperTradingLoop:
         self._token_monotonic: float = time.monotonic() if initial_access_token else 0.0
         self._token_issued_locally: bool = False
         self._initial_token_source_label: str | None = initial_token_source_label
+        self._paper_market = (paper_market or "domestic").strip().lower()
         self._univ_sig: str | None = None
         self._univ_ts: float = 0.0
         self._univ_df: Any = None
@@ -533,6 +536,8 @@ class UserPaperTradingLoop:
             }
 
     def run_intraday_tick(self) -> dict[str, Any]:
+        if self._paper_market in ("us", "usa"):
+            return self._run_us_equity_tick()
         cfg = get_settings()
         if (
             bool(cfg.paper_multi_strategy_mode)
@@ -699,21 +704,165 @@ class UserPaperTradingLoop:
                 "failure_kind": type(exc).__name__,
             }
 
+    def _run_us_equity_tick(self) -> dict[str, Any]:
+        """미국 Paper: 잔고·search-info·현재가·분봉(소량) 조회 + 현지 세션(order_allowed). 자동 주문 없음."""
+        from backend.app.market.us_exchange_map import excd_for_price_chart
+        from backend.app.market.us_session import analyze_us_equity_session
+        from backend.app.services.us_symbol_search_service import search_us_symbols_via_kis
+
+        failed_step = "kis_client"
+        try:
+            try:
+                client = self._kis_client()
+            except RuntimeError as exc:
+                err_s = str(exc)
+                is_rl = err_s.startswith("TOKEN_RATE_LIMIT:") or "TOKEN_RATE_LIMIT" in err_s
+                fk = "token_rate_limit" if is_rl else "token_failure"
+                return {
+                    "ok": False,
+                    "error": err_s,
+                    "failed_step": "kis_token",
+                    "kis_context": {},
+                    "token_source": self.token_source_for_diagnostics(),
+                    "failure_kind": fk,
+                    "token_error_code": "TOKEN_RATE_LIMIT" if is_rl else (self._last_token_error_code or "TOKEN_FAILURE"),
+                    "paper_loop_fresh_issue": False,
+                    "paper_loop_last_token_failure_at": self._last_token_failure_at_iso,
+                    "paper_loop_last_token_http_status": self._last_token_http_status,
+                }
+
+            session_snap = analyze_us_equity_session()
+            cfg = get_settings()
+            symbols = [s.strip().upper() for s in (cfg.paper_us_symbols or "NVDA").split(",") if s.strip()][:5]
+            if cfg.paper_smoke_mode:
+                symbols = symbols[:1]
+
+            quotes: dict[str, Any] = {}
+            bars_summary: list[dict[str, Any]] = []
+            failed_step = "us_quote"
+            for i, sym in enumerate(symbols):
+                hits = search_us_symbols_via_kis(client, sym, limit=1)
+                if not hits:
+                    quotes[sym] = None
+                    continue
+                excd = str(hits[0].get("excd") or "NAS")
+                try:
+                    quotes[sym] = client.get_overseas_price_quotation(excd=excd, symb=sym, auth="").get("output")
+                except KISClientError as exc:
+                    quotes[sym] = {"error": str(exc)}
+
+                if i == 0:
+                    failed_step = "us_minute_bars"
+                    ov = str(hits[0].get("ovrs_excg_cd") or "NASD")
+                    ex2 = excd_for_price_chart(ov)
+                    try:
+                        raw = client.get_overseas_time_itemchartprice(
+                            auth="",
+                            excd=ex2,
+                            symb=sym,
+                            nmin="1",
+                            pinc="1",
+                            next_flag="",
+                            nrec="30",
+                            fill="",
+                            keyb="",
+                        )
+                        o1 = raw.get("output1")
+                        n = len(o1) if isinstance(o1, list) else (1 if isinstance(o1, dict) else 0)
+                        bars_summary.append({"symbol": sym, "excd": ex2, "bar_row_count": n})
+                    except KISClientError as exc:
+                        bars_summary.append({"symbol": sym, "error": str(exc)})
+
+            broker = KisUsPaperBroker(
+                kis_client=client,
+                account_no=self._account_no,
+                account_product_code=self._product_code,
+                logger=logger,
+            )
+            cash_hint: float | None = None
+            try:
+                cash_hint = float(broker.get_cash())
+            except Exception:
+                cash_hint = None
+
+            report: dict[str, Any] = {
+                "market": "us",
+                "us_session_state": session_snap.state,
+                "fetch_allowed": session_snap.fetch_allowed,
+                "fetch_block_reason": session_snap.fetch_block_reason,
+                "order_allowed": session_snap.order_allowed,
+                "order_block_reason": session_snap.order_block_reason,
+                "us_local_time_et": session_snap.local_time_et_iso,
+                "quotes": quotes,
+                "minute_bar_summary": bars_summary,
+                "cash_usd_hint": cash_hint,
+                "accepted_orders": 0,
+                "rejected_orders": 0,
+                "generated_order_count": 0,
+                "no_order_reason": (
+                    "us_paper_quote_only_tick"
+                    if session_snap.order_allowed
+                    else (session_snap.order_block_reason or "us_orders_blocked")[:500]
+                ),
+                "krx_session_state": session_snap.state,
+                "minute_bars_present": bool(bars_summary and not bars_summary[0].get("error")),
+                "paper_trading_symbols_resolved": symbols,
+                "intraday_symbols_source": "PAPER_US_SYMBOLS",
+            }
+
+            return {
+                "ok": True,
+                "report": report,
+                "token_source": self.token_source_for_diagnostics(),
+                "token_cache_source": self.token_source_for_diagnostics(),
+                "token_error_code": None,
+                "paper_loop_fresh_issue": self._token_issued_locally,
+                "paper_loop_last_token_failure_at": self._last_token_failure_at_iso,
+                "paper_loop_last_token_http_status": self._last_token_http_status,
+                "universe_cache_hit": False,
+                "kospi_cache_hit": False,
+                "request_budget_mode": "paper_us",
+                "throttled_mode": int(get_settings().kis_min_request_interval_ms) > 0,
+                "paper_tick_interval_sec": int(get_settings().paper_trading_interval_sec),
+                "paper_intraday_mode": False,
+            }
+        except KISClientError as exc:
+            ctx = getattr(exc, "kis_context", {}) or {}
+            fk = "rate_limit" if ctx.get("rate_limit") else "kis_client_error"
+            return {
+                "ok": False,
+                "error": str(exc),
+                "failed_step": failed_step,
+                "kis_context": ctx,
+                "token_source": self.token_source_for_diagnostics(),
+                "failure_kind": fk,
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": str(exc),
+                "failed_step": failed_step,
+                "kis_context": {},
+                "token_source": self.token_source_for_diagnostics(),
+                "failure_kind": type(exc).__name__,
+            }
+
     def snapshot_positions(self) -> list[dict[str, Any]]:
-        client = self._kis_client()
-        broker = KisPaperBroker(
-            kis_client=client,
-            account_no=self._account_no,
-            account_product_code=self._product_code,
-            logger=logger,
-        )
+        broker = self._paper_broker()
         return [
             {"symbol": p.symbol, "quantity": p.quantity, "average_price": p.average_price}
             for p in broker.get_positions()
         ]
 
-    def _paper_broker(self) -> KisPaperBroker:
+    def _paper_broker(self) -> KisPaperBroker | KisUsPaperBroker:
         client = self._kis_client()
+        if self._paper_market in ("us", "usa"):
+            return KisUsPaperBroker(
+                kis_client=client,
+                account_no=self._account_no,
+                account_product_code=self._product_code,
+                logger=logger,
+            )
         return KisPaperBroker(
             kis_client=client,
             account_no=self._account_no,

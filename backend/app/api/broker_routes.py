@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, Query, status
 
 from ..auth.kis_auth import issue_access_token, validate_kis_inputs
 from ..api.auth_routes import get_current_user_from_auth_header
@@ -73,10 +73,16 @@ def delete_my_broker_account(authorization: str | None = Header(default=None)) -
 
 
 @router.post("/me/test-connection", response_model=BrokerConnectionTestResponse)
-def test_my_connection(authorization: str | None = Header(default=None)) -> BrokerConnectionTestResponse:
+def test_my_connection(
+    authorization: str | None = Header(default=None),
+    market: str | None = Query(
+        default=None,
+        description="domestic(기본) 또는 us — us 이면 해외주식 잔고 inquire-balance(NASD/USD)로 검증",
+    ),
+) -> BrokerConnectionTestResponse:
     user = _current_user(authorization)
     try:
-        return _broker_service.test_connection(user.id)
+        return _broker_service.test_connection(user.id, market=market)
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

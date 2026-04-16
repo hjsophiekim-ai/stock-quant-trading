@@ -13,6 +13,9 @@ from app.clients.kis_contract import (
     TIME_ITEMCHART_FID_ETC_CLS_CODE,
     DomesticStockPaths,
     DomesticTrIds,
+    OverseasPricePaths,
+    OverseasStockPaths,
+    OverseasTrIds,
     is_paper_host,
     pick_tr,
 )
@@ -141,6 +144,9 @@ class KISClient:
     live_execution_unlocked: bool = False
     endpoints: KISEndpoints = field(default_factory=KISEndpoints)
     tr_ids: DomesticTrIds = field(default_factory=DomesticTrIds)
+    overseas_paths: OverseasStockPaths = field(default_factory=OverseasStockPaths)
+    overseas_price_paths: OverseasPricePaths = field(default_factory=OverseasPricePaths)
+    overseas_tr_ids: OverseasTrIds = field(default_factory=OverseasTrIds)
     session: requests.Session = field(default_factory=requests.Session)
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger("app.clients.kis_client"))
 
@@ -830,4 +836,268 @@ class KISClient:
             tr_id=tr_id,
             data=body,
         )
+        return payload
+
+    # --- 해외주식 (공식 예제 path/TR/params: overseas_stock_functions.py) ---
+
+    def get_overseas_price_quotation(self, *, excd: str, symb: str, auth: str = "") -> dict[str, Any]:
+        """해외주식 현재체결가 — GET quotations/price, TR HHDFS00000300."""
+        params = {"AUTH": auth, "EXCD": excd, "SYMB": symb}
+        tr_id = self.overseas_tr_ids.price
+        path = self.overseas_price_paths.price
+        payload = self._get(path, params=params, tr_id=tr_id)
+        self._validate_kis_business_success(payload, method="GET", path=path, tr_id=tr_id, params=params)
+        return payload
+
+    def get_overseas_search_info(self, *, prdt_type_cd: str, pdno: str) -> dict[str, Any]:
+        """해외주식 상품기본정보 — GET search-info, TR CTPF1702R."""
+        params = {"PRDT_TYPE_CD": prdt_type_cd, "PDNO": pdno}
+        tr_id = self.overseas_tr_ids.search_info
+        path = self.overseas_price_paths.search_info
+        payload = self._get(path, params=params, tr_id=tr_id)
+        self._validate_kis_business_success(payload, method="GET", path=path, tr_id=tr_id, params=params)
+        return payload
+
+    def get_overseas_time_itemchartprice(
+        self,
+        *,
+        auth: str,
+        excd: str,
+        symb: str,
+        nmin: str,
+        pinc: str,
+        next_flag: str,
+        nrec: str,
+        fill: str,
+        keyb: str,
+    ) -> dict[str, Any]:
+        """해외주식분봉조회 — GET inquire-time-itemchartprice, TR HHDFS76950200."""
+        params = {
+            "AUTH": auth,
+            "EXCD": excd,
+            "SYMB": symb,
+            "NMIN": nmin,
+            "PINC": pinc,
+            "NEXT": next_flag,
+            "NREC": nrec,
+            "FILL": fill,
+            "KEYB": keyb,
+        }
+        tr_id = self.overseas_tr_ids.time_itemchart
+        path = self.overseas_price_paths.inquire_time_itemchartprice
+        payload = self._get(path, params=params, tr_id=tr_id)
+        self._validate_kis_business_success(payload, method="GET", path=path, tr_id=tr_id, params=params)
+        return payload
+
+    def get_overseas_inquire_balance(
+        self,
+        *,
+        account_no: str,
+        account_product_code: str,
+        ovrs_excg_cd: str,
+        tr_crcy_cd: str,
+        ctx_fk200: str = "",
+        ctx_nk200: str = "",
+    ) -> dict[str, Any]:
+        """해외주식 잔고 — GET trading/inquire-balance, TR TTTS3012R / VTTS3012R."""
+        params = {
+            "CANO": account_no,
+            "ACNT_PRDT_CD": account_product_code,
+            "OVRS_EXCG_CD": ovrs_excg_cd,
+            "TR_CRCY_CD": tr_crcy_cd,
+            "CTX_AREA_FK200": ctx_fk200,
+            "CTX_AREA_NK200": ctx_nk200,
+        }
+        tr_id = self._resolve_tr_id(
+            paper_tr_id=self.overseas_tr_ids.balance_paper,
+            live_tr_id=self.overseas_tr_ids.balance_live,
+        )
+        path = self.overseas_paths.inquire_balance
+        allow = frozenset({"CTX_AREA_FK200", "CTX_AREA_NK200"})
+        payload = self._get(path, params=params, tr_id=tr_id, allow_empty_param_keys=allow)
+        self._validate_kis_business_success(
+            payload,
+            method="GET",
+            path=path,
+            tr_id=tr_id,
+            params=params,
+        )
+        return payload
+
+    def get_overseas_inquire_nccs(
+        self,
+        *,
+        account_no: str,
+        account_product_code: str,
+        ovrs_excg_cd: str,
+        sort_sqn: str = "DS",
+        ctx_fk200: str = "",
+        ctx_nk200: str = "",
+    ) -> dict[str, Any]:
+        """해외주식 미체결내역 — GET trading/inquire-nccs, TR TTTS3018R / VTTS3018R."""
+        params = {
+            "CANO": account_no,
+            "ACNT_PRDT_CD": account_product_code,
+            "OVRS_EXCG_CD": ovrs_excg_cd,
+            "SORT_SQN": sort_sqn,
+            "CTX_AREA_FK200": ctx_fk200,
+            "CTX_AREA_NK200": ctx_nk200,
+        }
+        tr_id = self._resolve_tr_id(
+            paper_tr_id=self.overseas_tr_ids.nccs_paper,
+            live_tr_id=self.overseas_tr_ids.nccs_live,
+        )
+        path = self.overseas_paths.inquire_nccs
+        allow = frozenset({"CTX_AREA_FK200", "CTX_AREA_NK200"})
+        payload = self._get(path, params=params, tr_id=tr_id, allow_empty_param_keys=allow)
+        self._validate_kis_business_success(payload, method="GET", path=path, tr_id=tr_id, params=params)
+        return payload
+
+    def get_overseas_inquire_ccnl(
+        self,
+        *,
+        account_no: str,
+        account_product_code: str,
+        pdno: str,
+        ord_strt_dt: str,
+        ord_end_dt: str,
+        sll_buy_dvsn: str,
+        ccld_nccs_dvsn: str,
+        ovrs_excg_cd: str,
+        sort_sqn: str,
+        ord_dt: str = "",
+        ord_gno_brno: str = "",
+        odno: str = "",
+        ctx_nk200: str = "",
+        ctx_fk200: str = "",
+    ) -> dict[str, Any]:
+        """해외주식 주문체결내역 — GET trading/inquire-ccnl, TR TTTS3035R / VTTS3035R."""
+        params = {
+            "CANO": account_no,
+            "ACNT_PRDT_CD": account_product_code,
+            "PDNO": pdno,
+            "ORD_STRT_DT": ord_strt_dt,
+            "ORD_END_DT": ord_end_dt,
+            "SLL_BUY_DVSN": sll_buy_dvsn,
+            "CCLD_NCCS_DVSN": ccld_nccs_dvsn,
+            "OVRS_EXCG_CD": ovrs_excg_cd,
+            "SORT_SQN": sort_sqn,
+            "ORD_DT": ord_dt,
+            "ORD_GNO_BRNO": ord_gno_brno,
+            "ODNO": odno,
+            "CTX_AREA_NK200": ctx_nk200,
+            "CTX_AREA_FK200": ctx_fk200,
+        }
+        tr_id = self._resolve_tr_id(
+            paper_tr_id=self.overseas_tr_ids.ccnl_paper,
+            live_tr_id=self.overseas_tr_ids.ccnl_live,
+        )
+        path = self.overseas_paths.inquire_ccnl
+        allow = frozenset(
+            {
+                "CTX_AREA_NK200",
+                "CTX_AREA_FK200",
+                "ORD_DT",
+                "ORD_GNO_BRNO",
+                "ODNO",
+            }
+        )
+        payload = self._get(path, params=params, tr_id=tr_id, allow_empty_param_keys=allow)
+        self._validate_kis_business_success(payload, method="GET", path=path, tr_id=tr_id, params=params)
+        return payload
+
+    def place_overseas_order(
+        self,
+        *,
+        account_no: str,
+        account_product_code: str,
+        ovrs_excg_cd: str,
+        pdno: str,
+        ord_qty: str,
+        ovrs_ord_unpr: str,
+        ord_dv: str,
+        ctac_tlno: str = "",
+        mgco_aptm_odno: str = "",
+        ord_svr_dvsn_cd: str = "0",
+        ord_dvsn: str = "00",
+    ) -> dict[str, Any]:
+        """
+        해외주식 주문 — POST trading/order.
+        미국 NASD/NYSE/AMEX: 매수 TTTT1002U·매도 TTTT1006U (모의 V...).
+        공식 예제 order() 본문 필드와 동일.
+        """
+        self._ensure_order_execution_allowed()
+        side = ord_dv.lower().strip()
+        if side == "buy":
+            if ovrs_excg_cd not in ("NASD", "NYSE", "AMEX"):
+                raise KISClientError(f"US buy order: unsupported OVRS_EXCG_CD={ovrs_excg_cd}")
+            tr_id = self._resolve_tr_id(
+                paper_tr_id=self.overseas_tr_ids.us_buy_paper,
+                live_tr_id=self.overseas_tr_ids.us_buy_live,
+            )
+            sll_type = ""
+        elif side == "sell":
+            if ovrs_excg_cd not in ("NASD", "NYSE", "AMEX"):
+                raise KISClientError(f"US sell order: unsupported OVRS_EXCG_CD={ovrs_excg_cd}")
+            tr_id = self._resolve_tr_id(
+                paper_tr_id=self.overseas_tr_ids.us_sell_paper,
+                live_tr_id=self.overseas_tr_ids.us_sell_live,
+            )
+            sll_type = "00"
+        else:
+            raise KISClientError("ord_dv must be 'buy' or 'sell'")
+
+        body = {
+            "CANO": account_no,
+            "ACNT_PRDT_CD": account_product_code,
+            "OVRS_EXCG_CD": ovrs_excg_cd,
+            "PDNO": pdno,
+            "ORD_QTY": ord_qty,
+            "OVRS_ORD_UNPR": ovrs_ord_unpr,
+            "CTAC_TLNO": ctac_tlno,
+            "MGCO_APTM_ODNO": mgco_aptm_odno,
+            "SLL_TYPE": sll_type,
+            "ORD_SVR_DVSN_CD": ord_svr_dvsn_cd,
+            "ORD_DVSN": ord_dvsn,
+        }
+        path = self.overseas_paths.order
+        payload = self._post(path, data=body, tr_id=tr_id)
+        self._validate_kis_business_success(payload, method="POST", path=path, tr_id=tr_id, data=body)
+        return payload
+
+    def cancel_overseas_order(
+        self,
+        *,
+        account_no: str,
+        account_product_code: str,
+        ovrs_excg_cd: str,
+        pdno: str,
+        orgn_odno: str,
+        rvse_cncl_dvsn_cd: str,
+        ord_qty: str,
+        ovrs_ord_unpr: str,
+        mgco_aptm_odno: str = "",
+        ord_svr_dvsn_cd: str = "0",
+    ) -> dict[str, Any]:
+        """해외주식 정정취소주문 — POST order-rvsecncl, TR TTTT1004U / VTTT1004U."""
+        self._ensure_order_execution_allowed()
+        tr_id = self._resolve_tr_id(
+            paper_tr_id=self.overseas_tr_ids.us_order_rvsecncl_paper,
+            live_tr_id=self.overseas_tr_ids.us_order_rvsecncl_live,
+        )
+        body = {
+            "CANO": account_no,
+            "ACNT_PRDT_CD": account_product_code,
+            "OVRS_EXCG_CD": ovrs_excg_cd,
+            "PDNO": pdno,
+            "ORGN_ODNO": orgn_odno,
+            "RVSE_CNCL_DVSN_CD": rvse_cncl_dvsn_cd,
+            "ORD_QTY": ord_qty,
+            "OVRS_ORD_UNPR": ovrs_ord_unpr,
+            "MGCO_APTM_ODNO": mgco_aptm_odno,
+            "ORD_SVR_DVSN_CD": ord_svr_dvsn_cd,
+        }
+        path = self.overseas_paths.order_rvsecncl
+        payload = self._post(path, data=body, tr_id=tr_id)
+        self._validate_kis_business_success(payload, method="POST", path=path, tr_id=tr_id, data=body)
         return payload

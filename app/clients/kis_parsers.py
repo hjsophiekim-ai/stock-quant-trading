@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from app.brokers.base_broker import OpenOrder
+from app.brokers.base_broker import Fill, OpenOrder, PositionView
 
 
 def parse_kis_ord_datetime_to_utc(ord_dt: str, ord_tmd: str) -> datetime:
@@ -349,5 +349,141 @@ def normalized_fills_from_ccld_payload(payload: dict[str, Any]) -> list[dict[str
                 "ord_dt": odt,
                 "ord_tmd": otm,
             }
+        )
+    return out
+
+
+def overseas_nccs_output_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """해외 미체결 inquire-nccs: 응답 본문은 `output` 배열(공식 레거시/예제)."""
+    raw = payload.get("output")
+    if isinstance(raw, list):
+        return [x for x in raw if isinstance(x, dict)]
+    if isinstance(raw, dict):
+        return [raw]
+    return []
+
+
+def overseas_balance_cash_usd(payload: dict[str, Any]) -> float:
+    """해외주식 잔고에서 USD 주문가능·증거금 등 숫자 필드 탐색 (output2 요약 우선, examples_llm 컬럼명 기준)."""
+    keys = (
+        "frcr_drwg_psbl_amt_1",
+        "ord_psbl_frcr_amt",
+        "ovrs_ord_psbl_frcr_amt",
+        "nass_amt",
+        "tot_dncl_amt",
+        "frcr_ord_psbl_amt_1",
+    )
+    for block in (output2_rows(payload), output1_rows(payload)):
+        if not block:
+            continue
+        row = block[0]
+        for k in keys:
+            v = _row_pick(row, k, k.upper())
+            if v is None or str(v).strip() == "":
+                continue
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                continue
+    return 0.0
+
+
+def positions_from_overseas_balance_payload(payload: dict[str, Any]) -> list[PositionView]:
+    """해외주식 잔고 output1 행 → PositionView (ovrs_pdno, ovrs_cblc_qty, pchs_avg_pric)."""
+    out: list[PositionView] = []
+    for row in output1_rows(payload):
+        sym = str(_row_pick(row, "ovrs_pdno", "OVRS_PDNO", "pdno", "PDNO") or "").strip()
+        if not sym or sym in ("%", "%%"):
+            continue
+        qty_raw = _row_pick(row, "ovrs_cblc_qty", "OVRS_CBLC_QTY", "cblc_qty", "CBLC_QTY")
+        try:
+            qty = int(float(qty_raw or 0))
+        except (TypeError, ValueError):
+            qty = 0
+        if qty == 0:
+            continue
+        ap = _row_pick(row, "pchs_avg_pric", "PCHS_AVG_PRIC")
+        try:
+            avg = float(ap or 0.0)
+        except (TypeError, ValueError):
+            avg = 0.0
+        out.append(PositionView(symbol=sym.upper(), quantity=qty, average_price=avg))
+    return out
+
+
+def open_orders_from_overseas_nccs_payload(payload: dict[str, Any]) -> list[OpenOrder]:
+    """해외 미체결 output 행 → OpenOrder."""
+    orders: list[OpenOrder] = []
+    for row in overseas_nccs_output_rows(payload):
+        sym = str(_row_pick(row, "pdno", "PDNO") or "").strip()
+        odno = str(_row_pick(row, "odno", "ODNO") or "").strip()
+        if not sym or not odno:
+            continue
+        sb = str(_row_pick(row, "sll_buy_dvsn_cd", "SLL_BUY_DVSN_CD") or "").strip()
+        side: str = "sell" if sb == "01" else "buy"
+        try:
+            rem = int(float(_row_pick(row, "nccs_qty", "NCCS_QTY") or 0))
+        except (TypeError, ValueError):
+            rem = 0
+        try:
+            tot = int(float(_row_pick(row, "ft_ord_qty", "FT_ORD_QTY", "ord_qty", "ORD_QTY") or rem))
+        except (TypeError, ValueError):
+            tot = rem
+        pr_raw = _row_pick(row, "ft_ord_unpr3", "FT_ORD_UNPR3", "ovrs_ord_unpr", "OVRS_ORD_UNPR")
+        try:
+            price = float(pr_raw) if pr_raw is not None and str(pr_raw).strip() != "" else None
+        except (TypeError, ValueError):
+            price = None
+        odt = str(_row_pick(row, "ord_dt", "ORD_DT") or "")
+        otm = str(_row_pick(row, "ord_tmd", "ORD_TMD") or "")
+        created = parse_kis_ord_datetime_to_utc(odt, otm or "000000")
+        orders.append(
+            OpenOrder(
+                order_id=odno,
+                symbol=sym.upper(),
+                side=side,  # type: ignore[arg-type]
+                quantity=max(tot, rem),
+                remaining_quantity=rem,
+                price=price,
+                created_at=created,
+            )
+        )
+    return orders
+
+
+def fills_from_overseas_ccnl_payload(payload: dict[str, Any]) -> list[Fill]:
+    """해외 주문체결내역 inquire-ccnl `output` 행 → Fill (당일 체결 필터는 호출부 CCLD_NCCS_DVSN)."""
+    out: list[Fill] = []
+    for row in overseas_nccs_output_rows(payload):
+        sym = str(_row_pick(row, "pdno", "PDNO", "ovrs_pdno", "OVRS_PDNO") or "").strip()
+        if not sym:
+            continue
+        try:
+            qty = int(float(_row_pick(row, "ft_ccld_qty", "FT_CCLD_QTY", "ccld_qty", "CCLD_QTY") or 0))
+        except (TypeError, ValueError):
+            qty = 0
+        if qty <= 0:
+            continue
+        try:
+            price = float(_row_pick(row, "ft_ccld_unpr3", "FT_CCLD_UNPR3", "ccld_unpr", "CCLD_UNPR") or 0.0)
+        except (TypeError, ValueError):
+            price = 0.0
+        sb = str(_row_pick(row, "sll_buy_dvsn_cd", "SLL_BUY_DVSN_CD") or "02").strip()
+        side: str = "sell" if sb == "01" else "buy"
+        odno = str(_row_pick(row, "odno", "ODNO") or "").strip()
+        odt = str(_row_pick(row, "ord_dt", "ORD_DT") or "")
+        otm = str(_row_pick(row, "ord_tmd", "ORD_TMD", "ccld_tmd", "CCLD_TMD") or "")
+        filled_at = parse_kis_ord_datetime_to_utc(odt, otm or "000000")
+        fill_id = f"{sym}|{odno}|{odt}|{otm}|{qty}"
+        out.append(
+            Fill(
+                fill_id=fill_id,
+                order_id=odno,
+                symbol=sym.upper(),
+                side=side,  # type: ignore[arg-type]
+                quantity=qty,
+                fill_price=price,
+                filled_at=filled_at,
+            )
         )
     return out
