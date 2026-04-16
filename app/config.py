@@ -179,7 +179,14 @@ class Settings(BaseSettings):
     )
 
     # Paper 종가베팅(T+1 overnight, scalp 강제청산과 무관) — final_betting_v1 전용
-    paper_final_betting_enabled: bool = Field(default=False, alias="PAPER_FINAL_BETTING_ENABLED")
+    paper_final_betting_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "PAPER_FINAL_BETTING_ENABLED",
+            "FINAL_BETTING_ENABLED",
+            "final_betting_enabled",
+        ),
+    )
     paper_final_betting_entry_start_hhmm: str = Field(default="151000", alias="PAPER_FINAL_BETTING_ENTRY_START_HHMM")
     paper_final_betting_entry_end_hhmm: str = Field(default="151800", alias="PAPER_FINAL_BETTING_ENTRY_END_HHMM")
     paper_final_betting_max_new_positions: int = Field(default=3, ge=1, le=10, alias="PAPER_FINAL_BETTING_MAX_NEW_POSITIONS")
