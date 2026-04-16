@@ -163,9 +163,16 @@ export default function DashboardScreen({ backendUrl, onOpenBrokerSettings }: Pr
     {
       market: "us",
       title: "US",
-      status: "unknown",
-      session_state: "closed",
-      message: "US 상태 필드 미지원 — 미국 화면에서 session/상태를 직접 확인하세요.",
+      status:
+        (summary?.paper_trading as { paper_market?: string } | undefined)?.paper_market === "us"
+          ? (summary?.paper_trading?.status ?? "unknown")
+          : "unknown",
+      session_state: (summary?.paper_trading as { session_state?: string } | undefined)?.session_state ?? "closed",
+      message:
+        (summary?.paper_trading as { paper_market?: string } | undefined)?.paper_market === "us" &&
+        summary?.paper_trading?.strategy_id
+          ? `US 세션 strategy=${summary.paper_trading.strategy_id}`
+          : "요약 카드에 US 세션이 없으면 미국 Paper 화면에서 상태를 확인하세요.",
     },
   ];
   const marketCards = marketCardsFromApi.length > 0 ? marketCardsFromApi : fallbackMarketCards;

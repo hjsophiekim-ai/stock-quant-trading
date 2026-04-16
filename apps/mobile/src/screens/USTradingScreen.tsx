@@ -11,7 +11,6 @@ import {
   type TradingLogItem,
   type TradingPositionItem,
   type USStrategyId,
-  US_PAPER_STRATEGIES_IMPLEMENTED,
   US_STRATEGY_OPTIONS,
 } from "../types/trading";
 
@@ -27,6 +26,34 @@ function text(v: unknown, fallback = "—"): string {
 }
 
 const US_SESSION_LABELS: SessionState[] = ["premarket", "regular", "after_hours", "closed"];
+
+function formatHttpDetail(detail: unknown): string {
+  if (typeof detail === "string") return detail;
+  if (!detail || typeof detail !== "object") return "요청이 거절되었습니다.";
+  const d = detail as Record<string, unknown>;
+  if (d.code === "FINAL_BETTING_DISABLED") {
+    const parts = [
+      typeof d.message === "string" ? d.message : "FINAL_BETTING_DISABLED",
+      d.strategy_implemented === true ? "전략 코드: 구현됨" : "전략 코드: 확인 필요",
+      d.settings_not_reflected === true
+        ? "원인 추정: 서버 설정 캐시 불일치(fresh Settings vs get_settings)"
+        : "원인 추정: 환경변수 PAPER_FINAL_BETTING_ENABLED 등이 false/미설정",
+    ];
+    if (d.final_betting) {
+      try {
+        parts.push(JSON.stringify(d.final_betting).slice(0, 1200));
+      } catch {
+        /* ignore */
+      }
+    }
+    return parts.join("\n");
+  }
+  try {
+    return JSON.stringify(detail).slice(0, 1500);
+  } catch {
+    return "요청이 거절되었습니다.";
+  }
+}
 
 function normalizeUsSessionState(raw: unknown): SessionState {
   const s = String(raw || "")
@@ -51,6 +78,8 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
   const [logs, setLogs] = useState<TradingLogItem[]>([]);
   const [pnlText, setPnlText] = useState("");
   const [diagSummary, setDiagSummary] = useState("진단 정보 없음");
+  const [usPaperCapable, setUsPaperCapable] = useState(true);
+  const [capBanner, setCapBanner] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SymbolSearchMatch[]>([]);
   const [searchBanner, setSearchBanner] = useState<string | null>(null);
@@ -70,6 +99,24 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
     (path: string) => `${backendUrl}/api/paper-trading/${path}?market=${market}`,
     [backendUrl, market],
   );
+
+  const loadCapabilities = useCallback(async () => {
+    try {
+      const r = await fetch(`${backendUrl}/api/paper-trading/capabilities`);
+      if (!r.ok) {
+        setUsPaperCapable(false);
+        setCapBanner("capabilities API 오류 — US Paper 시작이 비활성화됩니다.");
+        return;
+      }
+      const d = (await r.json()) as { us_paper_supported?: boolean };
+      const ok = d.us_paper_supported !== false;
+      setUsPaperCapable(ok);
+      setCapBanner(ok ? null : "서버가 US Paper 를 지원하지 않는다고 응답했습니다(us_paper_supported=false).");
+    } catch {
+      setUsPaperCapable(false);
+      setCapBanner("capabilities 로드 실패 — 네트워크를 확인하세요.");
+    }
+  }, [backendUrl]);
 
   const updateSymbolDiagnostic = useCallback(
     (symbol: string | null, diagData: Record<string, unknown>, dashData: Record<string, unknown>) => {
@@ -165,13 +212,17 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
   }, [authHeaders, paperApiUrl, selectedSymbol, updateSymbolDiagnostic]);
 
   useEffect(() => {
+    void loadCapabilities();
+  }, [loadCapabilities]);
+
+  useEffect(() => {
     void refresh();
     const id = setInterval(() => void refresh(), 15_000);
     return () => clearInterval(id);
   }, [refresh]);
 
   const start = async () => {
-    if (!US_PAPER_STRATEGIES_IMPLEMENTED) return;
+    if (!usPaperCapable) return;
     setMessage("");
     try {
       const res = await fetch(paperApiUrl("start"), {
@@ -181,7 +232,7 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
       });
       const data = (await res.json()) as { detail?: unknown };
       if (!res.ok) {
-        setMessage(typeof data.detail === "string" ? data.detail : "US 세션 시작 실패");
+        setMessage(formatHttpDetail(data.detail));
         return;
       }
       setMessage("US Paper 세션 시작됨.");
@@ -283,8 +334,8 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
       <ScrollView style={{ padding: 12 }}>
         <Text style={{ fontSize: 20, fontWeight: "bold", marginBottom: 6 }}>US Trading (Paper)</Text>
         <Text style={{ color: "#64748b", fontSize: 12, marginBottom: 10 }}>
-          모든 paper API 호출에 <Text style={{ fontWeight: "700" }}>market=us</Text> 쿼리를 붙입니다. (백엔드가 아직 분기하지
-          않을 수 있습니다.)
+          모든 paper API 호출에 <Text style={{ fontWeight: "700" }}>market=us</Text> 쿼리를 붙입니다. 세션도{" "}
+          <Text style={{ fontWeight: "700" }}>market=us</Text> 로 시작해야 합니다.
         </Text>
 
         <View style={{ backgroundColor: "#eff6ff", padding: 10, borderRadius: 8, marginBottom: 10 }}>
@@ -294,14 +345,14 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
             session_state (US 라벨): <Text style={{ fontWeight: "700" }}>{sessionState}</Text>
           </Text>
           <Text style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
-            premarket / regular / after_hours / closed — 백엔드가 US 전용 필드를 주지 않으면 closed 로 표시됩니다.
+            premarket / regular / after_hours / closed — 틱 리포트의 us_session_state 를 표시합니다.
           </Text>
           <Text style={{ fontSize: 12, marginTop: 4, color: manualOverride ? "#b91c1c" : "#64748b" }}>
             수동 재개 토글: {manualOverride ? "ON" : "OFF"}
           </Text>
         </View>
 
-        {!US_PAPER_STRATEGIES_IMPLEMENTED ? (
+        {!usPaperCapable && capBanner ? (
           <View
             style={{
               backgroundColor: "#fff7ed",
@@ -312,11 +363,8 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
               marginBottom: 10,
             }}
           >
-            <Text style={{ fontWeight: "700", color: "#9a3412", marginBottom: 4 }}>미국 전략 백엔드 미구현</Text>
-            <Text style={{ fontSize: 13, color: "#9a3412" }}>
-              `us_swing_relaxed_v1`, `us_scalp_momentum_v1` 는 서버 `paper_strategy` 에 매핑되어 있지 않습니다. 시작 버튼은
-              비활성입니다.
-            </Text>
+            <Text style={{ fontWeight: "700", color: "#9a3412", marginBottom: 4 }}>US Paper 비활성</Text>
+            <Text style={{ fontSize: 13, color: "#9a3412" }}>{capBanner}</Text>
           </View>
         ) : null}
 
@@ -332,7 +380,7 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
           }}
         >
           <Picker
-            enabled={US_PAPER_STRATEGIES_IMPLEMENTED}
+            enabled={usPaperCapable}
             selectedValue={strategyId}
             onValueChange={(v) => setStrategyId(v as USStrategyId)}
             mode="dropdown"
@@ -344,7 +392,7 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
           </Picker>
         </View>
 
-        <Button title="US 자동매매 시작" onPress={start} disabled={!US_PAPER_STRATEGIES_IMPLEMENTED} />
+        <Button title="US 자동매매 시작" onPress={start} disabled={!usPaperCapable} />
         <View style={{ height: 8 }} />
         <Button title="US 자동매매 중지" onPress={stop} />
         <View style={{ height: 8 }} />
@@ -372,7 +420,7 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
             <Text style={{ fontSize: 12, color: "#b45309", marginTop: 8, lineHeight: 18 }}>{searchBanner}</Text>
           ) : (
             <Text style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>
-              `/api/stocks/search-by-symbol?market=us` — 미구현 시 빈 결과만 표시합니다.
+              `/api/stocks/search-by-symbol?market=us` — KIS search-info 기반.
             </Text>
           )}
         </View>

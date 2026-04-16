@@ -32,8 +32,11 @@ export type USStrategyId = "us_swing_relaxed_v1" | "us_scalp_momentum_v1";
 
 export const US_STRATEGY_OPTIONS: USStrategyId[] = ["us_swing_relaxed_v1", "us_scalp_momentum_v1"];
 
-/** 백엔드 `paper_strategy.strategy_for_paper_id` 기준 US 전략 미구현 */
-export const US_PAPER_STRATEGIES_IMPLEMENTED = false;
+/**
+ * US Paper 는 백엔드 `paper_strategy` + `/api/paper-trading/capabilities` 로 제공됩니다.
+ * UI는 `capabilities.us_paper_supported` 가 false 일 때만 시작 버튼을 막습니다.
+ */
+export const US_PAPER_STRATEGIES_IMPLEMENTED = true;
 
 export type SessionState = "premarket" | "regular" | "after_hours" | "closed" | string;
 

@@ -17,10 +17,17 @@ from typing import Any
 from backend.app.api.broker_routes import get_broker_service
 from backend.app.core.config import get_backend_settings
 from backend.app.engine.user_paper_loop import UserPaperTradingLoop
-from app.config import get_settings as app_get_settings
+from app.config import get_settings as app_get_settings, paper_final_betting_diagnostics, paper_final_betting_enabled_fresh
 from backend.app.portfolio.sync_engine import run_portfolio_sync
 
 logger = logging.getLogger("backend.app.engine.paper_session_controller")
+
+
+def normalize_paper_market_param(market: str | None) -> str:
+    mk = (market or "domestic").strip().lower()
+    if mk in ("us", "usa", "nyse", "nasdaq", "us_equity", "us_equities"):
+        return "us"
+    return "domestic"
 
 
 def paper_positions_refresh_due(now_mono: float, last_at: float, interval_sec: float) -> bool:
@@ -55,6 +62,7 @@ class PaperSessionController:
         self._user_loop: UserPaperTradingLoop | None = None
         self._user_loop_identity: tuple[str, ...] | None = None
         self._paper_diagnostics: dict[str, Any] = {}
+        self._last_start_diagnostics: dict[str, Any] = {}
         self._last_positions_refresh_at: float = 0.0
         self._last_paper_portfolio_sync_at: float = 0.0
         self._paper_token_ensure_meta: dict[str, Any] = {}
@@ -82,7 +90,12 @@ class PaperSessionController:
         # Paper 세션 틱 간격: 인트라데이(scalp)는 PAPER_INTRADAY_LOOP_INTERVAL_SEC, 그 외 PAPER_TRADING_INTERVAL_SEC.
         acfg = app_get_settings()
         sid = (self._strategy_id or "").lower().strip()
-        if sid == "final_betting_v1" and bool(acfg.paper_final_betting_enabled):
+        pm = (self._paper_market or "domestic").strip().lower()
+        if pm in ("us", "usa") and sid == "us_scalp_momentum_v1":
+            return max(25, int(acfg.paper_intraday_loop_interval_sec))
+        if pm in ("us", "usa") and sid == "us_swing_relaxed_v1":
+            return max(45, int(acfg.paper_trading_interval_sec))
+        if sid == "final_betting_v1" and bool(paper_final_betting_enabled_fresh()):
             return max(25, int(acfg.paper_final_betting_loop_interval_sec))
         if bool(acfg.paper_intraday_enabled) and sid in ("scalp_momentum_v1", "scalp_momentum_v2", "scalp_momentum_v3"):
             return max(20, int(acfg.paper_intraday_loop_interval_sec))
@@ -299,7 +312,9 @@ class PaperSessionController:
                     )
                 sync_iv = float(acfg.paper_portfolio_sync_interval_sec)
                 sync_due = paper_portfolio_sync_due(now_mono, self._last_paper_portfolio_sync_at, sync_iv)
-                if sync_due:
+                if (self._paper_market or "").lower() in ("us", "usa"):
+                    self._paper_diagnostics["portfolio_sync_skipped"] = True
+                elif sync_due:
                     self._paper_diagnostics["portfolio_sync_skipped"] = False
                     try:
                         run_portfolio_sync(backfill_days=settings.portfolio_sync_backfill_days, settings=settings)
@@ -356,7 +371,17 @@ class PaperSessionController:
         self._paper_market = "us" if mk in ("us", "usa", "nyse", "nasdaq", "us_equity", "us_equities") else "domestic"
 
         sid_l = (strategy_id or "").lower().strip()
-        if sid_l == "final_betting_v1" and not bool(app_get_settings().paper_final_betting_enabled):
+        fb_diag = paper_final_betting_diagnostics()
+        self._last_start_diagnostics = {
+            "strategy_id": strategy_id,
+            "effective_market": self._paper_market,
+            "paper_final_betting_enabled_fresh": bool(paper_final_betting_enabled_fresh()),
+            "paper_final_betting_enabled_cached_settings": fb_diag.get("paper_final_betting_enabled_cached_settings"),
+            "settings_cache_mismatch": fb_diag.get("settings_cache_mismatch"),
+            "final_betting_env_sources": fb_diag.get("final_betting_env_sources"),
+        }
+        logger.info("paper start diagnostics %s", self._last_start_diagnostics)
+        if sid_l == "final_betting_v1" and not bool(paper_final_betting_enabled_fresh()):
             raise ValueError("FINAL_BETTING_DISABLED")
 
         with self._lock:
@@ -381,7 +406,7 @@ class PaperSessionController:
             self._save_desired_state()
             self._append_log(
                 "info",
-                f"Paper 세션 시작 strategy={strategy_id} market={self._paper_market} (KIS 모의)",
+                f"Paper 세션 시작 strategy={strategy_id} market={self._paper_market} (KIS 모의) diag={self._last_start_diagnostics}",
             )
         return {"ok": True, "status": self._status}
 
@@ -453,6 +478,13 @@ class PaperSessionController:
                 "resume_info": dict(self._resume_info),
                 "diagnostics": dict(self._paper_diagnostics),
                 "manual_override_enabled": self._manual_override_enabled,
+                "session_state": self._last_report.get("us_session_state")
+                or self._last_report.get("krx_session_state"),
+                "final_betting_enabled_effective": paper_final_betting_diagnostics().get(
+                    "final_betting_enabled_effective"
+                ),
+                "final_betting_env_sources": paper_final_betting_diagnostics().get("final_betting_env_sources"),
+                "paper_start_diagnostics": dict(self._last_start_diagnostics),
             }
 
     def toggle_manual_override(self, requester_id: str) -> dict[str, Any]:
@@ -485,6 +517,11 @@ class PaperSessionController:
             merged["backend_git_sha"] = ver.get("git_sha", "")
             merged["backend_build_time"] = ver.get("build_time", "")
             merged["backend_app_version"] = ver.get("app_version", "")
+            fb = paper_final_betting_diagnostics()
+            merged["final_betting_enabled_effective"] = fb.get("final_betting_enabled_effective")
+            merged["final_betting_env_sources"] = fb.get("final_betting_env_sources")
+            merged["paper_final_betting_cache_mismatch"] = fb.get("settings_cache_mismatch")
+            merged["paper_start_diagnostics"] = dict(self._last_start_diagnostics)
             return merged
 
     def paper_token_ensure_snapshot(self) -> dict[str, Any]:
@@ -494,6 +531,58 @@ class PaperSessionController:
 
     def get_positions(self) -> list[dict[str, Any]]:
         return list(self._last_positions)
+
+    def _session_running(self) -> bool:
+        return bool(self._run_flag and self._thread and self._thread.is_alive())
+
+    def market_request_matches(self, market: str | None) -> tuple[bool, str, str]:
+        """(ok, requested, session) — 세션이 돌아가는데 market 쿼리가 다르면 ok=False."""
+        req = normalize_paper_market_param(market)
+        with self._lock:
+            sess = (self._paper_market or "domestic").strip().lower()
+            running = self._session_running()
+            has_user = bool(self._user_id)
+        if sess in ("us", "usa"):
+            sess = "us"
+        else:
+            sess = "domestic"
+        if running and has_user and req != sess:
+            return False, req, sess
+        return True, req, sess
+
+    def get_positions_payload(self, *, market: str | None) -> dict[str, Any]:
+        ok, req, sess = self.market_request_matches(market)
+        base = {
+            "paper_market": sess,
+            "requested_market": req,
+            "market_mismatch": not ok,
+        }
+        if not ok:
+            return {**base, "items": [], "message": "실행 중인 Paper 세션의 market 과 요청이 다릅니다."}
+        return {**base, "items": self.get_positions()}
+
+    def pnl_payload(self, *, market: str | None) -> dict[str, Any]:
+        ok, req, sess = self.market_request_matches(market)
+        p = self.pnl_from_last_report()
+        p["paper_market"] = sess
+        p["requested_market"] = req
+        p["market_mismatch"] = not ok
+        if not ok:
+            p["note"] = "market 불일치 — 마지막 틱 손익은 숨기고 0으로 표시합니다."
+            p["today_return_pct"] = 0.0
+            p["cumulative_return_pct"] = 0.0
+            p["position_count"] = 0
+            p["equity"] = None
+        return p
+
+    def logs_payload(self, *, market: str | None) -> dict[str, Any]:
+        ok, req, sess = self.market_request_matches(market)
+        return {
+            "items": self.get_logs(),
+            "paper_market": sess,
+            "requested_market": req,
+            "market_mismatch": not ok,
+        }
 
     def get_open_orders(self, user_id: str | None = None) -> dict[str, Any]:
         """사용자 Paper 계정 기준 미체결. 세션 없거나 소유자가 아니면 error."""
@@ -514,8 +603,17 @@ class PaperSessionController:
             loop = self._user_loop
         return loop.fetch_recent_fills_payload(limit=limit)
 
-    def get_dashboard_payload(self, user_id: str) -> dict[str, Any]:
+    def get_dashboard_payload(self, user_id: str, *, market: str | None = None) -> dict[str, Any]:
         """Paper 세션 틱 리포트 + 포지션/미체결/체결 + 진단(온디맨드 KIS 조회 포함)."""
+        ok_m, req_m, sess_m = self.market_request_matches(market)
+        if not ok_m:
+            return {
+                "ok": False,
+                "error": "MARKET_QUERY_MISMATCH",
+                "requested_market": req_m,
+                "paper_market": sess_m,
+                "message": "실행 중인 세션과 다른 market 입니다.",
+            }
         with self._lock:
             if self._user_id != user_id:
                 return {"ok": False, "error": "NOT_OWNER_OR_NO_SESSION"}
@@ -582,6 +680,8 @@ class PaperSessionController:
 
         return {
             "ok": True,
+            "paper_market": sess_m,
+            "requested_market": req_m,
             "status": st.get("status"),
             "strategy_id": st.get("strategy_id"),
             "failure_streak": st.get("failure_streak"),

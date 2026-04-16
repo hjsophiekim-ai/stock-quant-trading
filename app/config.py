@@ -1,4 +1,5 @@
 import json
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -348,3 +349,45 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
+
+
+_FINAL_BETTING_ENV_KEYS = (
+    "PAPER_FINAL_BETTING_ENABLED",
+    "FINAL_BETTING_ENABLED",
+    "final_betting_enabled",
+)
+
+
+def clear_settings_cache() -> None:
+    """테스트·런타임 env 변경 디버그용 — 일반 앱 경로에서는 사용하지 않음."""
+    get_settings.cache_clear()
+
+
+def _final_betting_env_raw() -> dict[str, str | None]:
+    """Render/쉘에서 설정한 값을 그대로 표면화(대소문자 변형 포함)."""
+    out: dict[str, str | None] = {k: os.environ.get(k) for k in _FINAL_BETTING_ENV_KEYS}
+    if all(v is None for v in out.values()):
+        upper_map = {str(k).upper(): v for k, v in os.environ.items()}
+        for k in _FINAL_BETTING_ENV_KEYS:
+            out[k] = upper_map.get(k.upper())
+    return out
+
+
+def paper_final_betting_enabled_fresh() -> bool:
+    """Pydantic `Settings()` 를 매번 새로 읽어 종가베팅 플래그를 판정(get_settings LRU 캐시와 무관)."""
+    return bool(Settings().paper_final_betting_enabled)
+
+
+def paper_final_betting_diagnostics() -> dict[str, object]:
+    """상태·진단 API용 — 캐시된 값 vs fresh 값 불일치를 드러냄."""
+    raw = _final_betting_env_raw()
+    fresh_b = paper_final_betting_enabled_fresh()
+    cached = get_settings()
+    cached_b = bool(cached.paper_final_betting_enabled)
+    return {
+        "final_betting_enabled_effective": fresh_b,
+        "paper_final_betting_enabled_fresh_settings": fresh_b,
+        "paper_final_betting_enabled_cached_settings": cached_b,
+        "settings_cache_mismatch": cached_b != fresh_b,
+        "final_betting_env_sources": raw,
+    }

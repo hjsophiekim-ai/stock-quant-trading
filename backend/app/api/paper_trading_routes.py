@@ -6,6 +6,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from app.clients.kis_client import KISClientError, sanitize_kis_params_for_log
+from app.config import paper_final_betting_diagnostics
 from backend.app.clients.kis_client import build_kis_client_for_paper_user
 from backend.app.engine.runtime_engine import get_runtime_engine
 from backend.app.engine.paper_session_controller import get_paper_session_controller
@@ -225,7 +226,16 @@ def start_paper_trading(
         if code == "FINAL_BETTING_DISABLED":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="final_betting_v1 은 서버 환경에서 PAPER_FINAL_BETTING_ENABLED=true 로 켠 뒤 시작할 수 있습니다.",
+                detail={
+                    "code": "FINAL_BETTING_DISABLED",
+                    "message": "final_betting_v1 은 서버에서 종가베팅 플래그가 켜져 있어야 합니다.",
+                    "hint": "PAPER_FINAL_BETTING_ENABLED=true (또는 FINAL_BETTING_ENABLED / final_betting_enabled)",
+                    "strategy_implemented": True,
+                    "settings_not_reflected": bool(
+                        (paper_final_betting_diagnostics().get("settings_cache_mismatch") or False)
+                    ),
+                    "final_betting": paper_final_betting_diagnostics(),
+                },
             ) from exc
         raise HTTPException(status_code=400, detail=code) from exc
     except RuntimeError as exc:
@@ -299,12 +309,31 @@ def paper_trading_manual_override_toggle(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
 
+@router.get("/capabilities")
+def get_paper_trading_capabilities() -> dict[str, object]:
+    """앱이 US Paper·종가베팅 가능 여부를 동적으로 판단할 때 사용(네트워크 호출 없음)."""
+    fb = paper_final_betting_diagnostics()
+    return {
+        "us_paper_supported": True,
+        "us_symbol_search_supported": True,
+        "us_strategies_supported": True,
+        "final_betting_enabled_effective": fb.get("final_betting_enabled_effective"),
+        "final_betting_env_sources": fb.get("final_betting_env_sources"),
+        "paper_final_betting_cache_mismatch": fb.get("settings_cache_mismatch"),
+    }
+
+
 @router.get("/status")
 def get_paper_trading_status(
-    market: str | None = Query(default=None, description="예약: domestic | us"),
+    market: str | None = Query(default=None, description="domestic | us — 세션과 다르면 market_mismatch"),
 ) -> dict[str, object]:
+    ctrl = get_paper_session_controller()
+    ok_m, req, sess = ctrl.market_request_matches(market)
     return {
-        **get_paper_session_controller().status_payload(),
+        **ctrl.status_payload(),
+        "requested_market": req,
+        "paper_market_normalized": sess,
+        "market_mismatch": not ok_m,
         "runtime_engine": get_runtime_engine().status(),
     }
 
@@ -317,17 +346,16 @@ def paper_engine_status() -> dict[str, Any]:
 
 @router.get("/positions")
 def get_paper_positions(
-    market: str | None = Query(default=None, description="예약: domestic | us"),
+    market: str | None = Query(default=None, description="domestic | us"),
 ) -> dict[str, object]:
-    items = get_paper_session_controller().get_positions()
-    return {"items": items}
+    return get_paper_session_controller().get_positions_payload(market=market)
 
 
 @router.get("/pnl")
 def get_paper_pnl(
-    market: str | None = Query(default=None, description="예약: domestic | us"),
+    market: str | None = Query(default=None, description="domestic | us"),
 ) -> dict[str, object]:
-    return get_paper_session_controller().pnl_from_last_report()
+    return get_paper_session_controller().pnl_payload(market=market)
 
 
 @router.get("/diagnostics")
@@ -341,19 +369,20 @@ def get_paper_diagnostics(
 @router.get("/dashboard-data")
 def get_paper_dashboard_data(
     authorization: str | None = Header(default=None),
-    market: str | None = Query(default=None, description="예약: domestic | us"),
+    market: str | None = Query(default=None, description="domestic | us"),
 ) -> dict[str, object]:
     """사용자 Paper 계정 기준 포지션·미체결·체결·틱 리포트(대시보드와 동일 소스)."""
     user = _paper_user(authorization)
-    return get_paper_session_controller().get_dashboard_payload(user.id)
+    return get_paper_session_controller().get_dashboard_payload(user.id, market=market)
 
 
 @router.get("/logs")
 def get_paper_logs(
-    market: str | None = Query(default=None, description="예약: domestic | us"),
+    market: str | None = Query(default=None, description="domestic | us"),
 ) -> dict[str, object]:
     ctrl = get_paper_session_controller()
-    logs = ctrl.get_logs()
+    out = ctrl.logs_payload(market=market)
+    logs = list(out.get("items") or [])
     if not logs:
         logs = [
             {
@@ -362,4 +391,5 @@ def get_paper_logs(
                 "message": "Paper 로그 없음 — 시작 후 틱이 돌면 누적됩니다.",
             }
         ]
-    return {"items": logs[:40]}
+    out["items"] = logs[:40]
+    return out

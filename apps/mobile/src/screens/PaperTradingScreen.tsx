@@ -28,6 +28,23 @@ function formatApiErrorDetail(detail: unknown): string {
   }
   if (!detail || typeof detail !== "object") return "요청이 거절되었습니다.";
   const d = detail as Record<string, unknown>;
+  if (d.code === "FINAL_BETTING_DISABLED") {
+    const lines = [
+      typeof d.message === "string" ? d.message : "FINAL_BETTING_DISABLED",
+      d.strategy_implemented === true ? "전략: 서버에 구현되어 있음" : "전략: 구현 여부 불명",
+      d.settings_not_reflected === true
+        ? "구분: 설정값 미반영 가능(get_settings 캐시 vs fresh Settings 불일치). 서버 재시작을 시도하세요."
+        : "구분: 서버 환경변수/플래그가 꺼져 있거나 false",
+    ];
+    if (d.final_betting) {
+      try {
+        lines.push(JSON.stringify(d.final_betting).slice(0, 1200));
+      } catch {
+        /* ignore */
+      }
+    }
+    return lines.join("\n");
+  }
   const headMap: Record<string, string> = {
     PAPER_BALANCE_PREFLIGHT_FAILED: "잔고 preflight 실패",
     TOKEN_RATE_LIMIT_WAIT: "KIS 호출 제한",

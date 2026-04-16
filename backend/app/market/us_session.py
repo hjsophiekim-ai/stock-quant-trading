@@ -93,3 +93,30 @@ def analyze_us_equity_session(now_utc: datetime | None = None) -> UsEquitySessio
         order_block_reason="현지 시간 기준 뉴욕 증시 휴장/비거래 구간으로 간주.",
         local_time_et_iso=local.isoformat(timespec="seconds"),
     )
+
+
+def us_equity_session_to_intraday_snapshot(us: UsEquitySessionSnapshot):
+    """`IntradaySchedulerJobs` 가 기대하는 KRX 스냅샷 형태로 매핑(미국 현지 세션 기준)."""
+    from app.strategy.intraday_common import IntradaySessionSnapshot
+
+    st = (us.state or "").strip().lower()
+    if st == "premarket":
+        mapped = "pre_open"
+    elif st == "regular":
+        mapped = "regular"
+    elif st == "afterhours":
+        mapped = "after_hours"
+    else:
+        mapped = "closed"
+
+    freason = (us.fetch_block_reason or "").strip() or ""
+    oreason = (us.order_block_reason or "").strip() or ""
+
+    return IntradaySessionSnapshot(
+        state=mapped,
+        fetch_allowed=bool(us.fetch_allowed),
+        order_allowed=bool(us.order_allowed),
+        fetch_block_reason=freason,
+        order_block_reason=oreason,
+        regular_session_kst=st == "regular",
+    )
