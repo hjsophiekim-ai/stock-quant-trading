@@ -174,6 +174,49 @@ def _calendar_days_between(ymd_a: str, ymd_b: str) -> int:
         return 999
 
 
+def _ema(series: pd.Series, span: int) -> pd.Series:
+    return series.ewm(span=max(1, int(span)), adjust=False).mean()
+
+
+def _rsi14(close: pd.Series) -> float:
+    if len(close) < 15:
+        return 50.0
+    delta = close.diff()
+    up = delta.clip(lower=0.0)
+    down = (-delta).clip(lower=0.0)
+    gain = up.ewm(alpha=1.0 / 14.0, adjust=False).mean()
+    loss = down.ewm(alpha=1.0 / 14.0, adjust=False).mean().replace(0.0, 1e-9)
+    rs = gain / loss
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    return float(rsi.iloc[-1])
+
+
+def _auction_instability_score(sub_s: pd.DataFrame, session_ymd: str) -> float:
+    tail = _bars_between_times(sub_s, session_ymd, time(15, 10), time(15, 20))
+    if tail.empty or len(tail) < 3:
+        return 0.0
+    c = tail["close"].astype(float)
+    ref = float(c.iloc[0]) if float(c.iloc[0]) > 0 else 1.0
+    return float((c.max() - c.min()) / ref * 100.0)
+
+
+def _flow_proxy_score(sub_s: pd.DataFrame, session_ymd: str, day_vwap_last: float) -> tuple[float, bool]:
+    """기관/외국인 수급 데이터 부재 시 close auction 내 매수 우위 프록시."""
+    late = _bars_between_times(sub_s, session_ymd, time(14, 50), time(15, 20))
+    if late.empty or len(late) < 8:
+        return 0.0, False
+    close = late["close"].astype(float)
+    open_ = late["open"].astype(float)
+    vol = late["volume"].astype(float).clip(lower=0.0)
+    green_ratio = float((close >= open_).mean())
+    drift = (float(close.iloc[-1]) / max(float(close.iloc[0]), 1e-9) - 1.0) * 100.0
+    vol_bias = float(vol.tail(10).sum() / max(vol.sum(), 1e-9))
+    vwap_ok = float(close.iloc[-1]) >= day_vwap_last * 0.998 if day_vwap_last > 0 else True
+    score = 0.4 * min(1.0, green_ratio) + 0.3 * min(1.0, max(0.0, drift + 0.25)) + 0.3 * min(1.0, vol_bias * 2.2)
+    ok = score >= 0.54 and vwap_ok
+    return float(score), bool(ok)
+
+
 @dataclass
 class FinalBettingV1Strategy(BaseStrategy):
     """Paper 전용 종가베팅. IntradaySchedulerJobs + 분봉 유니버스에서만 동작."""
@@ -266,6 +309,8 @@ class FinalBettingV1Strategy(BaseStrategy):
         # --- overnight exits (다음 거래일 오전) ---
         carry = st.final_betting_carry
         fb_positions: dict[str, Any] = dict(carry.get("positions") or {})
+        tv_hist: dict[str, list[float]] = dict(carry.get("tv_history") or {})
+        tv_hist_day: dict[str, str] = dict(carry.get("tv_history_day") or {})
         scale_start = time(9, 30)
         scale_end = time(10, 0)
         tp_mult = 1.0 + float(cfg.paper_final_betting_target_pct) / 100.0
@@ -293,9 +338,7 @@ class FinalBettingV1Strategy(BaseStrategy):
                 if gap_pct >= 1.2 and not partial_done:
                     exit_reason = "gap_take_profit"
                     exit_qty = max(1, qty // 2)
-                elif scale_start <= now.time() <= scale_end and not partial_done and last_px >= avg * max(
-                    1.008, min(tp_mult, 1.025)
-                ):
+                elif scale_start <= now.time() <= scale_end and not partial_done and last_px >= avg * max(1.01, min(tp_mult, 1.02)):
                     exit_reason = "scaleout_morning_strength"
                     exit_qty = max(1, qty // 2)
                 elif not morning_bars.empty:
@@ -339,6 +382,14 @@ class FinalBettingV1Strategy(BaseStrategy):
         if high_vol_block:
             self.last_intraday_signal_breakdown["blocked"] = "high_volatility_risk_no_entry"
             return signals
+        # 지수 필터: KOSPI 수익률이 음수이고 5일 EMA 아래면 보수화(신규 진입 중단).
+        if not context.kospi_index.empty and "close" in context.kospi_index.columns:
+            kclose = context.kospi_index.sort_values("date")["close"].astype(float)
+            if len(kclose) >= 6:
+                ema5 = _ema(kclose, 5)
+                if float(kclose.iloc[-1]) < float(ema5.iloc[-1]) and kospi_day_ret <= -0.35:
+                    self.last_intraday_signal_breakdown["blocked"] = "index_filter_risk_off"
+                    return signals
         if not in_entry_window:
             return signals
 
@@ -403,7 +454,7 @@ class FinalBettingV1Strategy(BaseStrategy):
 
                 qp = self.quote_by_symbol.get(sym) or {}
                 liq = quote_liquidity_from_payload(qp) if qp else None
-                if liq and liq["acml_tr_pbmn"] < min_tv * 0.85:
+                if liq and liq["acml_tr_pbmn"] < min_tv:
                     self.last_diagnostics.append(
                         {
                             "symbol": sym,
@@ -438,6 +489,32 @@ class FinalBettingV1Strategy(BaseStrategy):
                 vw = session_vwap(sub_s)
                 day_vwap_last = float(vw.iloc[-1]) if len(vw) else last_close
                 morning_lo = float(morning["low"].min()) if not morning.empty else day_lo
+                close_s = sub_s["close"].astype(float)
+                ma5 = _ema(close_s, 5)
+                ma5_last = float(ma5.iloc[-1]) if len(ma5) else last_close
+                rsi14 = _rsi14(close_s)
+                pullback_ok = ma5_last > 0 and abs(last_close - ma5_last) / ma5_last <= 0.0085
+                rsi_ok = 40.0 <= rsi14 <= 52.0
+                last_bar = sub_s.sort_values("date").iloc[-1]
+                prev_low = float(sub_s.sort_values("date")["low"].iloc[-2]) if len(sub_s) >= 2 else float(last_bar["low"])
+                support_ok = float(last_bar["close"]) < float(last_bar["open"]) and float(last_bar["low"]) >= prev_low * 0.999
+                flow_score, flow_ok = _flow_proxy_score(sub_s, session_ymd, day_vwap_last)
+                auction_instability = _auction_instability_score(sub_s, session_ymd)
+                if auction_instability >= 1.0:
+                    self.last_diagnostics.append(
+                        {
+                            "symbol": sym,
+                            "strategy": "final_betting_v1",
+                            "entered": False,
+                            "blocked_reason": "auction_price_instability",
+                            "morning_accumulation_score": 0.0,
+                            "distribution_unfinished_score": 0.0,
+                            "close_strength_score": 0.0,
+                            "final_betting_rank": None,
+                            "auction_instability_pct": round(auction_instability, 4),
+                        }
+                    )
+                    continue
 
                 m_score, m_ok = _morning_accumulation_score(morning, day_vwap_last)
                 a_score, a_ok = _afternoon_distribution_score(
@@ -448,7 +525,9 @@ class FinalBettingV1Strategy(BaseStrategy):
                 in_high_zone = last_close >= day_lo + (day_hi - day_lo) * (1.0 - zone_pct / 100.0) if day_hi > day_lo else False
                 rel_score, rel_ok = _relative_strength_ok(sym, sub_s, kospi_day_ret, cohort_tv, min_tv)
 
+                # 5신호(기존 요구) + 종가 눌림목 조건을 게이트로 추가
                 hits = sum([m_ok, a_ok, close_above, in_high_zone, rel_ok])
+                pullback_gate = pullback_ok and rsi_ok and support_ok and flow_ok
                 close_strength = (
                     0.25 * (1.0 if close_above else 0.0)
                     + 0.25 * (1.0 if in_high_zone else 0.0)
@@ -456,8 +535,20 @@ class FinalBettingV1Strategy(BaseStrategy):
                     + 0.25 * rel_score
                 )
                 blocked = ""
+                tv_sym = float(liq["acml_tr_pbmn"]) if liq else 0.0
+                if tv_hist_day.get(sym) != today and tv_sym > 0:
+                    hist = list(tv_hist.get(sym) or [])
+                    hist.append(tv_sym)
+                    tv_hist[sym] = hist[-5:]
+                    tv_hist_day[sym] = today
+                avg5 = sum(tv_hist.get(sym) or []) / max(1, len(tv_hist.get(sym) or []))
+                tv_spike_ok = avg5 <= 0 or tv_sym >= avg5 * 2.0
                 if hits < 3:
                     blocked = "signals_lt_3"
+                elif not pullback_gate:
+                    blocked = "pullback_signal_not_met"
+                elif not tv_spike_ok:
+                    blocked = "trade_value_not_2x_avg5"
                 if liq:
                     # 과열·급등 휴리스틱: 당일 고가 대비 종가 괴리가 너무 크면 제외
                     if day_hi > 0 and last_close > day_hi * 1.095:
@@ -478,13 +569,35 @@ class FinalBettingV1Strategy(BaseStrategy):
                             "close_above_vwap": bool(close_above),
                             "close_near_day_high": bool(in_high_zone),
                             "relative_trade_value_strong": bool(rel_ok),
+                            "pullback_near_ma5": bool(pullback_ok),
+                            "rsi14": round(rsi14, 3),
+                            "rsi_band_ok": bool(rsi_ok),
+                            "support_candle_ok": bool(support_ok),
+                            "flow_proxy_score": round(flow_score, 4),
+                            "flow_proxy_ok": bool(flow_ok),
+                            "trade_value_today": round(tv_sym, 2),
+                            "trade_value_avg5": round(avg5, 2),
+                            "trade_value_spike_ok": bool(tv_spike_ok),
                             "final_betting_rank": None,
                         }
                     )
                     continue
 
-                tv_sym = float(liq["acml_tr_pbmn"]) if liq else (cohort_tv[0] if cohort_tv else 0.0)
-                ranked.append((tv_sym, sym, {"m": m_score, "a": a_score, "cs": float(close_strength), "hits": hits}))
+                ranked.append(
+                    (
+                        tv_sym,
+                        sym,
+                        {
+                            "m": m_score,
+                            "a": a_score,
+                            "cs": float(close_strength),
+                            "hits": hits,
+                            "rsi14": rsi14,
+                            "flow_proxy_score": flow_score,
+                            "avg5": avg5,
+                        },
+                    )
+                )
 
         ranked.sort(key=lambda x: -x[0])
         entries_added = 0
@@ -515,6 +628,9 @@ class FinalBettingV1Strategy(BaseStrategy):
             in_high_zone = last_close >= day_lo + (day_hi - day_lo) * (1.0 - zone_pct / 100.0) if day_hi > day_lo else False
             rel_score, rel_ok = _relative_strength_ok(sym, sub_s, kospi_day_ret, cohort_tv, min_tv)
             hits = sum([m_ok, a_ok, close_above, in_high_zone, rel_ok])
+            close_s = sub_s["close"].astype(float)
+            rsi14 = _rsi14(close_s)
+            flow_score, _ = _flow_proxy_score(sub_s, session_ymd, day_vwap_last)
             close_strength = (
                 0.25 * (1.0 if close_above else 0.0)
                 + 0.25 * (1.0 if in_high_zone else 0.0)
@@ -564,10 +680,15 @@ class FinalBettingV1Strategy(BaseStrategy):
                 "close_above_vwap": bool(close_above),
                 "close_near_day_high": bool(in_high_zone),
                 "relative_trade_value_strong": bool(rel_ok),
+                "rsi14": round(rsi14, 3),
+                "flow_proxy_score": round(flow_score, 4),
                 "final_betting_rank": rank_i + 1,
             }
             self.last_diagnostics.append(diag)
             entries_added += 1
+
+        carry["tv_history"] = tv_hist
+        carry["tv_history_day"] = tv_hist_day
 
         return signals
 

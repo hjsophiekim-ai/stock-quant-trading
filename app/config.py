@@ -182,15 +182,15 @@ class Settings(BaseSettings):
     paper_final_betting_enabled: bool = Field(default=False, alias="PAPER_FINAL_BETTING_ENABLED")
     paper_final_betting_entry_start_hhmm: str = Field(default="151000", alias="PAPER_FINAL_BETTING_ENTRY_START_HHMM")
     paper_final_betting_entry_end_hhmm: str = Field(default="151800", alias="PAPER_FINAL_BETTING_ENTRY_END_HHMM")
-    paper_final_betting_max_new_positions: int = Field(default=2, ge=1, le=10, alias="PAPER_FINAL_BETTING_MAX_NEW_POSITIONS")
+    paper_final_betting_max_new_positions: int = Field(default=3, ge=1, le=10, alias="PAPER_FINAL_BETTING_MAX_NEW_POSITIONS")
     paper_final_betting_max_capital_per_position_pct: float = Field(
-        default=6.5,
+        default=10.0,
         ge=0.5,
         le=30.0,
         alias="PAPER_FINAL_BETTING_MAX_CAPITAL_PER_POSITION_PCT",
     )
     paper_final_betting_target_pct: float = Field(default=2.0, ge=0.1, le=20.0, alias="PAPER_FINAL_BETTING_TARGET_PCT")
-    paper_final_betting_stop_loss_pct: float = Field(default=0.45, ge=0.05, le=5.0, alias="PAPER_FINAL_BETTING_STOP_LOSS_PCT")
+    paper_final_betting_stop_loss_pct: float = Field(default=2.0, ge=0.05, le=8.0, alias="PAPER_FINAL_BETTING_STOP_LOSS_PCT")
     paper_final_betting_exit_deadline_hhmm: str = Field(default="103000", alias="PAPER_FINAL_BETTING_EXIT_DEADLINE_HHMM")
     paper_final_betting_min_trade_value_krw: float = Field(
         default=3_000_000_000.0,
