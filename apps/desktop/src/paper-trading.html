@@ -256,6 +256,10 @@
           </div>
           <p style="margin: 8px 0 4px; font-size: 0.8rem; color: #64748b">tick_report (JSON)</p>
           <pre id="paperTickReportPre" class="tick-report-pre"></pre>
+          <div id="paperFinalBettingRulePanel" style="display: none; margin: 8px 0 10px; background: #ecfeff; border: 1px solid #a5f3fc; border-radius: 6px; padding: 8px 10px">
+            <div style="font-size: 0.82rem; font-weight: 700; margin-bottom: 4px">final_betting_v1 진입 차단/완화 상태</div>
+            <pre id="paperFinalBettingRulePre" class="tick-report-pre" style="margin: 0"></pre>
+          </div>
           <h4 style="margin: 12px 0 4px; font-size: 0.95rem">심볼별 스윙 조건 (last_diagnostics)</h4>
           <table class="diag-table" id="paperDiagTable">
             <thead>
@@ -576,6 +580,8 @@
         const paperIntradayBarsTableBody = document.getElementById("paperIntradayBarsTableBody");
         const paperIntradayFetchErrDetail = document.getElementById("paperIntradayFetchErrDetail");
         const paperTickReportPre = document.getElementById("paperTickReportPre");
+        const paperFinalBettingRulePanel = document.getElementById("paperFinalBettingRulePanel");
+        const paperFinalBettingRulePre = document.getElementById("paperFinalBettingRulePre");
         const paperDiagTableBody = document.getElementById("paperDiagTableBody");
         const paperFilterTableBody = document.getElementById("paperFilterTableBody");
         const paperDashPanel = document.getElementById("paperDashPanel");
@@ -789,6 +795,26 @@
               Object.keys(tr0).forEach(function (k) {
                 if (tr[k] === undefined) tr[k] = tr0[k];
               });
+              var fbBreak = tr.intraday_signal_breakdown && typeof tr.intraday_signal_breakdown === "object" ? tr.intraday_signal_breakdown : {};
+              var fbProfile = fbBreak.strategy_profile != null ? String(fbBreak.strategy_profile) : "";
+              if (paperFinalBettingRulePanel && paperFinalBettingRulePre) {
+                if (fbProfile === "final_betting_v1") {
+                  var mf = fbBreak.market_filter && typeof fbBreak.market_filter === "object" ? fbBreak.market_filter : {};
+                  var lines = [
+                    "blocked_reason: " + (fbBreak.blocked != null ? String(fbBreak.blocked) : "—"),
+                    "market_filter_ok: " + (mf.market_filter_ok != null ? String(mf.market_filter_ok) : "—"),
+                    "us_night_proxy_ret_pct: " + (mf.us_night_proxy_ret_pct != null ? String(mf.us_night_proxy_ret_pct) : "—"),
+                    "kospi_day_ret_pct: " + (mf.kospi_day_ret_pct != null ? String(mf.kospi_day_ret_pct) : "—"),
+                    "loss_days: " + (Array.isArray(fbBreak.loss_days) ? fbBreak.loss_days.join(", ") : "—"),
+                    "rest_until_kst_date: " + (fbBreak.rest_until_kst_date != null && fbBreak.rest_until_kst_date !== "" ? String(fbBreak.rest_until_kst_date) : "—"),
+                  ];
+                  paperFinalBettingRulePanel.style.display = "block";
+                  paperFinalBettingRulePre.textContent = lines.join("\n");
+                } else {
+                  paperFinalBettingRulePanel.style.display = "none";
+                  paperFinalBettingRulePre.textContent = "";
+                }
+              }
               var tf = tr.timeframe != null ? String(tr.timeframe) : "";
               var ibs = Array.isArray(tr.intraday_bar_fetch_summary) ? tr.intraday_bar_fetch_summary : [];
               var showIntraday =

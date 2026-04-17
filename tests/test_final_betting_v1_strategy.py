@@ -23,7 +23,8 @@ def _index_frame(n: int = 130) -> pd.DataFrame:
     return pd.DataFrame(
         {
             "date": pd.date_range("2026-01-01", periods=n, freq="D", tz=_KST),
-            "close": [100.0 + 0.02 * i for i in range(n)],
+            # final_betting_v1 시장필터(us_night_proxy>=+0.8%)를 통과하도록 일간 +1% 추세.
+            "close": [100.0 * (1.01**i) for i in range(n)],
             "value": [15.0 + 0.01 * i for i in range(n)],
         }
     )
@@ -150,7 +151,7 @@ def test_overnight_exit_time_exit(monkeypatch: pytest.MonkeyPatch) -> None:
     sigs = strat.generate_signals(ctx)
     sells = [s for s in sigs if s.side == "sell"]
     assert sells
-    assert sells[0].reason == "time_exit_next_morning"
+    assert sells[0].reason == "hard_exit_1100"
 
 
 def test_intraday_state_roll_preserves_carry(tmp_path: Path) -> None:
