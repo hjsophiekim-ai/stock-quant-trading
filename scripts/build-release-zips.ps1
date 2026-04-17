@@ -63,6 +63,12 @@ if ($DesktopExePath -and (Test-Path -LiteralPath $DesktopExePath)) {
     if ($LASTEXITCODE -ge 8) { throw "robocopy failed with exit $LASTEXITCODE" }
     Push-Location $work
     npm install --cache $npmCache
+    try {
+      $sha = (& git -C $root rev-parse HEAD 2>$null)
+      if ($sha) { $env:GIT_COMMIT_SHA = $sha.Trim() }
+    } catch {
+      Remove-Item Env:GIT_COMMIT_SHA -ErrorAction SilentlyContinue
+    }
     $env:BACKEND_URL = $BackendUrl
     $env:APP_ENV = $AppEnv
     npm run build:win

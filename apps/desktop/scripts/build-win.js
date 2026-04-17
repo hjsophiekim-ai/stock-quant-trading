@@ -66,11 +66,14 @@ async function ensureBuildIcon() {
 }
 
 function writePaperBuildStampForPack() {
-  let gitSha = "";
-  try {
-    gitSha = execSync("git rev-parse HEAD", { cwd: repoRootForGit, encoding: "utf8" }).trim();
-  } catch {
-    gitSha = "";
+  /** 릴리스 스크립트가 TEMP 복사본에서 빌드할 때 .git 이 없으므로, 우선 환경변수로 주입 */
+  let gitSha = String(process.env.GIT_COMMIT_SHA || process.env.GITHUB_SHA || "").trim();
+  if (!gitSha) {
+    try {
+      gitSha = execSync("git rev-parse HEAD", { cwd: repoRootForGit, encoding: "utf8" }).trim();
+    } catch {
+      gitSha = "";
+    }
   }
   const stampUtc = new Date().toISOString();
   const stampObj = { stamped_utc: stampUtc, git_sha: gitSha, npm_pkg: "0.1.0", backend_url_packed: backendUrl };
