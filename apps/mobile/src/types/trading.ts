@@ -45,12 +45,23 @@ export interface PaperStatusResponse {
   market?: MarketId | string;
   status?: string;
   strategy_id?: string | null;
+  /** 세션의 paper 시장 (domestic | us) */
+  paper_market?: string | null;
+  /** GET status 쿼리로 요청한 market */
+  requested_market?: string | null;
+  market_mismatch?: boolean;
   session_state?: SessionState;
   user_session_active?: boolean;
   failure_streak?: number;
   last_error?: string | null;
   last_tick_at?: string | null;
   krx_session_state?: string;
+  backend_git_sha?: string;
+  backend_build_time?: string;
+  backend_app_version?: string;
+  final_betting_enabled_effective?: boolean;
+  paper_start_diagnostics?: Record<string, unknown>;
+  manual_override_enabled?: boolean;
 }
 
 export interface MarketStatusCard {

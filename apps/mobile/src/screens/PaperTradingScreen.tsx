@@ -17,7 +17,8 @@ type Props = {
 
 type LogItem = { ts?: string; level?: string; message?: string };
 
-function formatApiErrorDetail(detail: unknown): string {
+function formatApiErrorDetail(detail: unknown, opts?: { clientRequestStrategy?: string }): string {
+  const clientReq = opts?.clientRequestStrategy != null ? String(opts.clientRequestStrategy).trim() : "";
   if (typeof detail === "string") return detail;
   if (Array.isArray(detail)) {
     try {
@@ -29,8 +30,31 @@ function formatApiErrorDetail(detail: unknown): string {
   if (!detail || typeof detail !== "object") return "요청이 거절되었습니다.";
   const d = detail as Record<string, unknown>;
   if (d.code === "FINAL_BETTING_DISABLED") {
+    const echoReq =
+      d.request_strategy_id != null && String(d.request_strategy_id).trim() !== ""
+        ? String(d.request_strategy_id).trim()
+        : clientReq;
+    const eff = echoReq || clientReq;
+    if (eff.toLowerCase() !== "final_betting_v1") {
+      const mis = [
+        "⚠ 요청/응답 strategy 불일치 의심",
+        "FINAL_BETTING_DISABLED 는 final_betting_v1 전용입니다.",
+        `· 클라이언트가 보낸 strategy_id: ${clientReq || "(없음)"}`,
+        `· 서버 detail.request_strategy_id: ${d.request_strategy_id != null ? String(d.request_strategy_id) : "(없음)"}`,
+      ];
+      if (d.paper_start_diagnostics && typeof d.paper_start_diagnostics === "object") {
+        try {
+          mis.push(`· paper_start_diagnostics: ${JSON.stringify(d.paper_start_diagnostics).slice(0, 800)}`);
+        } catch {
+          /* ignore */
+        }
+      }
+      mis.push("모바일·백엔드 빌드 SHA 를 비교하세요.");
+      return mis.join("\n");
+    }
     const lines = [
       typeof d.message === "string" ? d.message : "FINAL_BETTING_DISABLED",
+      "요청 strategy_id: final_betting_v1 (확인됨)",
       d.strategy_implemented === true ? "전략: 서버에 구현되어 있음" : "전략: 구현 여부 불명",
       d.settings_not_reflected === true
         ? "구분: 설정값 미반영 가능(get_settings 캐시 vs fresh Settings 불일치). 서버 재시작을 시도하세요."
@@ -121,6 +145,8 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
   const [logs, setLogs] = useState<LogItem[]>([]);
   const [canStart, setCanStart] = useState(false);
   const [brokerHint, setBrokerHint] = useState("");
+  const [versionMeta, setVersionMeta] = useState("빌드 정보 로딩…");
+  const [lastStartPayload, setLastStartPayload] = useState("(아직 없음)");
 
   const authHeaders = useCallback((): HeadersInit => {
     const token = getAuthState().accessToken;
@@ -181,22 +207,42 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
     await checkBrokerGate();
     try {
       const headers = authHeaders();
-      const [statusRes, posRes, pnlRes, logsRes] = await Promise.all([
+      const [statusRes, posRes, pnlRes, logsRes, diagRes] = await Promise.all([
         fetch(paperApiUrl("status"), { headers }),
         fetch(paperApiUrl("positions"), { headers }),
         fetch(paperApiUrl("pnl"), { headers }),
         fetch(paperApiUrl("logs"), { headers }),
+        fetch(paperApiUrl("diagnostics"), { headers }),
       ]);
-      const statusData = await statusRes.json();
+      const statusData = (await statusRes.json()) as Record<string, unknown>;
       const posData = await posRes.json();
       const pnlData = await pnlRes.json();
       const logsData = await logsRes.json();
+      const diagData = (await diagRes.json().catch(() => ({}))) as Record<string, unknown>;
+      const sha = String(statusData.backend_git_sha || diagData.backend_git_sha || "—");
+      const bt = String(statusData.backend_build_time || diagData.backend_build_time || "—");
+      const sid = statusData.strategy_id != null ? String(statusData.strategy_id) : "—";
+      const pm = statusData.paper_market != null ? String(statusData.paper_market) : String(diagData.paper_market ?? "—");
+      const rm =
+        statusData.requested_market != null && String(statusData.requested_market) !== ""
+          ? String(statusData.requested_market)
+          : market;
+      const fb =
+        statusData.final_betting_enabled_effective !== undefined && statusData.final_betting_enabled_effective !== null
+          ? String(statusData.final_betting_enabled_effective)
+          : diagData.final_betting_enabled_effective != null
+            ? String(diagData.final_betting_enabled_effective)
+            : "—";
+      const mm = statusData.market_mismatch === true ? "YES" : "no";
+      setVersionMeta(
+        `backend_git_sha: ${sha}\nbackend_build_time: ${bt}\nstatus.strategy_id: ${sid}\nrequested_market: ${rm}\nsession paper_market: ${pm}\nfinal_betting_enabled_effective: ${fb}\nmarket_mismatch: ${mm}`,
+      );
       if (statusRes.ok) {
-        setStatus(statusData.status ?? "stopped");
-        setStrategyRunning(statusData.strategy_id ?? null);
+        setStatus(String(statusData.status ?? "stopped"));
+        setStrategyRunning((statusData.strategy_id as string | null) ?? null);
         setFailureStreak(Number(statusData.failure_streak ?? 0));
-        setLastError(statusData.last_error ?? null);
-        setLastTick(statusData.last_tick_at ?? null);
+        setLastError((statusData.last_error as string | null) ?? null);
+        setLastTick((statusData.last_tick_at as string | null) ?? null);
         setManualOverride(Boolean(statusData.manual_override_enabled));
       }
       if (posRes.ok) setPositions(posData.items ?? []);
@@ -209,7 +255,7 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
     } catch {
       setMessage("network error");
     }
-  }, [authHeaders, checkBrokerGate, paperApiUrl]);
+  }, [authHeaders, checkBrokerGate, market, paperApiUrl]);
 
   useEffect(() => {
     void refresh();
@@ -220,19 +266,36 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
   const start = async () => {
     if (!canStart) return;
     setMessage("");
+    const sid = strategyId;
+    const body = JSON.stringify({ strategy_id: sid, market });
+    setLastStartPayload(`start payload: ${body}`);
     try {
       const res = await fetch(paperApiUrl("start"), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ strategy_id: strategyId, market }),
+        body,
       });
-      const data = (await res.json()) as { detail?: unknown };
+      const data = (await res.json()) as { detail?: unknown; start_request_echo?: unknown };
       if (!res.ok) {
-        let shown = formatApiErrorDetail(data?.detail);
+        let shown = formatApiErrorDetail(data?.detail, { clientRequestStrategy: sid });
+        const dr = data?.detail as Record<string, unknown> | undefined;
+        shown += "\n\n--- HTTP 오류 메타 ---\n";
+        if (dr && typeof dr === "object") {
+          if (dr.code != null) shown += `response detail.code: ${String(dr.code)}\n`;
+          if (dr.message != null) shown += `response detail.message: ${String(dr.message)}\n`;
+          const psd = dr.paper_start_diagnostics as Record<string, unknown> | undefined;
+          if (psd && typeof psd === "object") {
+            shown += `controller paper_start_diagnostics.strategy_id: ${String(psd.strategy_id ?? "")}\n`;
+            shown += `controller paper_start_diagnostics.effective_market: ${String(psd.effective_market ?? "")}\n`;
+          }
+        }
+        shown += `last start payload (UI): ${body}\n`;
         shown = await appendKisBalanceDebugLines(backendUrl, authHeaders(), shown);
         setMessage(shown);
         return;
       }
+      const echo = data.start_request_echo != null ? JSON.stringify(data.start_request_echo) : "";
+      setLastStartPayload(`start payload: ${body}${echo ? `\n서버 echo: ${echo}` : ""}`);
       setMessage("Paper 세션 시작됨 (KIS 모의 주문 루프). 첫 틱까지 수십 초 걸릴 수 있습니다.");
       await refresh();
     } catch {
@@ -308,6 +371,19 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
           앱에 저장한 <Text style={{ fontWeight: "700" }}>paper</Text> 브로커로만 동작합니다. live 계정·live 주문 경로는 사용하지
           않습니다. 전역 <Text style={{ fontWeight: "700" }}>/api/runtime-engine</Text> 과 별도 세션입니다.
         </Text>
+
+        <View style={{ backgroundColor: "#f0fdf4", padding: 10, borderRadius: 8, marginBottom: 10, borderWidth: 1, borderColor: "#86efac" }}>
+          <Text style={{ fontWeight: "700", marginBottom: 4 }}>빌드·세션 진단 (스크린샷용)</Text>
+          <Text style={{ fontSize: 11, color: "#0f172a", lineHeight: 18 }} selectable>
+            {versionMeta}
+          </Text>
+        </View>
+        <View style={{ backgroundColor: "#faf5ff", padding: 10, borderRadius: 8, marginBottom: 10, borderWidth: 1, borderColor: "#e9d5ff" }}>
+          <Text style={{ fontWeight: "700", marginBottom: 4 }}>마지막 시작 요청</Text>
+          <Text style={{ fontSize: 11, color: "#334155", lineHeight: 18 }} selectable>
+            {lastStartPayload}
+          </Text>
+        </View>
 
         <View style={{ backgroundColor: "#eff6ff", padding: 10, borderRadius: 8, marginBottom: 10 }}>
           <Text style={{ fontWeight: "700" }}>상태: {status}</Text>

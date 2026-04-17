@@ -454,6 +454,9 @@ class PaperSessionController:
         return {"ok": True, "status": self._status}
 
     def status_payload(self) -> dict[str, Any]:
+        from backend.app.core.version_info import get_backend_version_payload
+
+        ver = get_backend_version_payload()
         with self._lock:
             return {
                 "mode": "paper",
@@ -461,6 +464,9 @@ class PaperSessionController:
                 "session_user_id": self._user_id,
                 "strategy_id": self._strategy_id,
                 "paper_market": self._paper_market,
+                "backend_git_sha": ver.get("git_sha", ""),
+                "backend_build_time": ver.get("build_time", ""),
+                "backend_app_version": ver.get("app_version", ""),
                 "user_session_active": bool(self._run_flag and self._thread and self._thread.is_alive()),
                 "failure_streak": self._failure_streak,
                 "max_failures": self._max_failures(),
@@ -486,6 +492,11 @@ class PaperSessionController:
                 "final_betting_env_sources": paper_final_betting_diagnostics().get("final_betting_env_sources"),
                 "paper_start_diagnostics": dict(self._last_start_diagnostics),
             }
+
+    def last_start_diagnostics_snapshot(self) -> dict[str, Any]:
+        """마지막 start() 직전에 기록된 진단(HTTP 오류 detail 용)."""
+        with self._lock:
+            return dict(self._last_start_diagnostics)
 
     def toggle_manual_override(self, requester_id: str) -> dict[str, Any]:
         if self._user_id and self._user_id != requester_id:

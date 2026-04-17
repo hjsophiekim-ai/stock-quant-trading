@@ -178,6 +178,13 @@ def start_paper_trading(
     if sid == "live":
         raise HTTPException(status_code=400, detail="strategy_id 'live' 는 사용할 수 없습니다 (live 차단).")
     ctrl = get_paper_session_controller()
+    req_strategy_raw = payload.strategy_id.strip()
+    mk_raw = (payload.market or "domestic").strip().lower()
+    req_market_norm = (
+        "us"
+        if mk_raw in ("us", "usa", "nyse", "nasdaq", "us_equity", "us_equities")
+        else "domestic"
+    )
     try:
         ctrl.start(user.id, payload.strategy_id.strip(), market=payload.market)
     except ValueError as exc:
@@ -230,6 +237,9 @@ def start_paper_trading(
                     "code": "FINAL_BETTING_DISABLED",
                     "message": "final_betting_v1 은 서버에서 종가베팅 플래그가 켜져 있어야 합니다.",
                     "hint": "PAPER_FINAL_BETTING_ENABLED=true (또는 FINAL_BETTING_ENABLED / final_betting_enabled)",
+                    "request_strategy_id": req_strategy_raw,
+                    "request_market": payload.market,
+                    "paper_start_diagnostics": ctrl.last_start_diagnostics_snapshot(),
                     "strategy_implemented": True,
                     "settings_not_reflected": bool(
                         (paper_final_betting_diagnostics().get("settings_cache_mismatch") or False)
@@ -248,7 +258,15 @@ def start_paper_trading(
     runtime_start: dict[str, Any] | None = None
     if payload.link_runtime_engine:
         runtime_start = get_runtime_engine().start()
-    return {"ok": True, **ctrl.status_payload(), "runtime_engine_start": runtime_start}
+    return {
+        "ok": True,
+        "start_request_echo": {
+            "strategy_id": req_strategy_raw,
+            "market": req_market_norm,
+        },
+        **ctrl.status_payload(),
+        "runtime_engine_start": runtime_start,
+    }
 
 
 @router.post("/stop")

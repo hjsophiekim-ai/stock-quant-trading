@@ -27,13 +27,35 @@ function text(v: unknown, fallback = "—"): string {
 
 const US_SESSION_LABELS: SessionState[] = ["premarket", "regular", "after_hours", "closed"];
 
-function formatHttpDetail(detail: unknown): string {
+function formatHttpDetail(detail: unknown, clientRequestStrategy?: string): string {
+  const clientReq = clientRequestStrategy != null ? String(clientRequestStrategy).trim() : "";
   if (typeof detail === "string") return detail;
   if (!detail || typeof detail !== "object") return "요청이 거절되었습니다.";
   const d = detail as Record<string, unknown>;
   if (d.code === "FINAL_BETTING_DISABLED") {
+    const echoReq =
+      d.request_strategy_id != null && String(d.request_strategy_id).trim() !== ""
+        ? String(d.request_strategy_id).trim()
+        : clientReq;
+    const eff = echoReq || clientReq;
+    if (eff.toLowerCase() !== "final_betting_v1") {
+      const parts = [
+        "⚠ 요청/응답 strategy 불일치 의심 (US에서 FINAL_BETTING_DISABLED)",
+        `클라이언트 strategy_id: ${clientReq || "(없음)"}`,
+        `서버 detail.request_strategy_id: ${d.request_strategy_id != null ? String(d.request_strategy_id) : "(없음)"}`,
+      ];
+      if (d.paper_start_diagnostics && typeof d.paper_start_diagnostics === "object") {
+        try {
+          parts.push(`paper_start_diagnostics: ${JSON.stringify(d.paper_start_diagnostics).slice(0, 800)}`);
+        } catch {
+          /* ignore */
+        }
+      }
+      return parts.join("\n");
+    }
     const parts = [
       typeof d.message === "string" ? d.message : "FINAL_BETTING_DISABLED",
+      "요청 strategy_id: final_betting_v1 (확인됨)",
       d.strategy_implemented === true ? "전략 코드: 구현됨" : "전략 코드: 확인 필요",
       d.settings_not_reflected === true
         ? "원인 추정: 서버 설정 캐시 불일치(fresh Settings vs get_settings)"
@@ -80,6 +102,9 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
   const [diagSummary, setDiagSummary] = useState("진단 정보 없음");
   const [usPaperCapable, setUsPaperCapable] = useState(true);
   const [capBanner, setCapBanner] = useState<string | null>(null);
+  const [capRawJson, setCapRawJson] = useState<string>("(capabilities 로드 전)");
+  const [versionMeta, setVersionMeta] = useState("빌드 정보 로딩…");
+  const [lastStartPayload, setLastStartPayload] = useState("(아직 없음)");
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SymbolSearchMatch[]>([]);
   const [searchBanner, setSearchBanner] = useState<string | null>(null);
@@ -105,16 +130,23 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
       const r = await fetch(`${backendUrl}/api/paper-trading/capabilities`);
       if (!r.ok) {
         setUsPaperCapable(false);
+        setCapRawJson(`HTTP ${r.status} (capabilities)`);
         setCapBanner("capabilities API 오류 — US Paper 시작이 비활성화됩니다.");
         return;
       }
       const d = (await r.json()) as { us_paper_supported?: boolean };
+      try {
+        setCapRawJson(JSON.stringify(d, null, 2));
+      } catch {
+        setCapRawJson(String(d));
+      }
       const ok = d.us_paper_supported !== false;
       setUsPaperCapable(ok);
       setCapBanner(ok ? null : "서버가 US Paper 를 지원하지 않는다고 응답했습니다(us_paper_supported=false).");
     } catch {
       setUsPaperCapable(false);
       setCapBanner("capabilities 로드 실패 — 네트워크를 확인하세요.");
+      setCapRawJson("(capabilities fetch error)");
     }
   }, [backendUrl]);
 
@@ -174,6 +206,25 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
       lastDiagRef.current = diagData;
       lastDashRef.current = dashData;
 
+      const sha = String(statusData.backend_git_sha || diagData.backend_git_sha || "—");
+      const bt = String(statusData.backend_build_time || diagData.backend_build_time || "—");
+      const sid = statusData.strategy_id != null ? String(statusData.strategy_id) : "—";
+      const pm = statusData.paper_market != null ? String(statusData.paper_market) : String(diagData.paper_market ?? "—");
+      const rm =
+        statusData.requested_market != null && String(statusData.requested_market) !== ""
+          ? String(statusData.requested_market)
+          : market;
+      const fb =
+        statusData.final_betting_enabled_effective !== undefined && statusData.final_betting_enabled_effective !== null
+          ? String(statusData.final_betting_enabled_effective)
+          : diagData.final_betting_enabled_effective != null
+            ? String(diagData.final_betting_enabled_effective)
+            : "—";
+      const mm = statusData.market_mismatch === true ? "YES" : "no";
+      setVersionMeta(
+        `backend_git_sha: ${sha}\nbackend_build_time: ${bt}\nstatus.strategy_id: ${sid}\nrequested_market: ${rm}\nsession paper_market: ${pm}\nfinal_betting_enabled_effective: ${fb}\nmarket_mismatch: ${mm}`,
+      );
+
       if (statusRes.ok) {
         setStatus(text(statusData.status, "stopped"));
         setStrategyRunning((statusData.strategy_id as string | null) ?? null);
@@ -209,7 +260,7 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
     } catch {
       setMessage("network error");
     }
-  }, [authHeaders, paperApiUrl, selectedSymbol, updateSymbolDiagnostic]);
+  }, [authHeaders, market, paperApiUrl, selectedSymbol, updateSymbolDiagnostic]);
 
   useEffect(() => {
     void loadCapabilities();
@@ -224,17 +275,35 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
   const start = async () => {
     if (!usPaperCapable) return;
     setMessage("");
+    const sid = strategyId;
+    const body = JSON.stringify({ strategy_id: sid, market });
+    setLastStartPayload(`start payload: ${body}`);
     try {
       const res = await fetch(paperApiUrl("start"), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ strategy_id: strategyId, market }),
+        body,
       });
-      const data = (await res.json()) as { detail?: unknown };
+      const data = (await res.json()) as { detail?: unknown; start_request_echo?: unknown };
       if (!res.ok) {
-        setMessage(formatHttpDetail(data.detail));
+        let shown = formatHttpDetail(data.detail, sid);
+        const dr = data.detail as Record<string, unknown> | undefined;
+        shown += "\n\n--- HTTP 오류 메타 ---\n";
+        if (dr && typeof dr === "object") {
+          if (dr.code != null) shown += `response detail.code: ${String(dr.code)}\n`;
+          if (dr.message != null) shown += `response detail.message: ${String(dr.message)}\n`;
+          const psd = dr.paper_start_diagnostics as Record<string, unknown> | undefined;
+          if (psd && typeof psd === "object") {
+            shown += `controller paper_start_diagnostics.strategy_id: ${String(psd.strategy_id ?? "")}\n`;
+            shown += `controller paper_start_diagnostics.effective_market: ${String(psd.effective_market ?? "")}\n`;
+          }
+        }
+        shown += `last start payload (UI): ${body}\n`;
+        setMessage(shown);
         return;
       }
+      const echo = data.start_request_echo != null ? JSON.stringify(data.start_request_echo) : "";
+      setLastStartPayload(`start payload: ${body}${echo ? `\n서버 echo: ${echo}` : ""}`);
       setMessage("US Paper 세션 시작됨.");
       await refresh();
     } catch {
@@ -337,6 +406,25 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
           모든 paper API 호출에 <Text style={{ fontWeight: "700" }}>market=us</Text> 쿼리를 붙입니다. 세션도{" "}
           <Text style={{ fontWeight: "700" }}>market=us</Text> 로 시작해야 합니다.
         </Text>
+
+        <View style={{ backgroundColor: "#f0fdf4", padding: 10, borderRadius: 8, marginBottom: 10, borderWidth: 1, borderColor: "#86efac" }}>
+          <Text style={{ fontWeight: "700", marginBottom: 4 }}>빌드·세션 진단 (스크린샷용)</Text>
+          <Text style={{ fontSize: 11, color: "#0f172a", lineHeight: 18 }} selectable>
+            {versionMeta}
+          </Text>
+        </View>
+        <View style={{ backgroundColor: "#faf5ff", padding: 10, borderRadius: 8, marginBottom: 10, borderWidth: 1, borderColor: "#e9d5ff" }}>
+          <Text style={{ fontWeight: "700", marginBottom: 4 }}>capabilities (raw)</Text>
+          <Text style={{ fontSize: 10, color: "#475569", lineHeight: 16, fontFamily: "monospace" }} selectable>
+            {capRawJson.slice(0, 2500)}
+          </Text>
+        </View>
+        <View style={{ backgroundColor: "#faf5ff", padding: 10, borderRadius: 8, marginBottom: 10, borderWidth: 1, borderColor: "#e9d5ff" }}>
+          <Text style={{ fontWeight: "700", marginBottom: 4 }}>마지막 US Paper 시작 요청</Text>
+          <Text style={{ fontSize: 11, color: "#334155", lineHeight: 18 }} selectable>
+            {lastStartPayload}
+          </Text>
+        </View>
 
         <View style={{ backgroundColor: "#eff6ff", padding: 10, borderRadius: 8, marginBottom: 10 }}>
           <Text style={{ fontWeight: "700" }}>상태: {status}</Text>

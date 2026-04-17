@@ -79,6 +79,19 @@
           Paper API 호출에 <b>market=us</b> 를 붙입니다. 세션도 <code>POST /start</code> body 의 <code>market: "us"</code> 로
           시작해야 포지션·대시보드가 일치합니다. 서버 <code>/api/paper-trading/capabilities</code> 로 지원 여부를 확인합니다.
         </p>
+        <p id="usUiStampLine" class="muted" style="margin-bottom: 10px"></p>
+        <div class="panel" style="background: #f0fdf4; border-color: #86efac; font-size: 0.82rem">
+          <div style="font-weight: 700; margin-bottom: 4px">빌드·세션 진단 (스크린샷용)</div>
+          <pre id="usVersionPre" style="margin: 0; white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 0.78rem"></pre>
+        </div>
+        <div class="panel" style="background: #faf5ff; border-color: #e9d5ff; font-size: 0.82rem">
+          <div style="font-weight: 700">capabilities (raw)</div>
+          <pre id="usCapRawPre" class="muted" style="margin: 6px 0 0; white-space: pre-wrap; font-size: 0.75rem; max-height: 180px; overflow: auto"></pre>
+        </div>
+        <div class="panel" style="background: #faf5ff; border-color: #e9d5ff; font-size: 0.82rem">
+          <div style="font-weight: 700">마지막 US Paper 시작 요청</div>
+          <pre id="usStartDebug" style="margin: 6px 0 0; white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 0.78rem">(아직 없음)</pre>
+        </div>
 
         <div class="warn" id="usBackendWarn" style="display: none">
           <b>US Paper 비활성</b><br />
@@ -133,12 +146,32 @@
     </div>
 
     <script src="./runtime-config.js"></script>
+    <script src="./paper-build-stamp.js"></script>
     <script src="./auth-session.js"></script>
     <script>
       (async function () {
         var MARKET = "us";
         var backendUrl = effectiveBackendUrl();
         var usPaperCapable = true;
+        try {
+          var _uus = window.PAPER_UI_BUILD_STAMP || {};
+          var _usha = String(_uus.git_sha || "");
+          if (_usha.length > 8 && _usha.indexOf("dev workspace") === -1) {
+            document.title = "미국 Paper · " + _usha.slice(0, 7);
+          }
+          var _usl = document.getElementById("usUiStampLine");
+          if (_usl) {
+            _usl.textContent =
+              "UI stamp: git " +
+              (_usha || "—") +
+              " · UTC " +
+              (_uus.stamped_utc || _uus.utc || "—") +
+              " · BACKEND_URL " +
+              (window.RUNTIME_CONFIG && window.RUNTIME_CONFIG.BACKEND_URL
+                ? window.RUNTIME_CONFIG.BACKEND_URL
+                : "(runtime-config)");
+          }
+        } catch (_eUs) {}
         function paperApiUrl(segment) {
           return backendUrl + "/api/paper-trading/" + segment + "?market=" + encodeURIComponent(MARKET);
         }
@@ -150,16 +183,25 @@
         }
 
         async function loadCapabilities() {
+          var capPre = document.getElementById("usCapRawPre");
           try {
             var cr = await fetch(backendUrl + "/api/paper-trading/capabilities");
             if (!cr.ok) {
               usPaperCapable = false;
+              if (capPre) capPre.textContent = "HTTP " + cr.status + " (capabilities)";
               document.getElementById("usBackendWarn").style.display = "block";
               document.getElementById("usBackendWarnText").innerText = "capabilities HTTP 오류 — 시작을 막습니다.";
               document.getElementById("startBtn").disabled = true;
               return;
             }
             var cap = await cr.json();
+            if (capPre) {
+              try {
+                capPre.textContent = JSON.stringify(cap, null, 2);
+              } catch (eCap) {
+                capPre.textContent = String(cap);
+              }
+            }
             usPaperCapable = cap.us_paper_supported !== false;
             if (!usPaperCapable) {
               document.getElementById("usBackendWarn").style.display = "block";
@@ -172,6 +214,7 @@
             }
           } catch (e) {
             usPaperCapable = false;
+            if (capPre) capPre.textContent = "capabilities fetch error: " + String(e && e.message ? e.message : e);
             document.getElementById("usBackendWarn").style.display = "block";
             document.getElementById("usBackendWarnText").innerText = "capabilities 로드 실패 — 네트워크 확인.";
             document.getElementById("startBtn").disabled = true;
@@ -217,6 +260,86 @@
           return "closed";
         }
 
+        function formatUsStartErrorDetail(detail, clientStrategy) {
+          var cs = clientStrategy != null ? String(clientStrategy).trim() : "";
+          if (typeof detail === "string") return detail;
+          if (!detail || typeof detail !== "object") return "요청이 거절되었습니다.";
+          var d = detail;
+          if (d.code === "FINAL_BETTING_DISABLED") {
+            var echoReq =
+              d.request_strategy_id != null && d.request_strategy_id !== ""
+                ? String(d.request_strategy_id).trim()
+                : cs;
+            if (String(echoReq || cs).toLowerCase() !== "final_betting_v1") {
+              return (
+                "⚠ 요청/응답 strategy 불일치 의심 (US에서 FINAL_BETTING_DISABLED)\n" +
+                "· 클라이언트 strategy_id: " +
+                (cs || "(없음)") +
+                "\n· detail.request_strategy_id: " +
+                (d.request_strategy_id != null ? String(d.request_strategy_id) : "(없음)") +
+                "\n" +
+                (d.paper_start_diagnostics
+                  ? "paper_start_diagnostics: " + JSON.stringify(d.paper_start_diagnostics).slice(0, 800)
+                  : "")
+              );
+            }
+            return typeof d.message === "string" ? d.message : "FINAL_BETTING_DISABLED";
+          }
+          try {
+            return JSON.stringify(d).slice(0, 1500);
+          } catch (e2) {
+            return "요청이 거절되었습니다.";
+          }
+        }
+
+        function renderUsVersionPre(statusData, diagData) {
+          var pre = document.getElementById("usVersionPre");
+          if (!pre) return;
+          var s = statusData || {};
+          var d = diagData || {};
+          var sha = s.backend_git_sha || d.backend_git_sha || "—";
+          var bt = s.backend_build_time || d.backend_build_time || "—";
+          var av = s.backend_app_version || d.backend_app_version || "—";
+          var sid = s.strategy_id != null ? String(s.strategy_id) : "—";
+          var pm = s.paper_market != null ? String(s.paper_market) : d.paper_market != null ? String(d.paper_market) : "—";
+          var rm = s.requested_market != null && s.requested_market !== "" ? String(s.requested_market) : MARKET;
+          var mm = s.market_mismatch === true ? "YES" : "no";
+          var fb =
+            s.final_betting_enabled_effective !== undefined && s.final_betting_enabled_effective !== null
+              ? String(s.final_betting_enabled_effective)
+              : d.final_betting_enabled_effective != null
+                ? String(d.final_betting_enabled_effective)
+                : "—";
+          var stamp = "";
+          try {
+            var u = window.PAPER_UI_BUILD_STAMP || {};
+            stamp =
+              "ui_git_sha: " +
+              (u.git_sha || "—") +
+              "\nui_stamped_utc: " +
+              (u.stamped_utc || u.utc || "—") +
+              "\n";
+          } catch (e0) {}
+          pre.textContent =
+            stamp +
+            "backend_git_sha: " +
+            sha +
+            "\nbackend_build_time: " +
+            bt +
+            "\nbackend_app_version: " +
+            av +
+            "\nstatus.strategy_id: " +
+            sid +
+            "\nrequested_market (status API): " +
+            rm +
+            "\nsession paper_market: " +
+            pm +
+            "\nfinal_betting_enabled_effective: " +
+            fb +
+            "\nmarket_mismatch: " +
+            mm;
+        }
+
         async function refresh() {
           try {
             var h = await authHeaders();
@@ -238,6 +361,7 @@
             var diagData = await res[5].json().catch(function () {
               return {};
             });
+            renderUsVersionPre(statusData, diagData);
             if (diagData && Object.keys(diagData).length) {
               document.getElementById("diagPanel").style.display = "block";
               document.getElementById("diagPre").innerText = JSON.stringify(diagData, null, 2).slice(0, 6000);
@@ -290,16 +414,50 @@
 
         document.getElementById("startBtn").addEventListener("click", async function () {
           if (!usPaperCapable) return;
-          var strategyId = document.getElementById("strategyId").value;
+          var sel = document.getElementById("strategyId");
+          var strategyId = sel && sel.value != null ? String(sel.value).trim() : "";
+          var startBody = { strategy_id: strategyId, market: MARKET };
+          var bodyStr = JSON.stringify(startBody);
+          var sdEl = document.getElementById("usStartDebug");
+          if (sdEl) sdEl.textContent = "start payload: " + bodyStr;
           var r = await authFetch(paperApiUrl("start"), {
             method: "POST",
             headers: await authHeaders({ "Content-Type": "application/json" }),
-            body: JSON.stringify({ strategy_id: strategyId, market: MARKET }),
+            body: bodyStr,
           });
           var data = await r.json().catch(function () {
             return {};
           });
-          document.getElementById("message").innerText = r.ok ? "시작 요청 완료" : JSON.stringify(data.detail || data);
+          if (!r.ok) {
+            var dr = data.detail;
+            var shown = formatUsStartErrorDetail(dr, strategyId);
+            shown +=
+              "\n\n--- HTTP 오류 메타 ---\nlast start payload (UI): " +
+              bodyStr +
+              "\n";
+            if (dr && typeof dr === "object") {
+              if (dr.code != null) shown += "response detail.code: " + String(dr.code) + "\n";
+              if (dr.message != null) shown += "response detail.message: " + String(dr.message) + "\n";
+              var psd = dr.paper_start_diagnostics;
+              if (psd && typeof psd === "object") {
+                shown +=
+                  "controller paper_start_diagnostics.strategy_id: " +
+                  (psd.strategy_id != null ? String(psd.strategy_id) : "") +
+                  "\n";
+                shown +=
+                  "controller paper_start_diagnostics.effective_market: " +
+                  (psd.effective_market != null ? String(psd.effective_market) : "") +
+                  "\n";
+              }
+            }
+            document.getElementById("message").innerText = shown;
+          } else {
+            if (sdEl) {
+              var echo = data.start_request_echo ? JSON.stringify(data.start_request_echo) : "";
+              sdEl.textContent = "start payload: " + bodyStr + (echo ? "\n서버 echo: " + echo : "");
+            }
+            document.getElementById("message").innerText = "시작 요청 완료";
+          }
           refresh();
         });
 

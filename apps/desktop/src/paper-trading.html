@@ -160,6 +160,21 @@
           경로와 혼합되지 않습니다. 전역 <b>/api/runtime-engine</b> 과는 별도 세션입니다. 시작은 <b>trading_mode=paper</b> 및 연결
           테스트 성공 후에만 허용됩니다.
         </p>
+        <p id="paperUiStampLine" class="row" style="color: #475569; font-size: 0.78rem; margin: 0 0 8px"></p>
+        <div class="panel" id="paperVersionPanel" style="background: #f0fdf4; border-color: #86efac">
+          <div style="font-weight: 700; font-size: 0.9rem; margin-bottom: 4px">빌드·세션 진단 (스크린샷용)</div>
+          <pre
+            id="paperVersionPre"
+            style="margin: 0; font-size: 0.78rem; white-space: pre-wrap; font-family: ui-monospace, monospace; line-height: 1.4"
+          ></pre>
+        </div>
+        <div class="panel" id="paperStartDebugPanel" style="background: #faf5ff; border-color: #e9d5ff">
+          <div style="font-weight: 700; font-size: 0.9rem">마지막 Paper 시작 요청</div>
+          <pre
+            id="paperStartDebug"
+            style="margin: 6px 0 0; font-size: 0.78rem; white-space: pre-wrap; font-family: ui-monospace, monospace"
+          >(아직 없음)</pre>
+        </div>
         <div id="brokerGate" class="broker-gate" style="display: none"></div>
         <div class="panel" style="background: #eff6ff; border-color: #bfdbfe">
           <div><b>상태:</b> <span id="statusText">stopped</span></div>
@@ -295,11 +310,29 @@
     <div id="toast" class="toast" role="status"></div>
 
     <script src="./runtime-config.js"></script>
+    <script src="./paper-build-stamp.js"></script>
     <script src="./auth-session.js"></script>
     <script>
       (async function () {
         const backendUrl = effectiveBackendUrl();
         const MARKET = "domestic";
+        try {
+          var _ust = window.PAPER_UI_BUILD_STAMP || {};
+          var _ush = String(_ust.git_sha || "");
+          if (_ush.length > 8 && _ush.indexOf("dev workspace") === -1) {
+            document.title = "국내 Paper · " + _ush.slice(0, 7);
+          }
+          var _sl = document.getElementById("paperUiStampLine");
+          if (_sl) {
+            _sl.textContent =
+              "UI stamp: git " +
+              (_ush || "—") +
+              " · UTC " +
+              (_ust.stamped_utc || _ust.utc || "—") +
+              " · BACKEND_URL " +
+              (window.RUNTIME_CONFIG && window.RUNTIME_CONFIG.BACKEND_URL ? window.RUNTIME_CONFIG.BACKEND_URL : "(see runtime-config)");
+          }
+        } catch (_eTitle) {}
         function paperApiUrl(segment) {
           return backendUrl + "/api/paper-trading/" + segment + "?market=" + encodeURIComponent(MARKET);
         }
@@ -369,7 +402,9 @@
         }
 
         /** FastAPI detail(문자열 | 객체) → 사용자용 메시지 (a message → b code+message → c JSON) */
-        function formatApiErrorDetail(detail) {
+        function formatApiErrorDetail(detail, opts) {
+          opts = opts || {};
+          var clientReq = opts.clientRequestStrategy != null ? String(opts.clientRequestStrategy).trim() : "";
           if (typeof detail === "string") return detail;
           if (Array.isArray(detail)) {
             try {
@@ -381,8 +416,30 @@
           if (!detail || typeof detail !== "object") return "요청이 거절되었습니다.";
           var d = detail;
           if (d.code === "FINAL_BETTING_DISABLED") {
+            var echoReq =
+              d.request_strategy_id != null && d.request_strategy_id !== ""
+                ? String(d.request_strategy_id).trim()
+                : clientReq;
+            var eff = echoReq || clientReq;
+            var effL = eff.toLowerCase();
+            if (effL !== "final_betting_v1") {
+              var mis = [
+                "⚠ 요청/응답 strategy 불일치 의심",
+                "FINAL_BETTING_DISABLED 인데, 이 오류는 final_betting_v1 전용입니다.",
+                "· 화면에서 보낸 strategy_id(클라이언트 기록): " + (clientReq || "(없음)"),
+                "· 서버 detail.request_strategy_id: " + (d.request_strategy_id != null ? String(d.request_strategy_id) : "(없음)"),
+              ];
+              if (d.paper_start_diagnostics && typeof d.paper_start_diagnostics === "object") {
+                try {
+                  mis.push("· paper_start_diagnostics: " + JSON.stringify(d.paper_start_diagnostics).slice(0, 800));
+                } catch (e4) {}
+              }
+              mis.push("상단 backend_git_sha / UI git stamp 과 서버 로그의 strategy 를 비교하세요.");
+              return mis.join("\n");
+            }
             var lines = [
               typeof d.message === "string" ? d.message : "FINAL_BETTING_DISABLED",
+              "요청 strategy_id: final_betting_v1 (확인됨)",
               d.strategy_implemented === true ? "전략: 서버에 구현됨" : "전략: 확인 필요",
               d.settings_not_reflected === true
                 ? "구분: 설정값 미반영 가능(get_settings 캐시). 서버 재시작을 시도하세요."
@@ -520,15 +577,64 @@
         const paperFillsList = document.getElementById("paperFillsList");
         const paperOpenOrdersList = document.getElementById("paperOpenOrdersList");
 
+        function renderPaperVersionPre(statusData, diagData) {
+          var pre = document.getElementById("paperVersionPre");
+          if (!pre) return;
+          var s = statusData || {};
+          var d = diagData || {};
+          var sha = s.backend_git_sha || d.backend_git_sha || "—";
+          var bt = s.backend_build_time || d.backend_build_time || "—";
+          var av = s.backend_app_version || d.backend_app_version || "—";
+          var sid = s.strategy_id != null ? String(s.strategy_id) : "—";
+          var pm = s.paper_market != null ? String(s.paper_market) : d.paper_market != null ? String(d.paper_market) : "—";
+          var rm = s.requested_market != null && s.requested_market !== "" ? String(s.requested_market) : MARKET;
+          var mm = s.market_mismatch === true ? "YES" : "no";
+          var fb =
+            s.final_betting_enabled_effective !== undefined && s.final_betting_enabled_effective !== null
+              ? String(s.final_betting_enabled_effective)
+              : d.final_betting_enabled_effective != null
+                ? String(d.final_betting_enabled_effective)
+                : "—";
+          var stamp = "";
+          try {
+            var u = window.PAPER_UI_BUILD_STAMP || {};
+            stamp =
+              "ui_git_sha: " +
+              (u.git_sha || "—") +
+              "\nui_stamped_utc: " +
+              (u.stamped_utc || u.utc || "—") +
+              "\n";
+          } catch (e0) {}
+          pre.textContent =
+            stamp +
+            "backend_git_sha: " +
+            sha +
+            "\nbackend_build_time: " +
+            bt +
+            "\nbackend_app_version: " +
+            av +
+            "\nstatus.strategy_id: " +
+            sid +
+            "\nrequested_market (status API): " +
+            rm +
+            "\nsession paper_market: " +
+            pm +
+            "\nfinal_betting_enabled_effective: " +
+            fb +
+            "\nmarket_mismatch: " +
+            mm;
+        }
+
         async function refreshPaper() {
           await checkBrokerGate();
           try {
-            const [statusRes, posRes, pnlRes, logsRes, dashRes] = await Promise.all([
+            const [statusRes, posRes, pnlRes, logsRes, dashRes, diagRes] = await Promise.all([
               fetch(paperApiUrl("status")),
               fetch(paperApiUrl("positions")),
               fetch(paperApiUrl("pnl")),
               fetch(paperApiUrl("logs")),
               authFetch(paperApiUrl("dashboard-data"), { headers: await authHeaders() }),
+              fetch(paperApiUrl("diagnostics")),
             ]);
             const statusData = await statusRes.json();
             const posData = await posRes.json();
@@ -537,6 +643,10 @@
             const dashData = await dashRes.json().catch(function () {
               return {};
             });
+            const diagData = await diagRes.json().catch(function () {
+              return {};
+            });
+            renderPaperVersionPre(statusData, diagData);
             if (statusRes.ok) {
               var st = statusData.status || "stopped";
               statusText.innerText = st;
@@ -1041,22 +1151,49 @@
 
         document.getElementById("startBtn").addEventListener("click", async function () {
           if (startBtn.disabled) return;
-          const strategyId = document.getElementById("strategyId").value;
+          var sel = document.getElementById("strategyId");
+          var strategyId = sel && sel.value != null ? String(sel.value).trim() : "";
+          var startBody = { strategy_id: strategyId, market: MARKET };
+          var bodyStr = JSON.stringify(startBody);
+          var dbg = document.getElementById("paperStartDebug");
+          if (dbg) dbg.textContent = "start payload: " + bodyStr;
           const res = await authFetch(paperApiUrl("start"), {
             method: "POST",
             headers: await authHeaders({ "Content-Type": "application/json" }),
-            body: JSON.stringify({ strategy_id: strategyId, market: MARKET }),
+            body: bodyStr,
           });
           const data = await res.json().catch(function () {
             return {};
           });
           if (!res.ok) {
             var detailRaw = data.detail;
-            var shown = formatApiErrorDetail(detailRaw);
+            var shown = formatApiErrorDetail(detailRaw, { clientRequestStrategy: strategyId });
+            var meta = "\n\n--- HTTP 오류 메타 ---\n";
+            if (detailRaw && typeof detailRaw === "object") {
+              if (detailRaw.code != null) meta += "response detail.code: " + String(detailRaw.code) + "\n";
+              if (detailRaw.message != null) meta += "response detail.message: " + String(detailRaw.message) + "\n";
+              var psd = detailRaw.paper_start_diagnostics;
+              if (psd && typeof psd === "object") {
+                meta +=
+                  "controller paper_start_diagnostics.strategy_id: " +
+                  (psd.strategy_id != null ? String(psd.strategy_id) : "") +
+                  "\n";
+                meta +=
+                  "controller paper_start_diagnostics.effective_market: " +
+                  (psd.effective_market != null ? String(psd.effective_market) : "") +
+                  "\n";
+              }
+            }
+            meta += "last start payload (UI): " + bodyStr + "\n";
+            shown += meta;
             shown = await appendKisBalanceDebugLines(shown, await authHeaders());
             message.innerText = shown;
             toast("err", shown);
             return;
+          }
+          if (dbg) {
+            var echo = data.start_request_echo ? JSON.stringify(data.start_request_echo) : "";
+            dbg.textContent = "start payload: " + bodyStr + (echo ? "\n서버 echo: " + echo : "");
           }
           statusText.innerText = data.status;
           message.innerText = "시작됨";

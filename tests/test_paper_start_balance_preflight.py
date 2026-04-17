@@ -14,7 +14,7 @@ def test_paper_start_blocks_when_balance_preflight_fails(monkeypatch) -> None:
     monkeypatch.setattr(
         ptr,
         "_run_balance_preflight",
-        lambda _u: {
+        lambda _u, market=None: {
             "ok": False,
             "failure_kind": "kis_error",
             "error": "KIS business error: ERROR : INPUT_FIELD_NAME OFL_YN | OPSQ2001",
@@ -25,7 +25,7 @@ def test_paper_start_blocks_when_balance_preflight_fails(monkeypatch) -> None:
     )
 
     class Ctrl:
-        def start(self, user_id: str, strategy_id: str):
+        def start(self, user_id: str, strategy_id: str, market=None):
             raise AssertionError("start must not be called when preflight fails")
 
     monkeypatch.setattr(ptr, "get_paper_session_controller", lambda: Ctrl())
