@@ -133,6 +133,8 @@
         <button id="dashboardBtn">Dashboard</button>
         <button id="domesticPaperBtn">국내 Paper</button>
         <button id="usPaperBtn">미국 Paper</button>
+        <button id="domesticLiveBtn">국내 Live</button>
+        <button id="usLiveBtn">미국 Live</button>
         <button id="performanceBtn">Performance</button>
         <button id="brokerSettingsBtn">Broker Settings</button>
         <button id="logoutBtn">Logout</button>
@@ -800,6 +802,12 @@
       });
       document.getElementById("usPaperBtn").addEventListener("click", () => {
         window.location.href = "./us-paper-trading.html";
+      });
+      document.getElementById("domesticLiveBtn").addEventListener("click", () => {
+        window.location.href = "./live-trading.html";
+      });
+      document.getElementById("usLiveBtn").addEventListener("click", () => {
+        window.location.href = "./us-live-trading.html";
       });
       document.getElementById("performanceBtn").addEventListener("click", () => {
         window.location.href = "./performance.html";

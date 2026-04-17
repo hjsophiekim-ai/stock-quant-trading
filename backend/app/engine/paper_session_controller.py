@@ -368,13 +368,13 @@ class PaperSessionController:
         self._last_paper_initial_token_source = ens.token_cache_source or None
 
         mk = (market or "domestic").strip().lower()
-        self._paper_market = "us" if mk in ("us", "usa", "nyse", "nasdaq", "us_equity", "us_equities") else "domestic"
+        requested_market = "us" if mk in ("us", "usa", "nyse", "nasdaq", "us_equity", "us_equities") else "domestic"
 
         sid_l = (strategy_id or "").lower().strip()
         fb_diag = paper_final_betting_diagnostics()
         self._last_start_diagnostics = {
             "strategy_id": strategy_id,
-            "effective_market": self._paper_market,
+            "effective_market": requested_market,
             "paper_final_betting_enabled_fresh": bool(paper_final_betting_enabled_fresh()),
             "paper_final_betting_enabled_cached_settings": fb_diag.get("paper_final_betting_enabled_cached_settings"),
             "settings_cache_mismatch": fb_diag.get("settings_cache_mismatch"),
@@ -384,6 +384,25 @@ class PaperSessionController:
         if sid_l == "final_betting_v1" and not bool(paper_final_betting_enabled_fresh()):
             raise ValueError("FINAL_BETTING_DISABLED")
 
+        restart_required = False
+        with self._lock:
+            if self._run_flag and self._thread is not None and self._thread.is_alive():
+                if self._user_id == user_id:
+                    current_sid = (self._strategy_id or "").strip().lower()
+                    current_market = (self._paper_market or "domestic").strip().lower()
+                    if current_sid == sid_l and current_market == requested_market:
+                        return {"ok": True, "message": "already_running", "status": self._status}
+                    restart_required = True
+                else:
+                    raise RuntimeError("OTHER_SESSION_ACTIVE")
+        if restart_required:
+            self._append_log(
+                "info",
+                f"Paper 세션 전략 전환 요청: from strategy={self._strategy_id} market={self._paper_market} "
+                f"to strategy={strategy_id} market={requested_market}",
+            )
+            self.stop(user_id)
+
         with self._lock:
             if self._run_flag and self._thread is not None and self._thread.is_alive():
                 if self._user_id == user_id:
@@ -391,6 +410,7 @@ class PaperSessionController:
                 raise RuntimeError("OTHER_SESSION_ACTIVE")
             self._user_id = user_id
             self._strategy_id = strategy_id
+            self._paper_market = requested_market
             self._failure_streak = 0
             self._last_error = None
             self._status = "running"

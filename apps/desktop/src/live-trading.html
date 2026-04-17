@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Live Trading · 국내</title>
+    <style>
+      body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; background: #f8fafc; }
+      .layout { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+      .sidebar { background: #0f172a; color: #e2e8f0; padding: 16px; }
+      .sidebar button { width: 100%; margin-bottom: 8px; padding: 8px; cursor: pointer; }
+      .main { padding: 16px; }
+      .panel { background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+      .warn { background: #fef2f2; border-color: #fecaca; color: #7f1d1d; }
+      .ok { background: #ecfdf5; border-color: #86efac; color: #166534; }
+      pre { white-space: pre-wrap; font-size: 0.82rem; font-family: ui-monospace, monospace; margin: 0; }
+      .muted { color: #64748b; font-size: 0.86rem; }
+      label { display: block; margin-top: 8px; font-weight: 700; }
+      input[type="text"] { width: min(640px, 100%); padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; }
+      .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar">
+        <h3>Auto Trading</h3>
+        <button id="dashboardBtn" type="button">Dashboard</button>
+        <button id="domesticPaperBtn" type="button">국내 Paper</button>
+        <button id="usPaperBtn" type="button">미국 Paper</button>
+        <button id="domesticLiveBtn" type="button">국내 Live</button>
+        <button id="usLiveBtn" type="button">미국 Live</button>
+        <button id="performanceBtn" type="button">Performance</button>
+        <button id="brokerSettingsBtn" type="button">Broker Settings</button>
+        <button id="logoutBtn" type="button">Logout</button>
+      </aside>
+      <main class="main">
+        <h2>국내 Live Trading · market=domestic</h2>
+        <p class="muted">
+          실거래는 다중 잠금 해제 + 모의검증 통과 전에는 차단됩니다. 이 화면은 LIVE 잠금 상태를 확인/승인합니다.
+        </p>
+        <div id="liveWarnPanel" class="panel warn"></div>
+        <div class="panel">
+          <h3 style="margin-top: 0">상태 요약</h3>
+          <pre id="statusPre">(loading)</pre>
+        </div>
+        <div class="panel">
+          <h3 style="margin-top: 0">런타임 안전 검증</h3>
+          <pre id="runtimePre">(loading)</pre>
+        </div>
+        <div class="panel">
+          <h3 style="margin-top: 0">Paper Readiness</h3>
+          <pre id="paperReadinessPre">(loading)</pre>
+        </div>
+        <div class="panel">
+          <h3 style="margin-top: 0">잠금 해제 토글</h3>
+          <div class="row">
+            <label><input id="flagLive" type="checkbox" /> Live Enable Flag</label>
+            <label><input id="flagConfirm2" type="checkbox" /> Secondary Confirm</label>
+            <label><input id="flagExtra" type="checkbox" /> Extra Approval</label>
+          </div>
+          <label for="reasonInput">변경 사유</label>
+          <input id="reasonInput" type="text" value="운영자 수동 승인" />
+          <div class="row" style="margin-top: 10px">
+            <button id="saveBtn" type="button">Save Safety Settings</button>
+            <button id="refreshBtn" type="button">새로고침</button>
+          </div>
+          <p id="saveMessage" class="muted" style="white-space: pre-line"></p>
+        </div>
+      </main>
+    </div>
+    <script src="./runtime-config.js"></script>
+    <script src="./auth-session.js"></script>
+    <script>
+      (async function () {
+        const backendUrl = effectiveBackendUrl();
+        const pre = await ensureValidBackendSession(backendUrl);
+        if (!pre.ok) { window.location.href = "./login.html"; return; }
+
+        async function authHeaders(extra) {
+          const s = await resolveDesktopSession();
+          const t = s && s.accessToken ? s.accessToken : "";
+          return Object.assign({ Authorization: "Bearer " + t }, extra || {});
+        }
+        async function authFetch(url, options) {
+          const opt = options || {};
+          const h0 = await authHeaders(opt.headers || {});
+          return fetch(url, Object.assign({}, opt, { headers: h0 }));
+        }
+
+        const statusPre = document.getElementById("statusPre");
+        const runtimePre = document.getElementById("runtimePre");
+        const paperPre = document.getElementById("paperReadinessPre");
+        const saveMessage = document.getElementById("saveMessage");
+        const warn = document.getElementById("liveWarnPanel");
+
+        async function refresh() {
+          const [stR, rtR, prR, ksR] = await Promise.all([
+            authFetch(backendUrl + "/api/live-trading/status"),
+            authFetch(backendUrl + "/api/live-trading/runtime-safety-validation"),
+            authFetch(backendUrl + "/api/live-trading/paper-readiness"),
+            authFetch(backendUrl + "/api/live-trading/kill-switch-status"),
+          ]);
+          const st = await stR.json().catch(function () { return {}; });
+          const rt = await rtR.json().catch(function () { return {}; });
+          const pr = await prR.json().catch(function () { return {}; });
+          const ks = await ksR.json().catch(function () { return {}; });
+          statusPre.textContent = JSON.stringify(st, null, 2);
+          runtimePre.textContent = JSON.stringify(rt, null, 2);
+          paperPre.textContent = JSON.stringify(pr, null, 2) + "\n\nkill_switch:\n" + JSON.stringify(ks, null, 2);
+          document.getElementById("flagLive").checked = !!st.live_trading_flag;
+          document.getElementById("flagConfirm2").checked = !!st.secondary_confirm_flag;
+          document.getElementById("flagExtra").checked = !!st.extra_approval_flag;
+          const can = !!st.can_place_live_order;
+          warn.className = "panel " + (can ? "ok" : "warn");
+          warn.textContent = can ? "LIVE 주문 가능 상태" : (st.warning_message || "LIVE 주문 잠금 상태");
+        }
+
+        document.getElementById("saveBtn").addEventListener("click", async function () {
+          const payload = {
+            live_trading_flag: !!document.getElementById("flagLive").checked,
+            secondary_confirm_flag: !!document.getElementById("flagConfirm2").checked,
+            extra_approval_flag: !!document.getElementById("flagExtra").checked,
+            reason: String(document.getElementById("reasonInput").value || "운영자 수동 승인"),
+            actor: "desktop-user",
+          };
+          const r = await authFetch(backendUrl + "/api/live-trading/settings", {
+            method: "POST",
+            headers: await authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify(payload),
+          });
+          const d = await r.json().catch(function () { return {}; });
+          saveMessage.textContent = r.ok ? "저장 완료\n" + JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+          await refresh();
+        });
+        document.getElementById("refreshBtn").addEventListener("click", refresh);
+
+        document.getElementById("dashboardBtn").addEventListener("click", function () { window.location.href = "./dashboard.html"; });
+        document.getElementById("domesticPaperBtn").addEventListener("click", function () { window.location.href = "./paper-trading.html"; });
+        document.getElementById("usPaperBtn").addEventListener("click", function () { window.location.href = "./us-paper-trading.html"; });
+        document.getElementById("domesticLiveBtn").addEventListener("click", function () { window.location.href = "./live-trading.html"; });
+        document.getElementById("usLiveBtn").addEventListener("click", function () { window.location.href = "./us-live-trading.html"; });
+        document.getElementById("performanceBtn").addEventListener("click", function () { window.location.href = "./performance.html"; });
+        document.getElementById("brokerSettingsBtn").addEventListener("click", function () { window.location.href = "./broker-settings.html"; });
+        document.getElementById("logoutBtn").addEventListener("click", async function () { await clearDesktopSession(); window.location.href = "./login.html"; });
+
+        await refresh();
+      })();
+    </script>
+  </body>
+</html>

@@ -149,6 +149,8 @@
         <button type="button" id="dashboardBtn">Dashboard</button>
         <button type="button" id="domesticPaperBtn">국내 Paper</button>
         <button type="button" id="usPaperBtn">미국 Paper</button>
+        <button type="button" id="domesticLiveBtn">국내 Live</button>
+        <button type="button" id="usLiveBtn">미국 Live</button>
         <button type="button" id="performanceBtn">Performance</button>
         <button type="button" id="brokerSettingsBtn">Broker Settings</button>
         <button type="button" id="logoutBtn">Logout</button>
@@ -209,6 +211,7 @@
           <button type="button" id="stopBtn">중지</button>
           <span id="message" style="white-space: pre-line; max-width: 52rem; display: inline-block; vertical-align: top; color: #334155; font-size: 0.9rem; line-height: 1.4"></span>
         </div>
+        <p id="strategyMismatchHint" style="display: none; margin: -2px 0 10px; font-size: 0.82rem; color: #92400e"></p>
         <div class="panel">
           <h3>손익(마지막 틱 기준)</h3>
           <p id="pnlSummary" style="margin: 0; font-size: 0.9rem">—</p>
@@ -372,6 +375,7 @@
 
         const statusText = document.getElementById("statusText");
         const strategyRunningEl = document.getElementById("strategyRunning");
+        const strategyMismatchHintEl = document.getElementById("strategyMismatchHint");
         const lastTickEl = document.getElementById("lastTick");
         const failureStreakEl = document.getElementById("failureStreak");
         const maxFailuresEl = document.getElementById("maxFailures");
@@ -655,6 +659,20 @@
               var st = statusData.status || "stopped";
               statusText.innerText = st;
               strategyRunningEl.innerText = statusData.strategy_id || "—";
+              var selectedId = String((document.getElementById("strategyId") && document.getElementById("strategyId").value) || "").trim();
+              var runningId = String(statusData.strategy_id || "").trim();
+              if (st === "running" && selectedId && runningId && selectedId !== runningId) {
+                strategyMismatchHintEl.style.display = "block";
+                strategyMismatchHintEl.textContent =
+                  "선택 전략(" +
+                  selectedId +
+                  ")과 실행 전략(" +
+                  runningId +
+                  ")이 다릅니다. 이번 버전부터 시작 요청 시 자동으로 재시작해 맞춥니다.";
+              } else {
+                strategyMismatchHintEl.style.display = "none";
+                strategyMismatchHintEl.textContent = "";
+              }
               lastTickEl.innerText = statusData.last_tick_at || "—";
               failureStreakEl.innerText = String(statusData.failure_streak != null ? statusData.failure_streak : 0);
               maxFailuresEl.innerText = String(statusData.max_failures != null ? statusData.max_failures : "—");
@@ -1237,6 +1255,12 @@
         });
         document.getElementById("usPaperBtn").addEventListener("click", function () {
           window.location.href = "./us-paper-trading.html";
+        });
+        document.getElementById("domesticLiveBtn").addEventListener("click", function () {
+          window.location.href = "./live-trading.html";
+        });
+        document.getElementById("usLiveBtn").addEventListener("click", function () {
+          window.location.href = "./us-live-trading.html";
         });
         document.getElementById("logoutBtn").addEventListener("click", async function () {
           await clearDesktopSession();

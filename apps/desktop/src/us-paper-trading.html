@@ -69,6 +69,8 @@
         <button type="button" id="dashboardBtn">Dashboard</button>
         <button type="button" id="domesticPaperBtn">국내 Paper</button>
         <button type="button" id="usPaperBtn">미국 Paper</button>
+        <button type="button" id="domesticLiveBtn">국내 Live</button>
+        <button type="button" id="usLiveBtn">미국 Live</button>
         <button type="button" id="performanceBtn">Performance</button>
         <button type="button" id="brokerSettingsBtn">Broker Settings</button>
         <button type="button" id="logoutBtn">Logout</button>
@@ -533,6 +535,12 @@
         });
         document.getElementById("performanceBtn").addEventListener("click", function () {
           window.location.href = "./performance.html";
+        });
+        document.getElementById("domesticLiveBtn").addEventListener("click", function () {
+          window.location.href = "./live-trading.html";
+        });
+        document.getElementById("usLiveBtn").addEventListener("click", function () {
+          window.location.href = "./us-live-trading.html";
         });
         document.getElementById("brokerSettingsBtn").addEventListener("click", function () {
           window.location.href = "./broker-settings.html";
