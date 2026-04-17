@@ -53,14 +53,18 @@ function formatHttpDetail(detail: unknown, clientRequestStrategy?: string): stri
       }
       return parts.join("\n");
     }
-    const parts = [
+    const parts: string[] = [
       typeof d.message === "string" ? d.message : "FINAL_BETTING_DISABLED",
       "요청 strategy_id: final_betting_v1 (확인됨)",
-      d.strategy_implemented === true ? "전략 코드: 구현됨" : "전략 코드: 확인 필요",
+    ];
+    if (typeof d.root_cause === "string") parts.push(`원인 코드(root_cause): ${d.root_cause}`);
+    if (typeof d.deployment_fix_ko === "string" && d.deployment_fix_ko.trim()) parts.push(d.deployment_fix_ko.trim());
+    parts.push(d.strategy_implemented === true ? "전략 코드: 구현됨" : "전략 코드: 확인 필요");
+    parts.push(
       d.settings_not_reflected === true
         ? "원인 추정: 서버 설정 캐시 불일치(fresh Settings vs get_settings)"
         : "원인 추정: 환경변수 PAPER_FINAL_BETTING_ENABLED 등이 false/미설정",
-    ];
+    );
     if (d.final_betting) {
       try {
         parts.push(JSON.stringify(d.final_betting).slice(0, 1200));

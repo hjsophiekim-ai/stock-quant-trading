@@ -231,20 +231,31 @@ def start_paper_trading(
                 detail="브로커 계정이 등록되어 있지 않습니다.",
             ) from exc
         if code == "FINAL_BETTING_DISABLED":
+            fb_diag = paper_final_betting_diagnostics()
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
                     "code": "FINAL_BETTING_DISABLED",
                     "message": "final_betting_v1 은 서버에서 종가베팅 플래그가 켜져 있어야 합니다.",
                     "hint": "PAPER_FINAL_BETTING_ENABLED=true (또는 FINAL_BETTING_ENABLED / final_betting_enabled)",
+                    "root_cause": (
+                        "environment_variables_absent"
+                        if fb_diag.get("final_betting_env_unset_in_process")
+                        else "environment_or_settings_false"
+                    ),
+                    "deployment_fix_ko": str(fb_diag.get("final_betting_deploy_hint_ko") or "").strip()
+                    or (
+                        "백엔드에 PAPER_FINAL_BETTING_ENABLED=true 를 설정한 뒤 서비스를 재시작하세요. "
+                        "(앱에서 다시 시작만으로는 서버 환경이 바뀌지 않습니다.)"
+                    ),
                     "request_strategy_id": req_strategy_raw,
                     "request_market": payload.market,
                     "paper_start_diagnostics": ctrl.last_start_diagnostics_snapshot(),
                     "strategy_implemented": True,
                     "settings_not_reflected": bool(
-                        (paper_final_betting_diagnostics().get("settings_cache_mismatch") or False)
+                        (fb_diag.get("settings_cache_mismatch") or False)
                     ),
-                    "final_betting": paper_final_betting_diagnostics(),
+                    "final_betting": fb_diag,
                 },
             ) from exc
         raise HTTPException(status_code=400, detail=code) from exc

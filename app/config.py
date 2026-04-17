@@ -378,16 +378,31 @@ def paper_final_betting_enabled_fresh() -> bool:
     return bool(Settings().paper_final_betting_enabled)
 
 
+def paper_final_betting_env_unset_in_process() -> bool:
+    """PAPER/FINAL 종가베팅 관련 환경변수가 프로세스에 아예 없거나 빈 문자열인지."""
+    raw = _final_betting_env_raw()
+    return all(v is None or str(v).strip() == "" for v in raw.values())
+
+
 def paper_final_betting_diagnostics() -> dict[str, object]:
     """상태·진단 API용 — 캐시된 값 vs fresh 값 불일치를 드러냄."""
     raw = _final_betting_env_raw()
     fresh_b = paper_final_betting_enabled_fresh()
     cached = get_settings()
     cached_b = bool(cached.paper_final_betting_enabled)
+    unset = paper_final_betting_env_unset_in_process()
     return {
         "final_betting_enabled_effective": fresh_b,
         "paper_final_betting_enabled_fresh_settings": fresh_b,
         "paper_final_betting_enabled_cached_settings": cached_b,
         "settings_cache_mismatch": cached_b != fresh_b,
         "final_betting_env_sources": raw,
+        "final_betting_env_unset_in_process": unset,
+        "final_betting_deploy_hint_ko": (
+            "백엔드 프로세스 환경에 PAPER_FINAL_BETTING_ENABLED(또는 FINAL_BETTING_ENABLED)가 없습니다. "
+            "Render: Dashboard → Environment → PAPER_FINAL_BETTING_ENABLED=true 추가 후 Deploy/Manual Restart. "
+            "로컬: 프로젝트 루트 .env에 동일 키를 넣고 uvicorn/FastAPI를 재시작하세요."
+            if unset
+            else ""
+        ),
     }

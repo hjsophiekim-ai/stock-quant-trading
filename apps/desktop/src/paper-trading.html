@@ -440,11 +440,15 @@
             var lines = [
               typeof d.message === "string" ? d.message : "FINAL_BETTING_DISABLED",
               "요청 strategy_id: final_betting_v1 (확인됨)",
-              d.strategy_implemented === true ? "전략: 서버에 구현됨" : "전략: 확인 필요",
+            ];
+            if (d.root_cause) lines.push("원인 코드(root_cause): " + String(d.root_cause));
+            if (d.deployment_fix_ko) lines.push(String(d.deployment_fix_ko));
+            lines.push(d.strategy_implemented === true ? "전략: 서버에 구현됨" : "전략: 확인 필요");
+            lines.push(
               d.settings_not_reflected === true
                 ? "구분: 설정값 미반영 가능(get_settings 캐시). 서버 재시작을 시도하세요."
                 : "구분: 환경변수 PAPER_FINAL_BETTING_ENABLED 등이 false/미설정",
-            ];
+            );
             if (d.final_betting) {
               try {
                 lines.push(JSON.stringify(d.final_betting).slice(0, 1200));
