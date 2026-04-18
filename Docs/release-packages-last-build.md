@@ -4,12 +4,18 @@
 
 | 항목 | 값 |
 |------|-----|
-| 빌드 일시 (KST) | 2026-04-16 |
+| 빌드 일시 (로컬) | 2026-04-18 |
+| 저장소 커밋 (데스크톱 빌드 스탬프에 포함) | `667b3ca38d9fad8da660eb2841670b69128ff6a2` |
 | 스크립트 | `scripts/build-release-zips.ps1` (또는 `npm run release:build:zips`) |
 | 데스크톱 버전 | `apps/desktop/package.json` → 0.1.0 |
-| Windows 패키지 | `release/Stock-Quant-Desktop-Windows-0.1.0.zip` (NSIS 설치 `.exe` + `INSTALL-DESKTOP.bat` + `README-KO.txt`) |
-| Android 패키지 | `release/Stock-Quant-Android-0.1.0.zip` (이 PC 빌드 시 APK 미포함 → `ANDROID-APK-BUILD-HINT.txt` 및 안내 문서만 포함) |
+| Windows (전용 ZIP) | `release/Stock-Quant-Desktop-Windows-0.1.0.zip` — NSIS 설치 `.exe` + `INSTALL-DESKTOP.bat` + `README-KO.txt` |
+| Windows (번들 ZIP) | `release/stock-quant-client-install.zip` — 위 설치 `.exe` + `README-CLIENT-INSTALL-*.txt` + `client_install_download.md` |
+| Android (전용 ZIP) | `release/Stock-Quant-Android-0.1.0.zip` — 이 빌드는 **APK 미포함** (`ANDROID-APK-BUILD-HINT.txt` 및 안내 문서) |
+| Android (번들 ZIP) | `release/stock-quant-android-install.zip` — 동일, APK 없을 때 빌드 안내만 |
+
 | 빌드 시 백엔드 URL | `https://stock-quant-backend.onrender.com` (스크립트 기본값, `-BackendUrl`로 변경 가능) |
+
+**참고:** ZIP에는 **Electron 데스크톱/모바일 클라이언트**만 포함됩니다. Python 백엔드(FastAPI)나 서버 배포는 별도입니다. 백엔드 변경(예: 미국 모의투자 수정)은 **서버를 해당 커밋으로 배포**해야 반영됩니다.
 
 ## APK를 ZIP에 넣으려면
 
