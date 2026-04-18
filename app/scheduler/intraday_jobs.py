@@ -266,7 +266,7 @@ class IntradaySchedulerJobs:
                 symbol=order.symbol,
                 side=order.side,
                 quantity=order.quantity,
-                limit_price=order.price or self._latest_close(universe_tf, order.symbol),
+                limit_price=order.price or self._latest_close_safe(universe_tf, order.symbol),
                 stop_loss_pct=order.stop_loss_pct,
                 strategy_id=order.strategy_id,
                 signal_id=str(uuid.uuid4()),
@@ -594,11 +594,6 @@ class IntradaySchedulerJobs:
             if pos.symbol == symbol:
                 return float(pos.average_price or 1.0)
         return 1.0
-
-    @staticmethod
-    def _latest_close(price_df: pd.DataFrame, symbol: str) -> float:
-        row = price_df[price_df["symbol"] == symbol].sort_values("date").iloc[-1]
-        return float(row["close"])
 
 
 def fetch_quotes_throttled(

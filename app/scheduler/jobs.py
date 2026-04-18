@@ -177,7 +177,7 @@ class SchedulerJobs:
                 symbol=order.symbol,
                 side=order.side,
                 quantity=order.quantity,
-                limit_price=order.price or self._latest_close(universe, order.symbol),
+                limit_price=order.price or self._latest_close_safe(universe, order.symbol),
                 stop_loss_pct=order.stop_loss_pct,
                 strategy_id=order.strategy_id,
                 signal_id=str(uuid.uuid4()),
@@ -226,7 +226,7 @@ class SchedulerJobs:
         positions = self.broker.get_positions()
         position_values: dict[str, float] = {}
         for pos in positions:
-            latest_price = self._latest_close(price_df, pos.symbol)
+            latest_price = self._latest_close_safe(price_df, pos.symbol)
             position_values[pos.symbol] = latest_price * pos.quantity
 
         equity = cash + sum(position_values.values())
@@ -259,7 +259,7 @@ class SchedulerJobs:
     def _build_end_of_day_report(self, price_df: pd.DataFrame, *, accepted: int, rejected: int) -> dict[str, object]:
         cash = self.broker.get_cash()
         positions = self.broker.get_positions()
-        market_value = sum(self._latest_close(price_df, p.symbol) * p.quantity for p in positions)
+        market_value = sum(self._latest_close_safe(price_df, p.symbol) * p.quantity for p in positions)
         equity_now = cash + market_value
         equity_series = pd.Series([self.broker.initial_cash, equity_now], index=["start", "close"], dtype="float64")
         daily_ret = float(compute_daily_return_pct(equity_series).iloc[-1])
@@ -276,10 +276,15 @@ class SchedulerJobs:
             "position_count": len(positions),
         }
 
-    @staticmethod
-    def _latest_close(price_df: pd.DataFrame, symbol: str) -> float:
-        row = price_df[price_df["symbol"] == symbol].sort_values("date").iloc[-1]
-        return float(row["close"])
+    def _latest_close_safe(self, price_df: pd.DataFrame, symbol: str) -> float:
+        sub = price_df[price_df["symbol"] == symbol]
+        if not sub.empty:
+            row = sub.sort_values("date").iloc[-1]
+            return float(row["close"])
+        for pos in self.broker.get_positions():
+            if pos.symbol == symbol:
+                return float(pos.average_price or 1.0)
+        return 1.0
 
     @staticmethod
     def _build_mock_universe() -> pd.DataFrame:

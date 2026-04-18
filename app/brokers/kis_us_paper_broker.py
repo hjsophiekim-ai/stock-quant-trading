@@ -33,6 +33,8 @@ class KisUsPaperBroker(BaseBroker):
     kis_client: KISClient
     account_no: str
     account_product_code: str
+    # SchedulerJobs 일일 손익 집계용 기준(USD). 실제 모의 잔고와 다를 수 있음.
+    initial_cash: float = 100_000.0
     default_ovrs_excg_cd: str = "NASD"
     tr_crcy_cd: str = "USD"
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger("app.brokers.kis_us_paper"))
