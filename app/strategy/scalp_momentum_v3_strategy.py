@@ -11,6 +11,7 @@ import pandas as pd
 from app.config import get_settings
 from app.strategy.base_strategy import BaseStrategy, StrategyContext, StrategySignal
 from app.strategy.intraday_common import (
+    effective_intraday_max_open_positions,
     ema,
     get_krx_session_state_kst,
     intraday_liquidity_multipliers_for_state,
@@ -27,7 +28,7 @@ from app.strategy.market_regime import MarketRegimeConfig, MarketRegimeInputs, c
 
 @dataclass
 class ScalpMomentumV3Strategy(BaseStrategy):
-    """1분봉 초단타 진입 빈도 확대 버전(5개 신호 중 2개 이상) + 보수적 청산."""
+    """1분봉 고빈도 실험용(완화 진입) — 보조 실험 축, 메인 추천 아님."""
 
     regime_config: MarketRegimeConfig = field(default_factory=MarketRegimeConfig)
     last_diagnostics: list[dict[str, Any]] = field(default_factory=list)
@@ -45,7 +46,12 @@ class ScalpMomentumV3Strategy(BaseStrategy):
         cfg = get_settings()
         self.last_diagnostics = []
         self.last_intraday_filter_breakdown = []
-        self.last_intraday_signal_breakdown = {"entries_evaluated": 0, "exits_evaluated": 0}
+        self.last_intraday_signal_breakdown = {
+            "entries_evaluated": 0,
+            "exits_evaluated": 0,
+            "strategy_role": "experimental_high_freq",
+            "label_ko": "실험용 스캘프(v3·고빈도) — 추천 메인 전략 아님",
+        }
         signals: list[StrategySignal] = []
         st = self.intraday_state
 
@@ -143,14 +149,15 @@ class ScalpMomentumV3Strategy(BaseStrategy):
                 self.last_intraday_signal_breakdown["blocked"] = "max_trades_per_day"
                 return signals
         open_n = len(pos_symbols)
-        if open_n >= int(cfg.paper_intraday_max_open_positions):
+        max_pos = effective_intraday_max_open_positions(cfg, "scalp_momentum_v3")
+        if open_n >= max_pos:
             self.last_intraday_signal_breakdown["blocked"] = "max_open_positions"
             return signals
         if high_vol_block and (not self.manual_override_enabled):
             self.last_intraday_signal_breakdown["blocked"] = "high_volatility_risk_no_entry"
             return signals
 
-        max_new = max(0, int(cfg.paper_intraday_max_open_positions) - open_n)
+        max_new = max(0, max_pos - open_n)
         entries_added = 0
 
         m_vol, m_spread, m_chase = intraday_liquidity_multipliers_for_state(sess_state, cfg)

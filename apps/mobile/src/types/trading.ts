@@ -3,31 +3,29 @@ export type MarketId = "domestic" | "us";
 
 export type TradingMarket = MarketId;
 
-/** 국내 Paper에서 선택 가능한 전략 (데스크톱 paper_strategy 와 동기) */
-export type DomesticStrategyId =
-  | "swing_v1"
-  | "swing_relaxed_v1"
-  | "swing_relaxed_v2"
-  | "bull_focus_v1"
-  | "defensive_v1"
-  | "scalp_momentum_v1"
-  | "scalp_momentum_v2"
-  | "scalp_momentum_v3"
-  | "final_betting_v1";
+/** 기본 UI에 노출하는 국내 Paper 전략(메인 3 + 실험 2) — 백엔드 `paper_strategy` 와 동기 */
+export const DOMESTIC_STRATEGY_OPTIONS = [
+  "swing_relaxed_v2",
+  "final_betting_v1",
+  "scalp_macd_rsi_3m_v1",
+  "scalp_momentum_v2",
+  "scalp_momentum_v3",
+] as const;
 
-export const DOMESTIC_STRATEGY_OPTIONS: DomesticStrategyId[] = [
+/** 과거 로그/세션 호환용 (registry 유지, UI 기본 목록에서는 제외) */
+export const DOMESTIC_STRATEGY_LEGACY_OPTIONS = [
   "swing_v1",
   "swing_relaxed_v1",
-  "swing_relaxed_v2",
   "bull_focus_v1",
   "defensive_v1",
   "scalp_momentum_v1",
-  "scalp_momentum_v2",
-  "scalp_momentum_v3",
-  "final_betting_v1",
-];
+] as const;
 
-/** 미국 Paper용 (백엔드 구현 시 연결) */
+export type DomesticStrategyIdMain = (typeof DOMESTIC_STRATEGY_OPTIONS)[number];
+export type DomesticStrategyIdLegacy = (typeof DOMESTIC_STRATEGY_LEGACY_OPTIONS)[number];
+export type DomesticStrategyId = DomesticStrategyIdMain | DomesticStrategyIdLegacy;
+
+/** 미국 Paper용 (백엔드 `paper_strategy` + capabilities) */
 export type USStrategyId = "us_swing_relaxed_v1" | "us_scalp_momentum_v1";
 
 export const US_STRATEGY_OPTIONS: USStrategyId[] = ["us_swing_relaxed_v1", "us_scalp_momentum_v1"];

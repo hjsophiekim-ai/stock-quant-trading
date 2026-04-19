@@ -131,7 +131,7 @@ class Settings(BaseSettings):
         description="멀티 전략(스윙+인트라데이) 병렬 틱. false면 기존 단일 전략 경로 유지.",
     )
     paper_multi_swing_strategy_id: str = Field(
-        default="swing_relaxed_v1",
+        default="swing_relaxed_v2",
         alias="PAPER_MULTI_SWING_STRATEGY_ID",
         description="멀티 모드 일봉 스윙 레그 strategy_id (paper_strategy 매핑).",
     )
@@ -177,6 +177,39 @@ class Settings(BaseSettings):
         default=45.0,
         ge=0.0,
         alias="PAPER_INTRADAY_DUPLICATE_ORDER_GUARD_SEC",
+    )
+    # scalp_momentum_v2/v3 실험 축: 인트라데이 버킷 대비 비중 상한(0이면 비활성과 동일 취급 아님 — 배수만 적용)
+    paper_experimental_scalp_enabled: bool = Field(default=True, alias="PAPER_EXPERIMENTAL_SCALP_ENABLED")
+    paper_experimental_scalp_capital_pct: float = Field(
+        default=25.0,
+        ge=0.0,
+        le=100.0,
+        alias="PAPER_EXPERIMENTAL_SCALP_CAPITAL_PCT",
+        description="실험용 스캘프(v2/v3) 매수 시 인트라데이 예산에 곱하는 비율(%).",
+    )
+    paper_experimental_scalp_max_open_positions: int = Field(
+        default=2,
+        ge=1,
+        le=20,
+        alias="PAPER_EXPERIMENTAL_SCALP_MAX_OPEN_POSITIONS",
+    )
+    paper_scalp_macd_max_open_positions: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        alias="PAPER_SCALP_MACD_MAX_OPEN_POSITIONS",
+    )
+    paper_scalp_macd_entry_open_block_minutes: int = Field(
+        default=10,
+        ge=0,
+        le=60,
+        alias="PAPER_SCALP_MACD_ENTRY_OPEN_BLOCK_MINUTES",
+    )
+    paper_scalp_macd_entry_close_block_minutes: int = Field(
+        default=20,
+        ge=0,
+        le=120,
+        alias="PAPER_SCALP_MACD_ENTRY_CLOSE_BLOCK_MINUTES",
     )
 
     # Paper 종가베팅(T+1 overnight, scalp 강제청산과 무관) — final_betting_v1 전용

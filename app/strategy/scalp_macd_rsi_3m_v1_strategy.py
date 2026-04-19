@@ -1,4 +1,4 @@
-"""Paper 인트라데이 단타 v2 — 1분봉·완화형 모멘텀(점수 기반) + 리스크 우선."""
+"""Paper 인트라데이 — 3분봉 MACD/RSI/VWAP 보수형 단타 (당일청산)."""
 
 from __future__ import annotations
 
@@ -11,25 +11,31 @@ import pandas as pd
 from app.config import get_settings
 from app.strategy.base_strategy import BaseStrategy, StrategyContext, StrategySignal
 from app.strategy.intraday_common import (
-    effective_intraday_max_open_positions,
     ema,
+    effective_intraday_max_open_positions,
     get_krx_session_state_kst,
     intraday_liquidity_multipliers_for_state,
     krx_session_config_from_settings,
     last_bar_body_pct,
+    macd_line_signal_hist,
+    minutes_since_session_open_kst,
+    minutes_to_regular_close_kst,
     quote_liquidity_from_payload,
     rsi_wilder,
     session_vwap,
     should_force_flatten_before_close_kst,
-    volume_zscore_recent,
 )
+from app.strategy.intraday_entry_qty import resolved_intraday_entry_quantity
 from app.strategy.intraday_paper_state import IntradayPaperState, parse_iso
 from app.strategy.market_regime import MarketRegimeConfig, MarketRegimeInputs, classify_market_regime
 
 
 @dataclass
-class ScalpMomentumV2Strategy(BaseStrategy):
-    """1분봉 VWAP reclaim·단기 EMA 정배열·거래량 스파이크. 보조 실험용(메인 추천 아님)."""
+class ScalpMacdRsi3mV1Strategy(BaseStrategy):
+    """
+    3분봉 기준 보수형 단타. 메인 장중 축용.
+    실험용(v2/v3)보다 진입 점수·시간대 제약을 강화한다.
+    """
 
     regime_config: MarketRegimeConfig = field(default_factory=MarketRegimeConfig)
     last_diagnostics: list[dict[str, Any]] = field(default_factory=list)
@@ -41,23 +47,15 @@ class ScalpMomentumV2Strategy(BaseStrategy):
     intraday_session_context: dict[str, Any] = field(default_factory=dict)
     risk_halt_new_entries: bool = False
     manual_override_enabled: bool = False
-    timeframe_label: str = "1m"
-
-    _risk_tighten: float = 0.90
+    timeframe_label: str = "3m"
 
     def generate_signals(self, context: StrategyContext) -> list[StrategySignal]:
         cfg = get_settings()
         self.last_diagnostics = []
         self.last_intraday_filter_breakdown = []
-        self.last_intraday_signal_breakdown = {
-            "entries_evaluated": 0,
-            "exits_evaluated": 0,
-            "strategy_role": "experimental_aux",
-            "label_ko": "실험용 스캘프(v2·중간 강도) — 추천 메인 전략 아님",
-        }
+        self.last_intraday_signal_breakdown = {"entries_evaluated": 0, "exits_evaluated": 0, "strategy_role": "main_intraday"}
         signals: list[StrategySignal] = []
         st = self.intraday_state
-        rt = float(self._risk_tighten)
 
         ctx_sess = getattr(self, "intraday_session_context", None) or {}
         sess_state = str(ctx_sess.get("krx_session_state") or get_krx_session_state_kst())
@@ -87,12 +85,18 @@ class ScalpMomentumV2Strategy(BaseStrategy):
         if not portfolio.empty and "symbol" in portfolio.columns:
             pos_symbols = set(str(s).strip() for s in portfolio["symbol"].unique())
 
-        sl_pct = float(cfg.paper_intraday_stop_loss_pct) * rt
-        tp_pct = float(cfg.paper_intraday_take_profit_pct) * rt
-        trail_pct = float(cfg.paper_intraday_trailing_stop_pct) * rt
-        hold_min = float(cfg.paper_intraday_max_hold_minutes) * 0.65
+        # 손절·익절·보유 — 보수형 고정 밴드
+        sl_pct = 0.72
+        tp1_pct = 0.8
+        tp2_pct = 1.55
+        trail_pct = float(cfg.paper_intraday_trailing_stop_pct) * 0.85
+        hold_min = max(25.0, float(cfg.paper_intraday_max_hold_minutes) * 0.55)
 
-        for sym in pos_symbols:
+        max_open = effective_intraday_max_open_positions(cfg, "scalp_macd_rsi_3m_v1")
+        open_block_m = int(cfg.paper_scalp_macd_entry_open_block_minutes)
+        close_block_m = int(cfg.paper_scalp_macd_entry_close_block_minutes)
+
+        for sym in list(pos_symbols):
             sub = prices[prices["symbol"] == sym].sort_values("date") if not prices.empty else pd.DataFrame()
             row = portfolio[portfolio["symbol"] == sym].iloc[0] if not portfolio.empty else None
             if row is None:
@@ -105,9 +109,13 @@ class ScalpMomentumV2Strategy(BaseStrategy):
             exit_reason = None
             if flatten_close:
                 exit_reason = "forced_flatten_before_close"
-            elif not sub.empty:
+            elif not sub.empty and len(sub) >= 30:
+                close = sub["close"].astype(float)
+                macd, sigl, hist = macd_line_signal_hist(close)
+                rsi = rsi_wilder(close, 14)
                 sl = avg * (1.0 - sl_pct / 100.0)
-                tp = avg * (1.0 + tp_pct / 100.0)
+                tp1 = avg * (1.0 + tp1_pct / 100.0)
+                tp2 = avg * (1.0 + tp2_pct / 100.0)
                 peak = float(st.peak_price.get(sym, last_px)) if st else last_px
                 if last_px > peak:
                     peak = last_px
@@ -115,11 +123,21 @@ class ScalpMomentumV2Strategy(BaseStrategy):
                         st.peak_price[sym] = peak
                 trail_line = peak * (1.0 - trail_pct / 100.0) if trail_pct > 0 else 0.0
                 entry_ts = parse_iso(st.entry_ts_iso.get(sym)) if st else None
+
+                macd_dead = len(macd) >= 2 and float(macd.iloc[-1]) < float(sigl.iloc[-1]) and float(
+                    macd.iloc[-2]
+                ) >= float(sigl.iloc[-2])
+                rsi_drop = len(rsi) >= 2 and float(rsi.iloc[-1]) < float(rsi.iloc[-2])
+
                 if last_px <= sl:
                     exit_reason = "stop_loss"
-                elif last_px >= tp:
-                    exit_reason = "take_profit"
-                elif trail_pct > 0 and last_px < trail_line:
+                elif last_px >= tp2:
+                    exit_reason = "take_profit_final"
+                elif last_px >= tp1:
+                    exit_reason = "take_profit_1"
+                elif macd_dead and rsi_drop and last_px >= avg * 1.001:
+                    exit_reason = "macd_dead_rsi_exit"
+                elif trail_pct > 0 and last_px < trail_line and last_px >= tp1 * 0.998:
                     exit_reason = "trailing_stop"
                 elif entry_ts is not None:
                     age_m = (datetime.now(timezone.utc) - entry_ts).total_seconds() / 60.0
@@ -138,7 +156,7 @@ class ScalpMomentumV2Strategy(BaseStrategy):
                         price=last_px,
                         stop_loss_pct=None,
                         reason=exit_reason,
-                        strategy_name="scalp_momentum_v2",
+                        strategy_name="scalp_macd_rsi_3m_v1",
                     )
                 )
 
@@ -155,8 +173,7 @@ class ScalpMomentumV2Strategy(BaseStrategy):
                 return signals
 
         open_n = len(pos_symbols)
-        max_pos = effective_intraday_max_open_positions(cfg, "scalp_momentum_v2")
-        if open_n >= max_pos:
+        if open_n >= max_open:
             self.last_intraday_signal_breakdown["blocked"] = "max_open_positions"
             return signals
 
@@ -164,9 +181,17 @@ class ScalpMomentumV2Strategy(BaseStrategy):
             self.last_intraday_signal_breakdown["blocked"] = "high_volatility_risk_no_entry"
             return signals
 
-        max_new = max(0, max_pos - open_n)
-        entries_added = 0
+        mins_open = minutes_since_session_open_kst(session_config=scfg)
+        mins_left = minutes_to_regular_close_kst(session_config=scfg)
+        if mins_open >= 0 and mins_open < float(open_block_m):
+            self.last_intraday_signal_breakdown["blocked"] = "open_session_entry_block"
+            return signals
+        if mins_left >= 0 and mins_left < float(close_block_m):
+            self.last_intraday_signal_breakdown["blocked"] = "close_session_entry_block"
+            return signals
 
+        max_new = max(0, max_open - open_n)
+        entries_added = 0
         m_vol, m_spread, m_chase = intraday_liquidity_multipliers_for_state(sess_state, cfg)
 
         if not prices.empty:
@@ -182,18 +207,18 @@ class ScalpMomentumV2Strategy(BaseStrategy):
                 sub = prices[prices["symbol"] == sym].sort_values("date")
                 diag: dict[str, Any] = {
                     "symbol": sym,
+                    "strategy": "scalp_macd_rsi_3m_v1",
                     "entered": False,
                     "blocked_reason": "",
-                    "ema_align": False,
-                    "vwap_reclaim": False,
-                    "mom_ok": False,
-                    "vol_spike": False,
-                    "micro_break": False,
-                    "rsi_ok": False,
-                    "total_score": 0,
-                    "min_score_required": 3,
+                    "macd_cross": False,
+                    "macd_hist_improving": False,
+                    "rsi_band_ok": False,
+                    "above_vwap": False,
+                    "above_ema20": False,
+                    "volume_burst": False,
+                    "hit_count": 0,
                 }
-                if len(sub) < 24:
+                if len(sub) < 35:
                     diag["blocked_reason"] = "insufficient_bars"
                     self.last_diagnostics.append(diag)
                     continue
@@ -201,9 +226,9 @@ class ScalpMomentumV2Strategy(BaseStrategy):
                 qp = self.quote_by_symbol.get(sym) or {}
                 liq = quote_liquidity_from_payload(qp) if qp else None
                 if liq:
-                    min_v = float(cfg.paper_intraday_min_quote_volume) * 0.8 * m_vol
-                    min_tv = float(cfg.paper_intraday_min_trade_value_krw) * 0.8 * m_vol
-                    max_sp = float(cfg.paper_intraday_max_spread_pct) * m_spread
+                    min_v = float(cfg.paper_intraday_min_quote_volume) * 0.9 * m_vol
+                    min_tv = float(cfg.paper_intraday_min_trade_value_krw) * 0.9 * m_vol
+                    max_sp = float(cfg.paper_intraday_max_spread_pct) * 0.95 * m_spread
                     if liq["acml_vol"] < min_v:
                         diag["blocked_reason"] = "liquidity_volume"
                         self.last_intraday_filter_breakdown.append({"symbol": sym, "rule": "min_volume"})
@@ -211,76 +236,85 @@ class ScalpMomentumV2Strategy(BaseStrategy):
                         continue
                     if liq["acml_tr_pbmn"] < min_tv:
                         diag["blocked_reason"] = "liquidity_trade_value"
-                        self.last_intraday_filter_breakdown.append({"symbol": sym, "rule": "min_trade_value"})
                         self.last_diagnostics.append(diag)
                         continue
                     if liq["spread_pct"] > max_sp:
                         diag["blocked_reason"] = "spread"
-                        self.last_intraday_filter_breakdown.append({"symbol": sym, "rule": "max_spread"})
                         self.last_diagnostics.append(diag)
                         continue
 
                 close = sub["close"].astype(float)
-                ema3 = ema(close, 3)
-                ema8 = ema(close, 8)
-                ema21 = ema(close, 21)
-                vwap = session_vwap(sub)
-                rsi = rsi_wilder(close, 14)
                 vol = sub["volume"].astype(float)
-                vz = volume_zscore_recent(vol, 15)
+                macd, sigl, hist = macd_line_signal_hist(close)
+                rsi = rsi_wilder(close, 14)
+                vwap = session_vwap(sub)
+                ema20 = ema(close, 20)
+
+                macd_cross = False
+                if len(macd) >= 3 and len(sigl) >= 3:
+                    macd_cross = float(macd.iloc[-2]) <= float(sigl.iloc[-2]) and float(macd.iloc[-1]) > float(sigl.iloc[-1])
+                    if not macd_cross and len(macd) >= 4:
+                        macd_cross = float(macd.iloc[-3]) <= float(sigl.iloc[-3]) and float(macd.iloc[-2]) > float(
+                            sigl.iloc[-2]
+                        )
+
+                macd_hist_improving = False
+                if len(hist) >= 3:
+                    macd_hist_improving = float(hist.iloc[-1]) > float(hist.iloc[-2]) > float(hist.iloc[-3])
+
+                rsi_last = float(rsi.iloc[-1]) if len(rsi) else 50.0
+                rsi_band_ok = 50.0 <= rsi_last <= 68.0
+
                 last_close = float(close.iloc[-1])
-                prev_high = float(sub["high"].iloc[-2]) if len(sub) >= 2 else last_close
-                mom_ok = last_close >= float(close.iloc[-5]) * 1.0002 if len(close) >= 5 else False
-                ema_align = (
-                    len(ema3) > 0
-                    and len(ema8) > 0
-                    and float(ema3.iloc[-1]) > float(ema8.iloc[-1]) > float(ema21.iloc[-1])
-                )
-                vwap_reclaim = len(vwap) and last_close > float(vwap.iloc[-1]) * 1.0
-                micro_break = last_close > prev_high * 1.0001
-                vol_spike = vz is not None and vz > 0.10
-                rsi_ok = len(rsi) and float(rsi.iloc[-1]) < 76.0
+                above_vwap = len(vwap) > 0 and last_close > float(vwap.iloc[-1]) * 1.0001
+                above_ema20 = len(ema20) > 0 and last_close > float(ema20.iloc[-1]) * 1.0001
+
+                vol_ma20 = float(vol.tail(20).mean()) if len(vol) >= 20 else float(vol.mean())
+                volume_burst = vol_ma20 > 0 and float(vol.iloc[-1]) >= vol_ma20 * 1.3
+
+                macd_ok = float(macd.iloc[-1]) > float(sigl.iloc[-1]) if len(macd) and len(sigl) else False
+                macd_signal_secondary = bool(macd_cross or macd_hist_improving)
+
+                diag["macd_cross"] = bool(macd_cross)
+                diag["macd_hist_improving"] = bool(macd_hist_improving)
+                diag["rsi_band_ok"] = bool(rsi_band_ok)
+                diag["above_vwap"] = bool(above_vwap)
+                diag["above_ema20"] = bool(above_ema20)
+                diag["volume_burst"] = bool(volume_burst)
+                diag["macd_line_gt_signal"] = bool(macd_ok)
+
+                core = [macd_ok, macd_signal_secondary, rsi_band_ok, above_vwap, above_ema20, volume_burst]
+                hit_count = sum(1 for x in core if x)
+                diag["hit_count"] = int(hit_count)
+
                 body_pct = last_bar_body_pct(sub) or 0.0
-                if body_pct > float(cfg.paper_intraday_max_chase_candle_pct) * 1.2 * m_chase:
+                if body_pct > float(cfg.paper_intraday_max_chase_candle_pct) * 1.15 * m_chase:
                     diag["blocked_reason"] = "chase_candle"
                     self.last_intraday_filter_breakdown.append({"symbol": sym, "rule": "chase_candle"})
                     self.last_diagnostics.append(diag)
                     continue
 
-                score_flags = {
-                    "ema_align": bool(ema_align),
-                    "vwap_reclaim": bool(vwap_reclaim),
-                    "mom_ok": bool(mom_ok),
-                    "vol_spike": bool(vol_spike),
-                    "micro_break": bool(micro_break),
-                    "rsi_ok": bool(rsi_ok),
-                }
-                total_score = sum(1 for v in score_flags.values() if v)
-                diag.update(score_flags)
-                diag["total_score"] = int(total_score)
-                diag["min_score_required"] = 3
-                diag["body_pct"] = float(body_pct)
+                if hit_count < 4:
+                    diag["blocked_reason"] = f"score_below_4 (hits={hit_count}/6)"
+                    self.last_diagnostics.append(diag)
+                    continue
 
-                if total_score < 3:
-                    diag["blocked_reason"] = "signal_not_met"
+                if not macd_ok:
+                    diag["blocked_reason"] = "macd_not_above_signal"
                     self.last_diagnostics.append(diag)
                     continue
 
                 last_px = last_close
-                from app.strategy.intraday_entry_qty import resolved_intraday_entry_quantity
-
-                qty = resolved_intraday_entry_quantity(
-                    cfg, self, price_krw=last_px, stop_loss_pct_points=sl_pct
-                )
+                qty_buy = resolved_intraday_entry_quantity(cfg, self, price_krw=last_px, stop_loss_pct_points=sl_pct)
                 signals.append(
                     StrategySignal(
                         symbol=sym,
                         side="buy",
-                        quantity=qty,
+                        quantity=qty_buy,
                         price=last_px,
                         stop_loss_pct=sl_pct,
-                        reason="scalp_momentum_v2_entry",
-                        strategy_name="scalp_momentum_v2",
+                        reason="scalp_macd_rsi_3m_v1_entry",
+                        strategy_name="scalp_macd_rsi_3m_v1",
                     )
                 )
                 diag["entered"] = True

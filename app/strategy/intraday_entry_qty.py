@@ -16,9 +16,13 @@ def resolved_intraday_entry_quantity(
     stop_loss_pct_points: float,
 ) -> int:
     if not cfg.paper_uses_intraday_risk_sized_quantity:
-        return max(1, int(cfg.paper_intraday_order_quantity))
+        q0 = max(1, int(cfg.paper_intraday_order_quantity))
+        scale = float(getattr(strategy_self, "_experimental_capital_scale", 1.0) or 1.0)
+        return max(1, int(round(q0 * max(0.0, min(1.0, scale)))))
     eq = float(getattr(strategy_self, "_router_equity_krw", 0.0) or 0.0)
     bud = float(getattr(strategy_self, "_router_intraday_budget_krw", 0.0) or 0.0)
+    scale = float(getattr(strategy_self, "_experimental_capital_scale", 1.0) or 1.0)
+    bud *= max(0.0, min(1.0, scale))
     return compute_intraday_buy_quantity(
         price_krw=float(price_krw),
         stop_loss_pct_points=float(stop_loss_pct_points),

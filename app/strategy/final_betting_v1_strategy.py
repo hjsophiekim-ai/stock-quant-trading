@@ -392,8 +392,16 @@ class FinalBettingV1Strategy(BaseStrategy):
                 morning_bars = _bars_between_times(sub, session_ymd, t_exit0, now.time() if now.time() <= t_exit1 else t_exit1)
                 open_px = float(morning_bars.sort_values("date")["open"].iloc[0]) if not morning_bars.empty else last_px
                 gap_pct = (open_px / ref_close - 1.0) * 100.0 if ref_close > 0 else 0.0
+                morning_weak = (
+                    not morning_bars.empty
+                    and now.time() < time(10, 0)
+                    and last_px < avg * 0.992
+                    and last_px < open_px * 0.998
+                )
                 if gap_pct <= -0.5:
                     exit_reason = "gap_down_stop"
+                elif morning_weak:
+                    exit_reason = "weak_morning_flush_fast_stop"
                 elif scale_start <= now.time() <= scale_end and gap_pct > 0.0:
                     exit_reason = "gap_up_take_profit"
                 elif now.time() >= time(10, 0) and last_px < avg * 1.01:
@@ -553,6 +561,28 @@ class FinalBettingV1Strategy(BaseStrategy):
                         }
                     )
                     continue
+
+                late_tail = _bars_between_times(sub_s, session_ymd, time(14, 25), time(15, 20))
+                if not late_tail.empty and len(late_tail) >= 2:
+                    hi_roll = float(late_tail["high"].max())
+                    last_c2 = float(late_tail["close"].iloc[-1])
+                    plunge_pct = ((hi_roll - last_c2) / hi_roll * 100.0) if hi_roll > 0 else 0.0
+                    if plunge_pct >= 2.85:
+                        self.last_diagnostics.append(
+                            {
+                                "symbol": sym,
+                                "strategy": "final_betting_v1",
+                                "entered": False,
+                                "blocked_reason": "late_session_plunge_from_intraday_high",
+                                "late_plunge_pct_from_high": round(plunge_pct, 4),
+                                "morning_accumulation_score": 0.0,
+                                "distribution_unfinished_score": 0.0,
+                                "close_strength_score": 0.0,
+                                "score_breakdown": {"late_tail_bars": int(len(late_tail)), "hi_roll": hi_roll, "last_close": last_c2},
+                                "final_betting_rank": None,
+                            }
+                        )
+                        continue
 
                 morning = _bars_between_times(sub_s, session_ymd, time(9, 0), time(10, 30))
                 afternoon = _bars_between_times(sub_s, session_ymd, time(11, 0), time(15, 10))

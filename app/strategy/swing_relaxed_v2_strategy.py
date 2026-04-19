@@ -56,6 +56,33 @@ def _v2_conditions(signal: dict[str, Any]) -> tuple[bool, bool, bool, bool, dict
     return trend_cond, drop_cond, rsi_cond, rebound_cond, detail
 
 
+def _swing_v2_liquidity_and_weak_bounce(
+    symbol_df: pd.DataFrame, signal: dict[str, Any]
+) -> tuple[bool, str, dict[str, Any]]:
+    """거래대금 대비 최소 유동성 + 약한 반등(추격) 차단."""
+    sd = symbol_df.sort_values("date")
+    if "volume" not in sd.columns or sd.empty:
+        return False, "volume_column_missing", {}
+    vt = sd["volume"].astype(float)
+    vma = float(vt.tail(20).mean()) if len(vt) >= 8 else float(vt.mean())
+    last_v = float(vt.iloc[-1])
+    vol_ratio = (last_v / vma) if vma > 0 else 1.0
+    liquidity_ok = vma <= 0 or last_v >= vma * 0.82
+    ret3 = float(signal.get("ret_3d_pct") or 0)
+    rsi = float(signal.get("rsi14") or 50)
+    weak = (not bool(signal.get("bullish_reversal"))) and (-0.4 < ret3 < 0.55) and rsi >= 51.5
+    extra: dict[str, Any] = {
+        "volume_vs_ma20_ratio": round(vol_ratio, 4),
+        "liquidity_floor_ok": liquidity_ok,
+        "weak_bounce_risk": weak,
+    }
+    if not liquidity_ok:
+        return False, "유동성 부족(당일 거래량 < 20일평균×0.82)", extra
+    if weak:
+        return False, "약한 반등·추격 위험(반등 강도 미흡)", extra
+    return True, "", extra
+
+
 def should_enter_long_relaxed_v2(signal: dict[str, Any]) -> tuple[bool, int, dict[str, Any]]:
     trend_cond, drop_cond, rsi_cond, rebound_cond, detail = _v2_conditions(signal)
     hits = sum([trend_cond, drop_cond, rsi_cond, rebound_cond])
@@ -116,6 +143,9 @@ class SwingRelaxedV2Strategy(SwingStrategy):
             if pos is None:
                 if regime.regime == "high_volatility_risk":
                     continue
+                gate_ok, _, _ = _swing_v2_liquidity_and_weak_bounce(symbol_df, bs)
+                if not gate_ok:
+                    continue
                 ok, _, _ = should_enter_long_relaxed_v2(bs)
                 if ok:
                     signals.append(
@@ -155,12 +185,15 @@ class SwingRelaxedV2Strategy(SwingStrategy):
             pos = _get_position_row(context.portfolio, sym)
             entered = sym in buy_syms
             ok, hits, detail = should_enter_long_relaxed_v2(bs)
+            gate_ok, gate_reason, gate_ex = _swing_v2_liquidity_and_weak_bounce(sdf, bs)
             blocked: str | None = None
             if not entered:
                 if pos is not None:
                     blocked = "보유 중 — 신규 매수 대신 청산/홀드 평가"
                 elif regime_str == "high_volatility_risk":
                     blocked = "고변동 리스크 국면으로 신규 진입 차단"
+                elif not gate_ok:
+                    blocked = gate_reason
                 elif not ok:
                     reasons: list[str] = []
                     if not detail["trend_cond"]:
@@ -186,6 +219,7 @@ class SwingRelaxedV2Strategy(SwingStrategy):
                     "blocked_reason": blocked,
                     "v2_hit_count": hits,
                     "v2_detail": detail,
+                    "v2_score_breakdown": {**detail, **gate_ex},
                 }
             )
         self.last_diagnostics = rows

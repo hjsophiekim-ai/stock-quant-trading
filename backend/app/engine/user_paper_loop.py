@@ -51,7 +51,7 @@ logger = logging.getLogger("backend.app.engine.user_paper_loop")
 
 def _is_intraday_scalp_strategy(strategy_id: str) -> bool:
     s = (strategy_id or "").lower().strip()
-    return s in ("scalp_momentum_v1", "scalp_momentum_v2", "scalp_momentum_v3")
+    return s in ("scalp_momentum_v1", "scalp_momentum_v2", "scalp_momentum_v3", "scalp_macd_rsi_3m_v1")
 
 
 def _is_final_betting_strategy(strategy_id: str) -> bool:
@@ -366,7 +366,7 @@ class UserPaperTradingLoop:
             intraday_symbols=cfg.resolved_intraday_symbol_list(),
             prefer_scalp_on_overlap=cfg.paper_multi_router_prefer_scalp_on_overlap,
         )
-        swing_sid = (cfg.paper_multi_swing_strategy_id or "swing_relaxed_v1").strip()
+        swing_sid = (cfg.paper_multi_swing_strategy_id or "swing_relaxed_v2").strip()
         br = KisPaperBroker(
             kis_client=client,
             account_no=self._account_no,
@@ -704,7 +704,7 @@ class UserPaperTradingLoop:
             regular_session_kst = session_snap.regular_session_kst
 
             sid = (self._strategy_id or "").lower().strip()
-            if sid == "scalp_momentum_v1":
+            if sid in ("scalp_momentum_v1", "scalp_macd_rsi_3m_v1"):
                 universe_tf = universe_as_timeframe(universe_1m, 3)
                 timeframe = "3m"
             else:
@@ -748,6 +748,12 @@ class UserPaperTradingLoop:
 
             failed_step = "intraday_jobs"
             jobs = self._build_intraday_jobs(client, state_store=state_store, strategy_id=self._strategy_id)
+            sid_run = (self._strategy_id or "").lower().strip()
+            exp_pct = float(cfg.paper_experimental_scalp_capital_pct) / 100.0
+            if cfg.paper_experimental_scalp_enabled and sid_run in ("scalp_momentum_v2", "scalp_momentum_v3"):
+                setattr(jobs.strategy, "_experimental_capital_scale", max(0.0, min(1.0, exp_pct)))
+            else:
+                setattr(jobs.strategy, "_experimental_capital_scale", 1.0)
             if cfg.paper_uses_intraday_risk_sized_quantity:
                 eq_b = router_equity_krw
                 bud = router_intraday_budget_krw

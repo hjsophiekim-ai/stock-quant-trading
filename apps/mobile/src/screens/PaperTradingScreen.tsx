@@ -136,7 +136,7 @@ async function appendKisBalanceDebugLines(
 
 export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpenPerformance }: Props) {
   const market: MarketId = "domestic";
-  const [strategyId, setStrategyId] = useState<DomesticStrategyId>("swing_v1");
+  const [strategyId, setStrategyId] = useState<DomesticStrategyId>("swing_relaxed_v2");
   const [status, setStatus] = useState("stopped");
   const [strategyRunning, setStrategyRunning] = useState<string | null>(null);
   const [failureStreak, setFailureStreak] = useState(0);
@@ -451,7 +451,7 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
           </Picker>
         </View>
         <Text style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>
-          데스크톱과 동일한 8종 전략입니다. 모든 호출은 쿼리·본문에 market=domestic 을 명시합니다.
+          기본 노출 5종(메인 3 + 실험 스캘프 2). 레거시 ID는 서버에서 계속 허용됩니다. market=domestic.
         </Text>
 
         <Button title="모의 자동매매 시작" onPress={start} disabled={!canStart || riskOff} />

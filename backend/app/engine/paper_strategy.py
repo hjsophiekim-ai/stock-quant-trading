@@ -12,6 +12,7 @@ from app.strategy.swing_strategy import SwingStrategy
 from app.strategy.scalp_momentum_v1_strategy import ScalpMomentumV1Strategy
 from app.strategy.scalp_momentum_v2_strategy import ScalpMomentumV2Strategy
 from app.strategy.scalp_momentum_v3_strategy import ScalpMomentumV3Strategy
+from app.strategy.scalp_macd_rsi_3m_v1_strategy import ScalpMacdRsi3mV1Strategy
 from app.strategy.us_scalp_momentum_v1_strategy import UsScalpMomentumV1Strategy
 from app.strategy.us_swing_relaxed_v1_strategy import UsSwingRelaxedV1Strategy
 
@@ -32,6 +33,8 @@ def strategy_for_paper_id(strategy_id: str) -> BaseStrategy:
         return ScalpMomentumV2Strategy()
     if sid == "scalp_momentum_v3":
         return ScalpMomentumV3Strategy()
+    if sid == "scalp_macd_rsi_3m_v1":
+        return ScalpMacdRsi3mV1Strategy()
     if sid == "final_betting_v1":
         return FinalBettingV1Strategy()
     if sid == "us_swing_relaxed_v1":

@@ -228,6 +228,47 @@ def minutes_since_session_open_kst(
     return (n - open_dt).total_seconds() / 60.0
 
 
+def minutes_to_regular_close_kst(
+    now: datetime | None = None,
+    *,
+    session_config: KrxSessionConfig | None = None,
+) -> float:
+    """정규장 종료(설정)까지 남은 분(장외·주말은 큰 음수)."""
+    cfg = session_config or krx_session_config_from_settings(get_settings())
+    n = _to_kst(now or kst_now())
+    if n.weekday() >= 5:
+        return -9999.0
+    close_dt = n.replace(
+        hour=cfg.regular_close.hour,
+        minute=cfg.regular_close.minute,
+        second=cfg.regular_close.second,
+        microsecond=0,
+    )
+    return (close_dt - n).total_seconds() / 60.0
+
+
+def macd_line_signal_hist(close: pd.Series, fast: int = 12, slow: int = 26, signal_n: int = 9) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """MACD line, signal, histogram (표준 EMA 정의)."""
+    c = close.astype(float)
+    ema_f = c.ewm(span=int(fast), adjust=False).mean()
+    ema_s = c.ewm(span=int(slow), adjust=False).mean()
+    macd = ema_f - ema_s
+    sig = macd.ewm(span=int(signal_n), adjust=False).mean()
+    hist = macd - sig
+    return macd, sig, hist
+
+
+def effective_intraday_max_open_positions(cfg: Any, strategy_id: str) -> int:
+    """전략별 동시 보유 상한(글로벌 상한과 교차)."""
+    sid = (strategy_id or "").lower().strip()
+    base = int(getattr(cfg, "paper_intraday_max_open_positions", 3) or 3)
+    if sid in ("scalp_momentum_v2", "scalp_momentum_v3"):
+        return min(base, int(getattr(cfg, "paper_experimental_scalp_max_open_positions", 2)))
+    if sid == "scalp_macd_rsi_3m_v1":
+        return min(base, int(getattr(cfg, "paper_scalp_macd_max_open_positions", 3)))
+    return base
+
+
 def should_force_flatten_before_close_kst(
     *,
     now: datetime | None = None,
