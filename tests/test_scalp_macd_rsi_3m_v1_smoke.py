@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pandas as pd
+import pytest
 from zoneinfo import ZoneInfo
 
 from app.strategy.base_strategy import StrategyContext
@@ -37,15 +40,47 @@ def _synth_3m_bars(*, n: int = 50, uptrend: bool = True) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def test_macd_strategy_emits_no_signals_without_quotes() -> None:
+def _minimal_index_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=40, freq="D", tz=_KST),
+            "close": [2500.0 + i * 0.5 for i in range(40)],
+        }
+    )
+
+
+@pytest.fixture
+def patch_macd_session_deterministic(monkeypatch: pytest.MonkeyPatch) -> None:
+    """주말/고변동 국면 등 환경 의존 제거."""
+    monkeypatch.setattr(
+        "app.strategy.scalp_macd_rsi_3m_v1_strategy.classify_market_regime",
+        lambda *a, **k: SimpleNamespace(regime="bullish_trend"),
+    )
+    monkeypatch.setattr(
+        "app.strategy.scalp_macd_rsi_3m_v1_strategy.minutes_since_session_open_kst",
+        lambda **_: 45.0,
+    )
+    monkeypatch.setattr(
+        "app.strategy.scalp_macd_rsi_3m_v1_strategy.minutes_to_regular_close_kst",
+        lambda **_: 120.0,
+    )
+    monkeypatch.setattr(
+        "app.strategy.scalp_macd_rsi_3m_v1_strategy.should_force_flatten_before_close_kst",
+        lambda **_: False,
+    )
+
+
+def test_macd_strategy_emits_no_signals_without_quotes(patch_macd_session_deterministic: object) -> None:
     strat = ScalpMacdRsi3mV1Strategy()
     px = _synth_3m_bars()
+    kospi = _minimal_index_df()
+    vol = pd.DataFrame({"date": kospi["date"], "value": [1.0] * len(kospi)})
     ctx = StrategyContext(
         prices=px,
-        kospi_index=pd.DataFrame(),
-        sp500_index=pd.DataFrame(),
+        kospi_index=kospi,
+        sp500_index=kospi.copy(),
         portfolio=pd.DataFrame(columns=["symbol", "quantity", "average_price", "hold_days"]),
-        volatility_index=pd.DataFrame(),
+        volatility_index=vol,
     )
     setattr(strat, "intraday_session_context", {"krx_session_state": "regular"})
     sigs = strat.generate_signals(ctx)
@@ -53,15 +88,17 @@ def test_macd_strategy_emits_no_signals_without_quotes() -> None:
     assert isinstance(sigs, list)
 
 
-def test_macd_strategy_hit_count_in_diagnostics() -> None:
+def test_macd_strategy_hit_count_in_diagnostics(patch_macd_session_deterministic: object) -> None:
     strat = ScalpMacdRsi3mV1Strategy()
     px = _synth_3m_bars(n=45, uptrend=True)
+    kospi = _minimal_index_df()
+    vol = pd.DataFrame({"date": kospi["date"], "value": [1.0] * len(kospi)})
     ctx = StrategyContext(
         prices=px,
-        kospi_index=pd.DataFrame(),
-        sp500_index=pd.DataFrame(),
+        kospi_index=kospi,
+        sp500_index=kospi.copy(),
         portfolio=pd.DataFrame(columns=["symbol", "quantity", "average_price", "hold_days"]),
-        volatility_index=pd.DataFrame(),
+        volatility_index=vol,
     )
     setattr(strat, "intraday_session_context", {"krx_session_state": "regular"})
     strat.quote_by_symbol = {
