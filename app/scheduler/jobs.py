@@ -209,6 +209,9 @@ class SchedulerJobs:
         report["generated_orders"] = [_order_request_to_dict(o) for o in strategy_orders]
         report["regime"] = regime_label
         report["last_diagnostics"] = list(getattr(self.strategy, "last_diagnostics", []) or [])
+        report["swing_relaxed_v2_exit_evaluation"] = list(
+            getattr(self.strategy, "last_exit_evaluation", []) or []
+        )
         pos_n = len(self.broker.get_positions())
         report["no_order_reason"] = _no_order_reason(
             halted=False,

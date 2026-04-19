@@ -1,19 +1,21 @@
-# Paper 전략: `scalp_rsi_flag_hf_v1`
+# Paper 전략: `scalp_rsi_flag_hf_v1` / `intraday_rsi_flag_hf_v1`
 
 ## 목적
 
 - **일중 다회** 완료 거래(페이퍼)를 현실적으로 늘리되, 킬 스위치·일손실·롤링 손실·중복 주문 방지 등 **기존 안전장치를 유지**한다.
 - 백테스트 최적화가 아니라 **실행 가능한 필터·진단**을 우선한다.
 
+`intraday_rsi_flag_hf_v1`은 동일 구현(`ScalpRsiFlagHfV1Strategy`)에 **다른 paper strategy_id**만 부여한 별칭이다. 주문·진단의 `strategy_profile` / `strategy_name`은 선택한 ID를 따른다.
+
 ## 로직 요약
 
 - **봉**: 백엔드에서 1분봉을 **3분봉으로 리샘플** (`universe_as_timeframe(..., 3)`).
 - **매수 (red flag)**  
-  - `app/strategy/rsi_flag_helpers.evaluate_rsi_red_flag_buy`  
+  - `rsi_red_flag_buy` (= `evaluate_rsi_red_flag_buy`)  
   - 서브 경로 3개(과매도 반전, VWAP/EMA 재탈환, 플러시 후 양봉) 중 **최소 점수** `PAPER_RSI_HF_MIN_ENTRY_SCORE` (기본 2).  
   - 유동성·스프레드·추격 캔들 필터. (VWAP/EMA 연속성은 진단 필드 `optional_vwap_ema_score` 로만 기록.)
 - **매도 (blue flag 우선)**  
-  - `evaluate_rsi_blue_flag_sell`: RSI 과매수 꺾임, MACD 히스토그램 약화, VWAP 위 확장 후 실패 캔들 등.  
+  - `rsi_blue_flag_sell` (= `evaluate_rsi_blue_flag_sell`): RSI 과매수 꺾임, MACD 히스토그램 약화, VWAP 위 확장 후 실패 캔들 등.  
   - 그 다음 고정 **손절/익절/트레일/시간** 및 **장마감 강제청산**.
 
 ## 진단 필드 (전략·헬퍼)
@@ -49,3 +51,12 @@
 - `PAPER_FINAL_BETTING_MIN_ALLOCATION_PCT` (기본 **20**)  
 - `PAPER_FINAL_BETTING_MAX_CAPITAL_PER_POSITION_PCT` (기본 **25**, 최소 배분보다 커야 함)  
 - 리스크 수량이 최소 주수보다 작으면 진입은 **`insufficient_budget_for_min_allocation`** 으로 차단된다.
+
+추가 가드(종가·오버나잇):
+
+| 변수 | 기본 | 설명 |
+|------|------|------|
+| `PAPER_FINAL_BETTING_MAX_OVERNIGHT_EQUITY_PCT` | 65 | `final_betting_carry`로 추적 중인 포지션 노셔널 합이 평가금 대비 이 비율 이상이면 신규 진입 차단. `0`이면 비활성. |
+| `PAPER_FINAL_BETTING_WEAK_CLOSE_RSI_MAX` | 74 | 당일 막바 RSI(14)가 이 값 이상이면 **`weak_close_rsi_high`** 로 진입 차단. |
+
+진단에 `final_betting_overnight_exposure_pct`가 포함될 수 있다.

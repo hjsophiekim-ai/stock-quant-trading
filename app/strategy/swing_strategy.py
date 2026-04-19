@@ -151,6 +151,9 @@ def build_symbol_signal(symbol_df: pd.DataFrame) -> dict[str, float | bool]:
     atr_f = float(atr_raw) if atr_raw is not None and pd.notna(atr_raw) else 0.0
     close_px = float(latest["close"])
     atr_pct = (atr_f / close_px * 100.0) if close_px > 0 and atr_f > 0 else 0.0
+    atr_available = bool(
+        {"high", "low"}.issubset(enriched.columns) and pd.notna(atr_raw) and float(atr_f) > 0
+    )
 
     signal: dict[str, float | bool] = {
         "ma20_gt_ma60": bool(latest["ma20"] > latest["ma60"]) if pd.notna(latest["ma20"]) and pd.notna(latest["ma60"]) else False,
@@ -164,6 +167,7 @@ def build_symbol_signal(symbol_df: pd.DataFrame) -> dict[str, float | bool]:
         "rsi14": float(latest["rsi14"]) if pd.notna(latest["rsi14"]) else 50.0,
         "atr14": atr_f,
         "atr_pct": atr_pct,
+        "atr_available": atr_available,
     }
     return signal
 

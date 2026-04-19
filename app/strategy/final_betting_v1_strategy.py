@@ -499,6 +499,23 @@ class FinalBettingV1Strategy(BaseStrategy):
             self.last_intraday_signal_breakdown["blocked"] = "max_open_positions"
             return signals
 
+        eq_fb = float(getattr(self, "_final_betting_equity_krw", 0.0) or 0.0)
+        max_overnight_pct = float(getattr(cfg, "paper_final_betting_max_overnight_equity_pct", 0.0) or 0.0)
+        if max_overnight_pct > 0 and eq_fb > 0:
+            fb_on = 0.0
+            for sym_fb, meta in (fb_positions or {}).items():
+                if sym_fb not in pos_symbols:
+                    continue
+                q_, av_ = pos_symbols[sym_fb]
+                if int(q_) <= 0:
+                    continue
+                fb_on += float(q_) * float(av_)
+            on_pct = (fb_on / eq_fb) * 100.0
+            self.last_intraday_signal_breakdown["final_betting_overnight_exposure_pct"] = round(float(on_pct), 4)
+            if on_pct >= max_overnight_pct - 1e-9:
+                self.last_intraday_signal_breakdown["blocked"] = "max_overnight_equity_pct"
+                return signals
+
         last_exit_map: dict[str, str] = dict(carry.get("last_exit_kst") or {})
         cooldown = int(cfg.paper_final_betting_reentry_cooldown_days)
         min_tv = float(cfg.paper_final_betting_min_trade_value_krw)
@@ -688,7 +705,10 @@ class FinalBettingV1Strategy(BaseStrategy):
                     tv_hist_day[sym] = today
                 avg5 = sum(tv_hist.get(sym) or []) / max(1, len(tv_hist.get(sym) or []))
                 tv_spike_ok = avg5 <= 0 or tv_sym >= avg5 * 2.0
-                if not net_buy_rank_ok:
+                weak_rsi_max = float(getattr(cfg, "paper_final_betting_weak_close_rsi_max", 74.0))
+                if rsi14 >= weak_rsi_max:
+                    blocked = "weak_close_rsi_high"
+                elif not net_buy_rank_ok:
                     blocked = "net_buy_rank_or_flow_fail"
                 elif not ma5_ok:
                     blocked = "close_below_ma5"

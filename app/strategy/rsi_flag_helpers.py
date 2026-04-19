@@ -176,3 +176,13 @@ def evaluate_rsi_blue_flag_sell(sub: pd.DataFrame) -> dict[str, Any]:
     out["rsi_blue_flag_sell"] = ok
     out["rsi_blue_flag_reason"] = ";".join(reasons) if reasons else "none"
     return out
+
+
+def rsi_red_flag_buy(sub: pd.DataFrame) -> dict[str, Any]:
+    """진단 필드명 고정: `evaluate_rsi_red_flag_buy` 별칭."""
+    return evaluate_rsi_red_flag_buy(sub)
+
+
+def rsi_blue_flag_sell(sub: pd.DataFrame) -> dict[str, Any]:
+    """진단 필드명 고정: `evaluate_rsi_blue_flag_sell` 별칭."""
+    return evaluate_rsi_blue_flag_sell(sub)

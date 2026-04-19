@@ -30,7 +30,7 @@ from app.strategy.intraday_common import (
 )
 from app.strategy.intraday_paper_state import IntradayPaperState, parse_iso
 from app.strategy.market_regime import MarketRegimeConfig, MarketRegimeInputs, classify_market_regime
-from app.strategy.rsi_flag_helpers import evaluate_rsi_blue_flag_sell, evaluate_rsi_red_flag_buy
+from app.strategy.rsi_flag_helpers import rsi_blue_flag_sell, rsi_red_flag_buy
 
 
 @dataclass
@@ -51,12 +51,13 @@ class ScalpRsiFlagHfV1Strategy(BaseStrategy):
 
     def generate_signals(self, context: StrategyContext) -> list[StrategySignal]:
         cfg = get_settings()
+        sid = str(getattr(self, "_paper_strategy_id", None) or "scalp_rsi_flag_hf_v1").strip()
         self.last_diagnostics = []
         self.last_intraday_filter_breakdown = []
         self.last_intraday_signal_breakdown = {
             "entries_evaluated": 0,
             "exits_evaluated": 0,
-            "strategy_profile": "scalp_rsi_flag_hf_v1",
+            "strategy_profile": sid,
             "label_ko": "RSI red/blue 플래그 고빈도 스캘프(3m·리스크 게이트)",
         }
         signals: list[StrategySignal] = []
@@ -111,13 +112,22 @@ class ScalpRsiFlagHfV1Strategy(BaseStrategy):
             exit_reason = None
             blue_diag: dict[str, Any] = {}
             if not sub.empty and len(sub) >= 30:
-                blue_diag = evaluate_rsi_blue_flag_sell(sub)
+                blue_diag = rsi_blue_flag_sell(sub)
             if flatten_close:
                 exit_reason = "forced_flatten_before_close"
             elif not sub.empty:
                 if bool(blue_diag.get("rsi_blue_flag_sell")):
                     exit_reason = "rsi_blue_flag_sell"
                 else:
+                    close_s = sub["close"].astype(float)
+                    ema8 = ema(close_s, 8)
+                    cushion_px = avg * (1.0 + max(float(cfg.paper_intraday_stop_loss_pct), 0.35) * 0.01 * 0.5)
+                    momentum_fail = False
+                    if len(ema8) >= 2 and last_px >= cushion_px and last_px < float(ema8.iloc[-1]) * 0.998:
+                        if len(close_s) >= 2 and last_px < float(close_s.iloc[-2]):
+                            momentum_fail = True
+                    if momentum_fail:
+                        exit_reason = "momentum_failure_ema"
                     sl = avg * (1.0 - sl_pct / 100.0)
                     tp = avg * (1.0 + tp_pct / 100.0)
                     peak = float(st.peak_price.get(sym, last_px)) if st else last_px
@@ -127,13 +137,13 @@ class ScalpRsiFlagHfV1Strategy(BaseStrategy):
                             st.peak_price[sym] = peak
                     trail_line = peak * (1.0 - trail_pct / 100.0) if trail_pct > 0 else 0.0
                     entry_ts = parse_iso(st.entry_ts_iso.get(sym)) if st else None
-                    if last_px <= sl:
+                    if exit_reason is None and last_px <= sl:
                         exit_reason = "stop_loss"
-                    elif last_px >= tp:
+                    elif exit_reason is None and last_px >= tp:
                         exit_reason = "take_profit"
-                    elif trail_pct > 0 and last_px < trail_line:
+                    elif exit_reason is None and trail_pct > 0 and last_px < trail_line:
                         exit_reason = "trailing_stop"
-                    elif entry_ts is not None:
+                    elif exit_reason is None and entry_ts is not None:
                         age_m = (datetime.now(timezone.utc) - entry_ts).total_seconds() / 60.0
                         if age_m >= hold_min:
                             exit_reason = "time_stop"
@@ -150,7 +160,7 @@ class ScalpRsiFlagHfV1Strategy(BaseStrategy):
                         price=last_px,
                         stop_loss_pct=None,
                         reason=exit_reason,
-                        strategy_name="scalp_rsi_flag_hf_v1",
+                        strategy_name=sid,
                     )
                 )
                 self.last_diagnostics.append(
@@ -175,7 +185,7 @@ class ScalpRsiFlagHfV1Strategy(BaseStrategy):
                 return signals
 
         open_n = len(pos_symbols)
-        max_pos = effective_intraday_max_open_positions(cfg, "scalp_rsi_flag_hf_v1")
+        max_pos = effective_intraday_max_open_positions(cfg, sid)
         if open_n >= max_pos:
             self.last_intraday_signal_breakdown["blocked"] = "max_open_positions"
             return signals
@@ -203,7 +213,7 @@ class ScalpRsiFlagHfV1Strategy(BaseStrategy):
                     "symbol": sym,
                     "entered": False,
                     "blocked_reason": "",
-                    "strategy": "scalp_rsi_flag_hf_v1",
+                    "strategy": sid,
                 }
                 if st and max_sym_trades > 0:
                     n_sym = int((st.symbol_entries_today or {}).get(sym, 0))
@@ -239,7 +249,7 @@ class ScalpRsiFlagHfV1Strategy(BaseStrategy):
                         self.last_diagnostics.append(diag)
                         continue
 
-                red = evaluate_rsi_red_flag_buy(sub)
+                red = rsi_red_flag_buy(sub)
                 diag.update({k: red.get(k) for k in ("rsi_red_flag_buy", "rsi_red_flag_reason", "rsi_red_path_hits")})
 
                 path_hits = int(red.get("rsi_red_path_hits") or 0)
@@ -286,8 +296,8 @@ class ScalpRsiFlagHfV1Strategy(BaseStrategy):
                         quantity=qty,
                         price=last_close,
                         stop_loss_pct=sl_pct,
-                        reason="scalp_rsi_flag_hf_v1_entry",
-                        strategy_name="scalp_rsi_flag_hf_v1",
+                        reason=f"{sid}_entry",
+                        strategy_name=sid,
                     )
                 )
                 diag["entered"] = True

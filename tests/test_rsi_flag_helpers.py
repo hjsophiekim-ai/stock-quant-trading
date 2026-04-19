@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pandas as pd
 
-from app.strategy.rsi_flag_helpers import evaluate_rsi_blue_flag_sell, evaluate_rsi_red_flag_buy
+from app.strategy.rsi_flag_helpers import (
+    evaluate_rsi_blue_flag_sell,
+    evaluate_rsi_red_flag_buy,
+    rsi_blue_flag_sell,
+    rsi_red_flag_buy,
+)
 
 
 def _ohlcv_frame(n: int, *, drift: float = 0.0, vol: float = 1_000_000.0) -> pd.DataFrame:
@@ -63,6 +68,12 @@ def test_red_oversold_turn_up_pattern():
     r = evaluate_rsi_red_flag_buy(sub)
     assert "rsi_red_path_hits" in r
     assert isinstance(r.get("rsi_red_flag_reason"), str)
+
+
+def test_public_aliases_match_evaluate_functions():
+    sub = _ohlcv_frame(30)
+    assert rsi_red_flag_buy(sub) == evaluate_rsi_red_flag_buy(sub)
+    assert rsi_blue_flag_sell(sub) == evaluate_rsi_blue_flag_sell(sub)
 
 
 def test_final_betting_feasible_vs_min_shares_math():

@@ -58,6 +58,7 @@ def _is_intraday_scalp_strategy(strategy_id: str) -> bool:
         "scalp_momentum_v3",
         "scalp_macd_rsi_3m_v1",
         "scalp_rsi_flag_hf_v1",
+        "intraday_rsi_flag_hf_v1",
     )
 
 
@@ -81,12 +82,13 @@ def _paper_risk_limits_for_strategy(strategy_id: str | None, cfg) -> RiskLimits:
         default_stop_loss_pct=cfg.default_stop_loss_pct,
     )
     sid = (strategy_id or "").strip().lower()
-    if any(x in sid for x in ("scalp_momentum", "scalp_macd", "scalp_rsi", "us_scalp")):
+    if any(x in sid for x in ("scalp_momentum", "scalp_macd", "scalp_rsi", "intraday_rsi", "us_scalp")):
         return replace(
             base,
-            daily_loss_limit_pct=min(float(base.daily_loss_limit_pct), 2.5),
+            daily_loss_limit_pct=min(float(base.daily_loss_limit_pct), 2.35),
             adaptive_loss_streak_threshold=3,
-            rolling_loss_limit_pct=min(float(base.rolling_loss_limit_pct), 3.5),
+            rolling_loss_limit_pct=min(float(base.rolling_loss_limit_pct), 3.2),
+            max_single_order_notional_pct=min(float(base.max_single_order_notional_pct), 22.0),
         )
     if sid.startswith("swing") or "us_swing" in sid:
         return replace(
@@ -98,7 +100,9 @@ def _paper_risk_limits_for_strategy(strategy_id: str | None, cfg) -> RiskLimits:
         return replace(
             base,
             adaptive_loss_streak_threshold=4,
-            daily_loss_limit_pct=min(float(base.daily_loss_limit_pct), 2.75),
+            daily_loss_limit_pct=min(float(base.daily_loss_limit_pct), 2.65),
+            rolling_loss_limit_pct=min(float(base.rolling_loss_limit_pct), 4.0),
+            max_single_order_notional_pct=min(float(base.max_single_order_notional_pct), 28.0),
         )
     return base
 
@@ -331,6 +335,11 @@ class UserPaperTradingLoop:
             sym = sym[:1]
         lookback = min(60, int(cfg.paper_kis_chart_lookback_days)) if cfg.paper_smoke_mode else max(int(cfg.paper_kis_chart_lookback_days), 60)
         jobs = self._build_jobs(client, strategy_id=swing_strategy_id)
+        if (swing_strategy_id or "").strip().lower() == "swing_relaxed_v2":
+            from pathlib import Path
+
+            stp = Path(cfg.paper_session_state_path).parent / f"swing_relaxed_v2_tp1_{self._user_tag}.json"
+            setattr(jobs.strategy, "_swing_v2_tp1_state_path", stp)
         universe = build_kis_stock_universe(
             client,
             sym,
@@ -711,7 +720,7 @@ class UserPaperTradingLoop:
             regular_session_kst = session_snap.regular_session_kst
 
             sid = (self._strategy_id or "").lower().strip()
-            if sid in ("scalp_momentum_v1", "scalp_macd_rsi_3m_v1", "scalp_rsi_flag_hf_v1"):
+            if sid in ("scalp_momentum_v1", "scalp_macd_rsi_3m_v1", "scalp_rsi_flag_hf_v1", "intraday_rsi_flag_hf_v1"):
                 universe_tf = universe_as_timeframe(universe_1m, 3)
                 timeframe = "3m"
             else:

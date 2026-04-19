@@ -9,6 +9,7 @@ export const DOMESTIC_STRATEGY_OPTIONS = [
   "final_betting_v1",
   "scalp_macd_rsi_3m_v1",
   "scalp_rsi_flag_hf_v1",
+  "intraday_rsi_flag_hf_v1",
   "scalp_momentum_v2",
   "scalp_momentum_v3",
 ] as const;

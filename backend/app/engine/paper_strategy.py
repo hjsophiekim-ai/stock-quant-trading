@@ -36,8 +36,10 @@ def strategy_for_paper_id(strategy_id: str) -> BaseStrategy:
         return ScalpMomentumV3Strategy()
     if sid == "scalp_macd_rsi_3m_v1":
         return ScalpMacdRsi3mV1Strategy()
-    if sid == "scalp_rsi_flag_hf_v1":
-        return ScalpRsiFlagHfV1Strategy()
+    if sid in ("scalp_rsi_flag_hf_v1", "intraday_rsi_flag_hf_v1"):
+        inst = ScalpRsiFlagHfV1Strategy()
+        setattr(inst, "_paper_strategy_id", sid)
+        return inst
     if sid == "final_betting_v1":
         return FinalBettingV1Strategy()
     if sid == "us_swing_relaxed_v1":

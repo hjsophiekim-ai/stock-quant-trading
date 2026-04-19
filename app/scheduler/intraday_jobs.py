@@ -430,7 +430,7 @@ class IntradaySchedulerJobs:
             if cd_min > 0:
                 until = datetime.now(timezone.utc) + timedelta(minutes=cd_min)
                 state.cooldown_until_iso[order.symbol] = until.isoformat()
-            if strat_id == "scalp_rsi_flag_hf_v1":
+            if strat_id in ("scalp_rsi_flag_hf_v1", "intraday_rsi_flag_hf_v1"):
                 if getattr(state, "symbol_entries_today", None) is None:
                     state.symbol_entries_today = {}
                 d = state.symbol_entries_today

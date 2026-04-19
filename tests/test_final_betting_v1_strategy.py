@@ -154,6 +154,40 @@ def test_overnight_exit_time_exit(monkeypatch: pytest.MonkeyPatch) -> None:
     assert sells[0].reason == "hard_exit_1100"
 
 
+def test_overnight_exposure_guard_blocks_at_entry_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """carry 추적 포지션 노셔널이 평가금 대비 상한을 넘으면 신규 진입 차단."""
+    monkeypatch.setenv("PAPER_FINAL_BETTING_ENABLED", "true")
+    monkeypatch.setenv("PAPER_FINAL_BETTING_MAX_OVERNIGHT_EQUITY_PCT", "30")
+    get_settings.cache_clear()
+    strat = FinalBettingV1Strategy()
+    setattr(strat, "_final_betting_equity_krw", 50_000_000.0)
+    set_final_betting_debug_now(datetime(2026, 4, 16, 15, 12, tzinfo=_KST))
+    st = IntradayPaperState(day_kst="20260416")
+    st.final_betting_carry = {
+        "positions": {
+            "005930": {
+                "entry_kst_date": "20260415",
+                "ref_close": 70000.0,
+                "shares": 700,
+                "partial_scaleout_done": False,
+            },
+        },
+    }
+    strat.intraday_state = st
+    strat.intraday_session_context = {"krx_session_state": "regular"}
+    df = _minute_series("005930", "20260416")
+    idx = _index_frame()
+    ctx = StrategyContext(
+        prices=df,
+        kospi_index=idx[["date", "close"]].copy(),
+        sp500_index=idx[["date", "close"]].copy(),
+        portfolio=pd.DataFrame([{"symbol": "005930", "quantity": 700, "average_price": 70000.0}]),
+        volatility_index=idx[["date", "value"]].copy(),
+    )
+    strat.generate_signals(ctx)
+    assert strat.last_intraday_signal_breakdown.get("blocked") == "max_overnight_equity_pct"
+
+
 def test_intraday_state_roll_preserves_carry(tmp_path: Path) -> None:
     p = tmp_path / "fb_state.json"
     st = IntradayPaperState(day_kst="20260101", final_betting_carry={"positions": {"000660": {"x": 1}}})

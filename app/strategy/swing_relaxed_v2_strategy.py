@@ -8,7 +8,8 @@ Paper 검증용 완화 스윙 v2.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -17,6 +18,11 @@ from app.strategy.base_strategy import StrategyContext, StrategySignal
 from app.strategy.filters import filter_relaxed_swing_candidates
 from app.strategy.market_regime import MarketRegimeInputs, classify_market_regime
 from app.strategy.ranking import build_ranking_report_rows, rank_candidates
+from app.strategy.swing_relaxed_v2_state import (
+    SwingRelaxedV2StateStore,
+    position_signature,
+    sync_tp1_with_portfolio,
+)
 from app.strategy.swing_strategy import (
     SwingStrategy,
     SwingStrategyConfig,
@@ -102,20 +108,34 @@ def _build_exit_signals_relaxed_v2(
     signal: dict[str, Any],
     position_row: pd.Series,
     config: SwingStrategyConfig,
-) -> list[StrategySignal]:
+    *,
+    tp1_already_done: bool = False,
+) -> tuple[list[StrategySignal], dict[str, Any]]:
     entry_price = float(position_row["average_price"])
     qty = int(position_row["quantity"])
     hold_days = int(position_row.get("hold_days", 0))
+    atr_available = bool(signal.get("atr_available"))
+    atr_pct = float(signal.get("atr_pct") or 0.0)
+    swing_atr_exit_mode = "atr" if atr_available else "fallback_fixed_stop"
+    diag: dict[str, Any] = {
+        "symbol": symbol,
+        "swing_atr_exit_mode": swing_atr_exit_mode,
+        "atr_available": atr_available,
+        "atr_pct_snapshot": round(atr_pct, 6),
+        "swing_tp1_done_before_tick": bool(tp1_already_done),
+    }
     if qty <= 0 or entry_price <= 0:
-        return []
+        diag["blocked_reason"] = "invalid_position"
+        return [], diag
 
     close_price = float(signal["close"])
     pnl_pct = ((close_price / entry_price) - 1.0) * 100.0
-    atr_pct = float(signal.get("atr_pct") or 0.0)
     ma20 = float(signal.get("ma20") or 0.0)
-    sl_eff = _dynamic_stop_pct_relaxed_v2(config, atr_pct)
+    sl_eff = _dynamic_stop_pct_relaxed_v2(config, atr_pct if atr_available else 0.0)
+    diag["dynamic_stop_loss_pct_effective"] = round(float(sl_eff), 4)
 
     if pnl_pct <= -abs(sl_eff):
+        diag["exit_branch"] = "stop"
         return [
             StrategySignal(
                 symbol=symbol,
@@ -126,9 +146,10 @@ def _build_exit_signals_relaxed_v2(
                 reason="swing_relaxed_v2_stop_atr",
                 strategy_name="swing_relaxed_v2",
             )
-        ]
+        ], diag
 
     if pnl_pct >= float(config.second_take_profit_pct):
+        diag["exit_branch"] = "tp2_full"
         return [
             StrategySignal(
                 symbol=symbol,
@@ -139,10 +160,13 @@ def _build_exit_signals_relaxed_v2(
                 reason="swing_relaxed_v2_tp2",
                 strategy_name="swing_relaxed_v2",
             )
-        ]
+        ], diag
 
-    if pnl_pct >= float(config.first_take_profit_pct):
+    fp1 = float(config.first_take_profit_pct)
+    if (not tp1_already_done) and pnl_pct >= fp1:
         sell_qty = max(int(qty * 0.5), 1)
+        diag["exit_branch"] = "tp1_partial"
+        diag["tp1_partial_qty"] = int(sell_qty)
         return [
             StrategySignal(
                 symbol=symbol,
@@ -153,13 +177,15 @@ def _build_exit_signals_relaxed_v2(
                 reason="swing_relaxed_v2_tp1_partial",
                 strategy_name="swing_relaxed_v2",
             )
-        ]
+        ], diag
 
-    fp1 = float(config.first_take_profit_pct)
+    if tp1_already_done and fp1 <= pnl_pct < float(config.second_take_profit_pct):
+        diag["exit_branch"] = "tp1_already_done_hold_for_trail_or_time"
     trail_floor = max(2.0, fp1 * 0.38)
     if pnl_pct >= trail_floor and ma20 > 0:
-        buf = max(0.005, 0.38 * (atr_pct / 100.0)) if atr_pct > 0 else 0.008
+        buf = max(0.005, 0.38 * (atr_pct / 100.0)) if atr_available and atr_pct > 0 else 0.008
         if close_price < ma20 * (1.0 - buf):
+            diag["exit_branch"] = "trailing_ma"
             return [
                 StrategySignal(
                     symbol=symbol,
@@ -170,9 +196,10 @@ def _build_exit_signals_relaxed_v2(
                     reason="swing_relaxed_v2_trailing_ma_atr",
                     strategy_name="swing_relaxed_v2",
                 )
-            ]
+            ], diag
 
     if hold_days >= config.time_exit_days and pnl_pct <= 0.0:
+        diag["exit_branch"] = "time_exit"
         return [
             StrategySignal(
                 symbol=symbol,
@@ -183,9 +210,10 @@ def _build_exit_signals_relaxed_v2(
                 reason="swing_relaxed_v2_time_exit",
                 strategy_name="swing_relaxed_v2",
             )
-        ]
+        ], diag
 
-    return []
+    diag["exit_branch"] = "none"
+    return [], diag
 
 
 def should_enter_long_relaxed_v2(signal: dict[str, Any]) -> tuple[bool, int, dict[str, Any]]:
@@ -211,6 +239,7 @@ class SwingRelaxedV2Strategy(SwingStrategy):
         first_buy_drawdown_pct=-4.0,
         second_buy_drawdown_pct=-7.0,
     )
+    last_exit_evaluation: list[dict[str, Any]] = field(default_factory=list, repr=False)
 
     def paper_candidate_symbols(self, prices: pd.DataFrame) -> list[str]:
         # v2 는 후보 게이트도 완화하되, 너무 넓어지지 않게 상위 유동성 필터는 유지.
@@ -240,6 +269,20 @@ class SwingRelaxedV2Strategy(SwingStrategy):
             top_symbols = set(context.prices["symbol"].unique().tolist()[:10])
 
         signals: list[StrategySignal] = []
+        self.last_exit_evaluation = []
+        state_path = getattr(self, "_swing_v2_tp1_state_path", None)
+        st_sw = None
+        store: SwingRelaxedV2StateStore | None = None
+        if state_path is not None:
+            store = SwingRelaxedV2StateStore(Path(state_path))
+            st_sw = store.load()
+            held: dict[str, tuple[float, int]] = {}
+            if not context.portfolio.empty and "symbol" in context.portfolio.columns:
+                for sym in context.portfolio["symbol"].unique():
+                    row = context.portfolio[context.portfolio["symbol"] == sym].iloc[-1]
+                    held[str(sym).strip()] = (float(row.get("average_price") or 0.0), int(row.get("quantity") or 0))
+            st_sw = sync_tp1_with_portfolio(st_sw, held)
+
         for symbol, symbol_df in context.prices.groupby("symbol", sort=False):
             if symbol not in top_symbols:
                 continue
@@ -265,7 +308,18 @@ class SwingRelaxedV2Strategy(SwingStrategy):
                         )
                     )
             else:
-                signals.extend(_build_exit_signals_relaxed_v2(symbol, bs, pos, self.config))
+                tp1_done = bool(st_sw.tp1_done.get(str(symbol), False)) if st_sw is not None else False
+                ex, ev_diag = _build_exit_signals_relaxed_v2(
+                    symbol, bs, pos, self.config, tp1_already_done=tp1_done
+                )
+                self.last_exit_evaluation.append(ev_diag)
+                signals.extend(ex)
+                for s in ex:
+                    if s.reason == "swing_relaxed_v2_tp1_partial" and st_sw is not None:
+                        st_sw.tp1_done[str(symbol)] = True
+
+        if store is not None and st_sw is not None:
+            store.save(st_sw)
 
         self._build_last_diagnostics_v2(context, regime.regime, signals)
         return signals

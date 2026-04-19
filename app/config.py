@@ -294,6 +294,20 @@ class Settings(BaseSettings):
         alias="PAPER_FINAL_BETTING_LOOP_INTERVAL_SEC",
         description="종가베팅 전용 Paper 틱 간격(초). 장마감 직전 8분 창을 커버하도록 권장.",
     )
+    paper_final_betting_max_overnight_equity_pct: float = Field(
+        default=65.0,
+        ge=0.0,
+        le=100.0,
+        alias="PAPER_FINAL_BETTING_MAX_OVERNIGHT_EQUITY_PCT",
+        description="final_betting_carry 추적 포지션 노셔널 합이 평가금 대비 이 비율 이상이면 신규 진입 차단. 0이면 비활성.",
+    )
+    paper_final_betting_weak_close_rsi_max: float = Field(
+        default=74.0,
+        ge=50.0,
+        le=95.0,
+        alias="PAPER_FINAL_BETTING_WEAK_CLOSE_RSI_MAX",
+        description="당일 막바 RSI(14)가 이 값 이상이면 약한 마감으로 보고 신규 진입 차단.",
+    )
 
     # KRX 세션(장전/정규/장후) — Paper 인트라데이 분봉·주문 게이트
     paper_krx_preopen_enabled: bool = Field(default=False, alias="PAPER_KRX_PREOPEN_ENABLED")
