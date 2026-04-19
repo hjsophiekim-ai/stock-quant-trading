@@ -307,6 +307,7 @@ class IntradaySchedulerJobs:
                 "intraday_filter_breakdown": list(getattr(self.strategy, "last_intraday_filter_breakdown", []) or []),
                 "intraday_signal_breakdown": dict(getattr(self.strategy, "last_intraday_signal_breakdown", {}) or {}),
                 "trade_count_today": int(state.trade_count_today),
+                "symbol_entries_today": dict(getattr(state, "symbol_entries_today", {}) or {}),
                 "cooldown_symbols": sorted(state.cooldown_until_iso.keys()),
                 "forced_flatten": bool(forced_flatten),
                 "flatten_before_close_armed": bool(
@@ -417,6 +418,7 @@ class IntradaySchedulerJobs:
 
     def _on_accepted_order(self, order: OrderRequest, state: Any, cfg: Any) -> None:
         now_m = time.monotonic()
+        strat_id = str(order.strategy_id or "").strip().lower()
         if order.side == "buy":
             state.last_buy_mono[order.symbol] = now_m
             state.entry_ts_iso[order.symbol] = iso_now_utc()
@@ -428,10 +430,26 @@ class IntradaySchedulerJobs:
             if cd_min > 0:
                 until = datetime.now(timezone.utc) + timedelta(minutes=cd_min)
                 state.cooldown_until_iso[order.symbol] = until.isoformat()
+            if strat_id == "scalp_rsi_flag_hf_v1":
+                if getattr(state, "symbol_entries_today", None) is None:
+                    state.symbol_entries_today = {}
+                d = state.symbol_entries_today
+                d[order.symbol] = int(d.get(order.symbol, 0)) + 1
         elif order.side == "sell":
             state.entry_ts_iso.pop(order.symbol, None)
             state.peak_price.pop(order.symbol, None)
-            state.cooldown_until_iso.pop(order.symbol, None)
+            sr = str(order.signal_reason or "").lower()
+            if strat_id == "final_betting_v1":
+                state.cooldown_until_iso.pop(order.symbol, None)
+            else:
+                pcm = int(getattr(cfg, "paper_intraday_post_exit_cooldown_minutes", 0))
+                if sr == "stop_loss":
+                    pcm += int(getattr(cfg, "paper_intraday_stop_exit_extra_minutes", 0))
+                if pcm > 0:
+                    until = datetime.now(timezone.utc) + timedelta(minutes=pcm)
+                    state.cooldown_until_iso[order.symbol] = until.isoformat()
+                else:
+                    state.cooldown_until_iso.pop(order.symbol, None)
 
     def _report(
         self,

@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     paper_intraday_enabled: bool = Field(default=False, alias="PAPER_INTRADAY_ENABLED")
     paper_intraday_bar_minutes: int = Field(default=3, ge=1, le=60, alias="PAPER_INTRADAY_BAR_MINUTES")
     paper_intraday_loop_interval_sec: int = Field(default=90, ge=20, alias="PAPER_INTRADAY_LOOP_INTERVAL_SEC")
-    paper_intraday_max_trades_per_day: int = Field(default=30, ge=0, alias="PAPER_INTRADAY_MAX_TRADES_PER_DAY")
+    paper_intraday_max_trades_per_day: int = Field(default=48, ge=0, alias="PAPER_INTRADAY_MAX_TRADES_PER_DAY")
     paper_intraday_max_open_positions: int = Field(default=3, ge=1, alias="PAPER_INTRADAY_MAX_OPEN_POSITIONS")
     paper_intraday_max_hold_minutes: int = Field(default=20, ge=1, alias="PAPER_INTRADAY_MAX_HOLD_MINUTES")
     paper_intraday_stop_loss_pct: float = Field(default=0.50, ge=0.05, le=20.0, alias="PAPER_INTRADAY_STOP_LOSS_PCT")
@@ -117,6 +117,20 @@ class Settings(BaseSettings):
         default=10,
         ge=0,
         alias="PAPER_INTRADAY_TARGET_ROUND_TRIP_TRADES",
+    )
+    paper_intraday_post_exit_cooldown_minutes: int = Field(
+        default=4,
+        ge=0,
+        le=240,
+        alias="PAPER_INTRADAY_POST_EXIT_COOLDOWN_MINUTES",
+        description="청산 직후 동일 종목 재진입 쿨다운(분). final_betting_v1 매도는 제외.",
+    )
+    paper_intraday_stop_exit_extra_minutes: int = Field(
+        default=6,
+        ge=0,
+        le=120,
+        alias="PAPER_INTRADAY_STOP_EXIT_EXTRA_MINUTES",
+        description="손절 청산 시 signal_reason 에 stop 이 포함되면 post_exit 쿨다운에 가산(분).",
     )
     paper_intraday_chart_cache_ttl_sec: float = Field(default=45.0, ge=0.0, alias="PAPER_INTRADAY_CHART_CACHE_TTL_SEC")
     paper_intraday_chart_min_interval_sec: float = Field(
@@ -199,6 +213,27 @@ class Settings(BaseSettings):
         le=20,
         alias="PAPER_SCALP_MACD_MAX_OPEN_POSITIONS",
     )
+    paper_rsi_hf_max_open_positions: int = Field(
+        default=4,
+        ge=1,
+        le=20,
+        alias="PAPER_RSI_HF_MAX_OPEN_POSITIONS",
+        description="scalp_rsi_flag_hf_v1 동시 보유 상한.",
+    )
+    paper_rsi_hf_max_trades_per_symbol_day: int = Field(
+        default=4,
+        ge=1,
+        le=50,
+        alias="PAPER_RSI_HF_MAX_TRADES_PER_SYMBOL_DAY",
+        description="scalp_rsi_flag_hf_v1 종목별 일일 매수 체결 상한.",
+    )
+    paper_rsi_hf_min_entry_score: int = Field(
+        default=2,
+        ge=1,
+        le=3,
+        alias="PAPER_RSI_HF_MIN_ENTRY_SCORE",
+        description="RSI red 서브조건(경로 A/B/C) 충족 개수 최소.",
+    )
     paper_scalp_macd_entry_open_block_minutes: int = Field(
         default=10,
         ge=0,
@@ -225,10 +260,17 @@ class Settings(BaseSettings):
     paper_final_betting_entry_end_hhmm: str = Field(default="151800", alias="PAPER_FINAL_BETTING_ENTRY_END_HHMM")
     paper_final_betting_max_new_positions: int = Field(default=3, ge=1, le=10, alias="PAPER_FINAL_BETTING_MAX_NEW_POSITIONS")
     paper_final_betting_max_capital_per_position_pct: float = Field(
-        default=10.0,
+        default=25.0,
         ge=0.5,
-        le=30.0,
+        le=35.0,
         alias="PAPER_FINAL_BETTING_MAX_CAPITAL_PER_POSITION_PCT",
+    )
+    paper_final_betting_min_allocation_pct: float = Field(
+        default=20.0,
+        ge=1.0,
+        le=35.0,
+        alias="PAPER_FINAL_BETTING_MIN_ALLOCATION_PCT",
+        description="유효 신호 시 종목당 최소 평가금 대비 배분(%). max_capital_per_position 과 함께 검증.",
     )
     paper_final_betting_target_pct: float = Field(default=2.0, ge=0.1, le=20.0, alias="PAPER_FINAL_BETTING_TARGET_PCT")
     paper_final_betting_stop_loss_pct: float = Field(default=2.0, ge=0.05, le=8.0, alias="PAPER_FINAL_BETTING_STOP_LOSS_PCT")

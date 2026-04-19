@@ -266,6 +266,8 @@ def effective_intraday_max_open_positions(cfg: Any, strategy_id: str) -> int:
         return min(base, int(getattr(cfg, "paper_experimental_scalp_max_open_positions", 2)))
     if sid == "scalp_macd_rsi_3m_v1":
         return min(base, int(getattr(cfg, "paper_scalp_macd_max_open_positions", 3)))
+    if sid == "scalp_rsi_flag_hf_v1":
+        return min(base, int(getattr(cfg, "paper_rsi_hf_max_open_positions", 4)))
     return base
 
 

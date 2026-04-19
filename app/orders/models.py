@@ -28,6 +28,8 @@ class OrderRequest:
     stop_loss_pct: float | None = None
     strategy_id: str = "swing_strategy"
     signal_id: str | None = None
+    """전략 신호 사유(청산 후 쿨다운·진단용). 예: stop_loss, rsi_blue_flag_sell."""
+    signal_reason: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 

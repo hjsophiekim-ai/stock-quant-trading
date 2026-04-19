@@ -809,22 +809,53 @@ class FinalBettingV1Strategy(BaseStrategy):
             )
 
             eq = float(getattr(self, "_final_betting_equity_krw", 0.0) or 0.0)
+            min_pct = float(getattr(cfg, "paper_final_betting_min_allocation_pct", 20.0))
+            max_pct = float(cfg.paper_final_betting_max_capital_per_position_pct)
+            px = float(last_close)
             risk_q = compute_intraday_buy_quantity(
-                price_krw=float(last_close),
+                price_krw=px,
                 stop_loss_pct_points=float(cfg.paper_final_betting_stop_loss_pct),
                 equity_krw=eq,
                 intraday_budget_krw=max(eq, 1.0),
-                max_position_pct=float(cfg.paper_final_betting_max_capital_per_position_pct),
+                max_position_pct=max_pct,
                 risk_per_trade_pct=min(float(cfg.paper_risk_per_trade_pct), float(cfg.paper_final_betting_stop_loss_pct)),
                 fallback_qty=1,
             )
-            # 요청사항: 종가매매는 (리스크 차단 구간 제외) 종목당 자금의 약 20%를 베팅.
-            # 남은 현금 필드는 StrategyContext에 없으므로 현재 equity 기준으로 20%를 산출.
-            target_budget = max(eq * 0.20, float(last_close))
-            q_budget = max(1, int(target_budget / max(float(last_close), 1e-9)))
-            q = max(1, q_budget, int(risk_q))
-            q_cap = max(1, int((eq * 0.20) / max(float(last_close), 1e-9))) if eq > 0 else q
-            q = min(q, q_cap)
+            q_risk = int(risk_q)
+            q_cap_sh = max(1, int((eq * (max_pct / 100.0)) / max(px, 1e-9))) if eq > 0 else 1
+            q_min = max(1, int((eq * (min_pct / 100.0)) / max(px, 1e-9))) if eq > 0 else 1
+            feasible = min(q_risk, q_cap_sh)
+            alloc_diag: dict[str, Any] = {
+                "final_betting_min_allocation_pct": min_pct,
+                "final_betting_max_capital_per_position_pct": max_pct,
+                "final_betting_q_min_for_min_alloc": int(q_min),
+                "final_betting_q_risk": int(q_risk),
+                "final_betting_q_cap_shares": int(q_cap_sh),
+                "final_betting_feasible_shares": int(feasible),
+            }
+            if max_pct + 1e-9 < min_pct:
+                diag = {
+                    "symbol": sym,
+                    "strategy": "final_betting_v1",
+                    "entered": False,
+                    "blocked_reason": "config_max_pct_lt_min_allocation",
+                    **alloc_diag,
+                }
+                self.last_diagnostics.append(diag)
+                continue
+            if feasible < q_min:
+                diag = {
+                    "symbol": sym,
+                    "strategy": "final_betting_v1",
+                    "entered": False,
+                    "blocked_reason": "insufficient_budget_for_min_allocation",
+                    "final_betting_allocation_blocked_reason": "risk_or_cap_below_min_shares",
+                    **alloc_diag,
+                }
+                self.last_diagnostics.append(diag)
+                continue
+            q = int(feasible)
+            notional_pct = (q * px / eq * 100.0) if eq > 0 else 0.0
             ref_close = last_close
             self.pending_carry_updates[sym] = {
                 "entry_kst_date": now.strftime("%Y%m%d"),
@@ -860,6 +891,9 @@ class FinalBettingV1Strategy(BaseStrategy):
                 "rsi14": round(rsi14, 3),
                 "flow_proxy_score": round(flow_score, 4),
                 "final_betting_rank": rank_i + 1,
+                "final_betting_allocation_pct_equity": round(float(notional_pct), 3),
+                "final_betting_min_allocation_pct": min_pct,
+                **alloc_diag,
             }
             self.last_diagnostics.append(diag)
             entries_added += 1

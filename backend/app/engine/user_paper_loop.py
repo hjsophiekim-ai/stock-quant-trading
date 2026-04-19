@@ -52,7 +52,13 @@ logger = logging.getLogger("backend.app.engine.user_paper_loop")
 
 def _is_intraday_scalp_strategy(strategy_id: str) -> bool:
     s = (strategy_id or "").lower().strip()
-    return s in ("scalp_momentum_v1", "scalp_momentum_v2", "scalp_momentum_v3", "scalp_macd_rsi_3m_v1")
+    return s in (
+        "scalp_momentum_v1",
+        "scalp_momentum_v2",
+        "scalp_momentum_v3",
+        "scalp_macd_rsi_3m_v1",
+        "scalp_rsi_flag_hf_v1",
+    )
 
 
 def _is_final_betting_strategy(strategy_id: str) -> bool:
@@ -75,7 +81,7 @@ def _paper_risk_limits_for_strategy(strategy_id: str | None, cfg) -> RiskLimits:
         default_stop_loss_pct=cfg.default_stop_loss_pct,
     )
     sid = (strategy_id or "").strip().lower()
-    if any(x in sid for x in ("scalp_momentum", "scalp_macd", "us_scalp")):
+    if any(x in sid for x in ("scalp_momentum", "scalp_macd", "scalp_rsi", "us_scalp")):
         return replace(
             base,
             daily_loss_limit_pct=min(float(base.daily_loss_limit_pct), 2.5),
@@ -705,7 +711,7 @@ class UserPaperTradingLoop:
             regular_session_kst = session_snap.regular_session_kst
 
             sid = (self._strategy_id or "").lower().strip()
-            if sid in ("scalp_momentum_v1", "scalp_macd_rsi_3m_v1"):
+            if sid in ("scalp_momentum_v1", "scalp_macd_rsi_3m_v1", "scalp_rsi_flag_hf_v1"):
                 universe_tf = universe_as_timeframe(universe_1m, 3)
                 timeframe = "3m"
             else:

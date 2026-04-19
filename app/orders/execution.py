@@ -28,9 +28,31 @@ def split_order(order: OrderRequest, parts: int) -> list[OrderRequest]:
     chunks: list[OrderRequest] = []
     remaining = order.quantity
     for _ in range(parts - 1):
-        chunks.append(OrderRequest(symbol=order.symbol, side=order.side, quantity=base_qty, price=order.price, stop_loss_pct=order.stop_loss_pct))
+        chunks.append(
+            OrderRequest(
+                symbol=order.symbol,
+                side=order.side,
+                quantity=base_qty,
+                price=order.price,
+                stop_loss_pct=order.stop_loss_pct,
+                strategy_id=order.strategy_id,
+                signal_id=order.signal_id,
+                signal_reason=order.signal_reason,
+            )
+        )
         remaining -= base_qty
-    chunks.append(OrderRequest(symbol=order.symbol, side=order.side, quantity=remaining, price=order.price, stop_loss_pct=order.stop_loss_pct))
+    chunks.append(
+        OrderRequest(
+            symbol=order.symbol,
+            side=order.side,
+            quantity=remaining,
+            price=order.price,
+            stop_loss_pct=order.stop_loss_pct,
+            strategy_id=order.strategy_id,
+            signal_id=order.signal_id,
+            signal_reason=order.signal_reason,
+        )
+    )
     return chunks
 
 

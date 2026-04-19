@@ -19,6 +19,7 @@ from backend.app.engine.paper_strategy import strategy_for_paper_id
         "scalp_momentum_v2",
         "scalp_momentum_v3",
         "scalp_macd_rsi_3m_v1",
+        "scalp_rsi_flag_hf_v1",
         "final_betting_v1",
         "us_swing_relaxed_v1",
         "us_scalp_momentum_v1",

@@ -21,6 +21,7 @@ class OrderManager:
             stop_loss_pct=signal.stop_loss_pct,
             strategy_id=signal.strategy_id,
             signal_id=signal.signal_id,
+            signal_reason=None,
         )
 
     def evaluate_signal(self, signal: OrderSignal, snapshot: RiskSnapshot) -> OrderIntent:

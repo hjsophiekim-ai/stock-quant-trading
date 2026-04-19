@@ -45,6 +45,7 @@ class BaseStrategy(ABC):
                 price=s.price,
                 stop_loss_pct=s.stop_loss_pct,
                 strategy_id=s.strategy_name,
+                signal_reason=s.reason,
             )
             for s in self.generate_signals(context)
         ]
