@@ -6,6 +6,7 @@ import { APP_ENV, BACKEND_URL } from "./config/env";
 import DashboardScreen from "./screens/DashboardScreen";
 import LoginScreen from "./screens/LoginScreen";
 import OnboardingScreen from "./screens/OnboardingScreen";
+import LiveTradingSettingsScreen from "./screens/LiveTradingSettingsScreen";
 import PaperTradingScreen from "./screens/PaperTradingScreen";
 import PerformanceScreen from "./screens/PerformanceScreen";
 import USTradingScreen from "./screens/USTradingScreen";
@@ -19,7 +20,13 @@ import {
 } from "./lib/session";
 import { AuthState, getAuthState, setAuth, subscribeAuth } from "./store/authStore";
 
-type MainTab = "dashboard" | "domestic-trading" | "us-trading" | "performance" | "broker-settings";
+type MainTab =
+  | "dashboard"
+  | "domestic-trading"
+  | "live-trading"
+  | "us-trading"
+  | "performance"
+  | "broker-settings";
 
 export default function App() {
   const [auth, setAuthView] = useState<AuthState>(getAuthState());
@@ -117,6 +124,8 @@ export default function App() {
             onOpenDashboard={() => setTab("dashboard")}
             onOpenPerformance={() => setTab("performance")}
           />
+        ) : tab === "live-trading" ? (
+          <LiveTradingSettingsScreen backendUrl={BACKEND_URL} />
         ) : tab === "performance" ? (
           <PerformanceScreen backendUrl={BACKEND_URL} />
         ) : (
@@ -126,6 +135,7 @@ export default function App() {
       <View style={{ flexDirection: "row", justifyContent: "space-around", padding: 8 }}>
         <Button title="대시보드" onPress={() => setTab("dashboard")} />
         <Button title="국내" onPress={() => setTab("domestic-trading")} />
+        <Button title="실거래" onPress={() => setTab("live-trading")} />
         <Button title="미국" onPress={() => setTab("us-trading")} />
         <Button title="성과" onPress={() => setTab("performance")} />
         <Button title="브로커" onPress={() => setTab("broker-settings")} />

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import logging
 import time
 from datetime import datetime, timezone
@@ -64,6 +65,36 @@ def _is_us_scalp_strategy(strategy_id: str) -> bool:
 
 def _is_us_swing_strategy(strategy_id: str) -> bool:
     return (strategy_id or "").lower().strip() == "us_swing_relaxed_v1"
+
+
+def _paper_risk_limits_for_strategy(strategy_id: str | None, cfg) -> RiskLimits:
+    """전략 유형별 일손실·연패 적응 임계를 소폭 차등(스캘프는 더 타이트, 스윙은 휩소 여유)."""
+    base = RiskLimits(
+        daily_loss_limit_pct=cfg.daily_loss_limit_pct,
+        total_loss_limit_pct=cfg.total_loss_limit_pct,
+        default_stop_loss_pct=cfg.default_stop_loss_pct,
+    )
+    sid = (strategy_id or "").strip().lower()
+    if any(x in sid for x in ("scalp_momentum", "scalp_macd", "us_scalp")):
+        return replace(
+            base,
+            daily_loss_limit_pct=min(float(base.daily_loss_limit_pct), 2.5),
+            adaptive_loss_streak_threshold=3,
+            rolling_loss_limit_pct=min(float(base.rolling_loss_limit_pct), 3.5),
+        )
+    if sid.startswith("swing") or "us_swing" in sid:
+        return replace(
+            base,
+            adaptive_loss_streak_threshold=4,
+            rolling_loss_limit_pct=max(float(base.rolling_loss_limit_pct), 4.5),
+        )
+    if "final_betting" in sid:
+        return replace(
+            base,
+            adaptive_loss_streak_threshold=4,
+            daily_loss_limit_pct=min(float(base.daily_loss_limit_pct), 2.75),
+        )
+    return base
 
 
 class UserPaperTradingLoop:
@@ -158,15 +189,9 @@ class UserPaperTradingLoop:
         )
         eq_path = Path(cfg.paper_session_state_path).parent / f"equity_tracker_{self._user_tag}.json"
         tracker = EquityTracker(eq_path, logger=logger)
-        rules = RiskRules(
-            RiskLimits(
-                daily_loss_limit_pct=cfg.daily_loss_limit_pct,
-                total_loss_limit_pct=cfg.total_loss_limit_pct,
-                default_stop_loss_pct=cfg.default_stop_loss_pct,
-            )
-        )
-        kill = KillSwitch(rules=rules)
         sid = (strategy_id or self._strategy_id or "").strip()
+        rules = RiskRules(_paper_risk_limits_for_strategy(sid, cfg))
+        kill = KillSwitch(rules=rules)
         strat = strategy_for_paper_id(sid)
         setattr(strat, "manual_override_enabled", bool(self._manual_override_enabled))
         return SchedulerJobs(
@@ -189,15 +214,9 @@ class UserPaperTradingLoop:
         )
         eq_path = Path(cfg.paper_session_state_path).parent / f"equity_tracker_{self._user_tag}.json"
         tracker = EquityTracker(eq_path, logger=logger)
-        rules = RiskRules(
-            RiskLimits(
-                daily_loss_limit_pct=cfg.daily_loss_limit_pct,
-                total_loss_limit_pct=cfg.total_loss_limit_pct,
-                default_stop_loss_pct=cfg.default_stop_loss_pct,
-            )
-        )
-        kill = KillSwitch(rules=rules)
         sid = (strategy_id or self._strategy_id or "").strip()
+        rules = RiskRules(_paper_risk_limits_for_strategy(sid, cfg))
+        kill = KillSwitch(rules=rules)
         strat = strategy_for_paper_id(sid)
         setattr(strat, "manual_override_enabled", bool(self._manual_override_enabled))
         return IntradaySchedulerJobs(
@@ -221,15 +240,9 @@ class UserPaperTradingLoop:
         )
         eq_path = Path(cfg.paper_session_state_path).parent / f"equity_tracker_{self._user_tag}.json"
         tracker = EquityTracker(eq_path, logger=logger)
-        rules = RiskRules(
-            RiskLimits(
-                daily_loss_limit_pct=cfg.daily_loss_limit_pct,
-                total_loss_limit_pct=cfg.total_loss_limit_pct,
-                default_stop_loss_pct=cfg.default_stop_loss_pct,
-            )
-        )
-        kill = KillSwitch(rules=rules)
         sid = (strategy_id or self._strategy_id or "").strip()
+        rules = RiskRules(_paper_risk_limits_for_strategy(sid, cfg))
+        kill = KillSwitch(rules=rules)
         strat = strategy_for_paper_id(sid)
         setattr(strat, "manual_override_enabled", bool(self._manual_override_enabled))
         return FinalBettingIntradayJobs(
@@ -253,15 +266,9 @@ class UserPaperTradingLoop:
         )
         eq_path = Path(cfg.paper_session_state_path).parent / f"equity_tracker_us_{self._user_tag}.json"
         tracker = EquityTracker(eq_path, logger=logger)
-        rules = RiskRules(
-            RiskLimits(
-                daily_loss_limit_pct=cfg.daily_loss_limit_pct,
-                total_loss_limit_pct=cfg.total_loss_limit_pct,
-                default_stop_loss_pct=cfg.default_stop_loss_pct,
-            )
-        )
-        kill = KillSwitch(rules=rules)
         sid = (strategy_id or self._strategy_id or "").strip()
+        rules = RiskRules(_paper_risk_limits_for_strategy(sid, cfg))
+        kill = KillSwitch(rules=rules)
         strat = strategy_for_paper_id(sid)
         setattr(strat, "manual_override_enabled", bool(self._manual_override_enabled))
         return SchedulerJobs(
@@ -284,15 +291,9 @@ class UserPaperTradingLoop:
         )
         eq_path = Path(cfg.paper_session_state_path).parent / f"equity_tracker_us_{self._user_tag}.json"
         tracker = EquityTracker(eq_path, logger=logger)
-        rules = RiskRules(
-            RiskLimits(
-                daily_loss_limit_pct=cfg.daily_loss_limit_pct,
-                total_loss_limit_pct=cfg.total_loss_limit_pct,
-                default_stop_loss_pct=cfg.default_stop_loss_pct,
-            )
-        )
-        kill = KillSwitch(rules=rules)
         sid = (strategy_id or self._strategy_id or "").strip()
+        rules = RiskRules(_paper_risk_limits_for_strategy(sid, cfg))
+        kill = KillSwitch(rules=rules)
         strat = strategy_for_paper_id(sid)
         setattr(strat, "manual_override_enabled", bool(self._manual_override_enabled))
         return IntradaySchedulerJobs(

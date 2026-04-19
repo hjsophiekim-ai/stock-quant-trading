@@ -79,6 +79,21 @@ def _day_ohlc(sub_all: pd.DataFrame) -> tuple[float, float, float]:
     return lo, hi, cl
 
 
+def _morning_bars_atr_pct(morning_bars: pd.DataFrame, ref_px: float) -> float:
+    """당일 오전 봉 기준 단기 ATR% (갭 손절 임계 완화에 사용)."""
+    if morning_bars.empty or len(morning_bars) < 4 or ref_px <= 0:
+        return 0.45
+    mb = morning_bars.sort_values("date")
+    h = mb["high"].astype(float)
+    l = mb["low"].astype(float)
+    c = mb["close"].astype(float)
+    prev = c.shift(1)
+    prev = prev.fillna(float(ref_px))
+    tr = pd.concat([(h - l).abs(), (h - prev).abs(), (l - prev).abs()], axis=1).max(axis=1)
+    atr = float(tr.tail(min(10, len(tr))).mean())
+    return (atr / ref_px) * 100.0
+
+
 def _morning_accumulation_score(morning: pd.DataFrame, day_vwap_last: float) -> tuple[float, bool]:
     """0~1 점수 + morning_accumulation 통과 여부."""
     if morning.empty or len(morning) < 4:
@@ -392,14 +407,20 @@ class FinalBettingV1Strategy(BaseStrategy):
                 morning_bars = _bars_between_times(sub, session_ymd, t_exit0, now.time() if now.time() <= t_exit1 else t_exit1)
                 open_px = float(morning_bars.sort_values("date")["open"].iloc[0]) if not morning_bars.empty else last_px
                 gap_pct = (open_px / ref_close - 1.0) * 100.0 if ref_close > 0 else 0.0
+                m_atr_pct = _morning_bars_atr_pct(morning_bars, ref_close)
+                # 갭 손절: 고정 -0.5%는 휩소에 취약 → ATR 반영 + 장 초반 유예(아주 큰 갭만 즉시)
+                gap_thr = -max(0.68, min(1.22, 0.52 + 0.11 * max(0.0, m_atr_pct)))
+                gap_immediate = gap_pct <= -1.18
+                gap_delayed_ok = now.time() >= time(9, 10) and gap_pct <= gap_thr
                 morning_weak = (
                     not morning_bars.empty
+                    and now.time() >= time(9, 12)
                     and now.time() < time(10, 0)
-                    and last_px < avg * 0.992
-                    and last_px < open_px * 0.998
+                    and last_px < avg * 0.9905
+                    and last_px < open_px * 0.996
                 )
-                if gap_pct <= -0.5:
-                    exit_reason = "gap_down_stop"
+                if gap_immediate or gap_delayed_ok:
+                    exit_reason = "gap_down_stop_atr_delayed"
                 elif morning_weak:
                     exit_reason = "weak_morning_flush_fast_stop"
                 elif scale_start <= now.time() <= scale_end and gap_pct > 0.0:

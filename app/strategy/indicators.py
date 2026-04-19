@@ -42,4 +42,18 @@ def add_basic_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out["ret_60d_pct"] = pct_change(out["close"], 60)
     out["vol20"] = sma(out["volume"], 20)
     out["is_bullish"] = is_bullish_candle(out["open"], out["close"])
+    # ATR(14): 스윙 청산·사이징과 맞추기 위해 high/low 가 있을 때만 계산 (import 시 부하 없음)
+    if {"high", "low"}.issubset(out.columns):
+        prev_close = out["close"].shift(1)
+        tr = pd.concat(
+            [
+                (out["high"].astype(float) - out["low"].astype(float)).abs(),
+                (out["high"].astype(float) - prev_close.astype(float)).abs(),
+                (out["low"].astype(float) - prev_close.astype(float)).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        out["atr14"] = tr.rolling(window=14, min_periods=5).mean()
+    else:
+        out["atr14"] = float("nan")
     return out

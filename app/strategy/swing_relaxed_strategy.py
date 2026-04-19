@@ -22,6 +22,7 @@ from app.strategy.swing_strategy import (
     _build_exit_orders,
     _get_position_row,
     build_symbol_signal,
+    orders_to_strategy_signals,
 )
 
 
@@ -99,7 +100,13 @@ class SwingRelaxedStrategy(SwingStrategy):
                         )
                     )
             else:
-                signals.extend(_build_exit_orders(symbol, bs, pos, self.config))
+                signals.extend(
+                    orders_to_strategy_signals(
+                        _build_exit_orders(symbol, bs, pos, self.config),
+                        strategy_name="swing_relaxed_v1",
+                        reason="swing_relaxed_v1_exit",
+                    )
+                )
 
         self._build_last_diagnostics_relaxed(context, regime.regime, signals)
         return signals

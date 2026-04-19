@@ -20,7 +20,6 @@ from app.strategy.ranking import build_ranking_report_rows, rank_candidates
 from app.strategy.swing_strategy import (
     SwingStrategy,
     SwingStrategyConfig,
-    _build_exit_orders,
     _get_position_row,
     build_symbol_signal,
 )
@@ -80,7 +79,113 @@ def _swing_v2_liquidity_and_weak_bounce(
         return False, "유동성 부족(당일 거래량 < 20일평균×0.82)", extra
     if weak:
         return False, "약한 반등·추격 위험(반등 강도 미흡)", extra
+    # 거래량 급증: 유동성은 통과했으나 거래대금이 평소 대비 너무 낮으면 가짜 반등·칼날 리스크
+    vol_surge_min = 1.10
+    if vol_ratio < vol_surge_min:
+        extra["volume_surge_ok"] = False
+        return False, f"거래량 급증 미달(당일/20일 ≥ {vol_surge_min:.2f})", extra
+    extra["volume_surge_ok"] = True
     return True, "", extra
+
+
+def _dynamic_stop_pct_relaxed_v2(config: SwingStrategyConfig, atr_pct: float) -> float:
+    """고정 %와 ATR%를 블렌딩해 휩소에 의한 불필요 손절을 줄임(상한·하한 캡)."""
+    sl = abs(float(config.stop_loss_pct))
+    if atr_pct <= 0:
+        return sl
+    blended = max(sl * 0.90, min(sl * 1.32, float(atr_pct) * 1.58))
+    return float(min(max(blended, sl * 0.78), sl * 1.42))
+
+
+def _build_exit_signals_relaxed_v2(
+    symbol: str,
+    signal: dict[str, Any],
+    position_row: pd.Series,
+    config: SwingStrategyConfig,
+) -> list[StrategySignal]:
+    entry_price = float(position_row["average_price"])
+    qty = int(position_row["quantity"])
+    hold_days = int(position_row.get("hold_days", 0))
+    if qty <= 0 or entry_price <= 0:
+        return []
+
+    close_price = float(signal["close"])
+    pnl_pct = ((close_price / entry_price) - 1.0) * 100.0
+    atr_pct = float(signal.get("atr_pct") or 0.0)
+    ma20 = float(signal.get("ma20") or 0.0)
+    sl_eff = _dynamic_stop_pct_relaxed_v2(config, atr_pct)
+
+    if pnl_pct <= -abs(sl_eff):
+        return [
+            StrategySignal(
+                symbol=symbol,
+                side="sell",
+                quantity=qty,
+                price=None,
+                stop_loss_pct=None,
+                reason="swing_relaxed_v2_stop_atr",
+                strategy_name="swing_relaxed_v2",
+            )
+        ]
+
+    if pnl_pct >= float(config.second_take_profit_pct):
+        return [
+            StrategySignal(
+                symbol=symbol,
+                side="sell",
+                quantity=qty,
+                price=None,
+                stop_loss_pct=None,
+                reason="swing_relaxed_v2_tp2",
+                strategy_name="swing_relaxed_v2",
+            )
+        ]
+
+    if pnl_pct >= float(config.first_take_profit_pct):
+        sell_qty = max(int(qty * 0.5), 1)
+        return [
+            StrategySignal(
+                symbol=symbol,
+                side="sell",
+                quantity=sell_qty,
+                price=None,
+                stop_loss_pct=None,
+                reason="swing_relaxed_v2_tp1_partial",
+                strategy_name="swing_relaxed_v2",
+            )
+        ]
+
+    fp1 = float(config.first_take_profit_pct)
+    trail_floor = max(2.0, fp1 * 0.38)
+    if pnl_pct >= trail_floor and ma20 > 0:
+        buf = max(0.005, 0.38 * (atr_pct / 100.0)) if atr_pct > 0 else 0.008
+        if close_price < ma20 * (1.0 - buf):
+            return [
+                StrategySignal(
+                    symbol=symbol,
+                    side="sell",
+                    quantity=qty,
+                    price=None,
+                    stop_loss_pct=None,
+                    reason="swing_relaxed_v2_trailing_ma_atr",
+                    strategy_name="swing_relaxed_v2",
+                )
+            ]
+
+    if hold_days >= config.time_exit_days and pnl_pct <= 0.0:
+        return [
+            StrategySignal(
+                symbol=symbol,
+                side="sell",
+                quantity=qty,
+                price=None,
+                stop_loss_pct=None,
+                reason="swing_relaxed_v2_time_exit",
+                strategy_name="swing_relaxed_v2",
+            )
+        ]
+
+    return []
 
 
 def should_enter_long_relaxed_v2(signal: dict[str, Any]) -> tuple[bool, int, dict[str, Any]]:
@@ -160,7 +265,7 @@ class SwingRelaxedV2Strategy(SwingStrategy):
                         )
                     )
             else:
-                signals.extend(_build_exit_orders(symbol, bs, pos, self.config))
+                signals.extend(_build_exit_signals_relaxed_v2(symbol, bs, pos, self.config))
 
         self._build_last_diagnostics_v2(context, regime.regime, signals)
         return signals

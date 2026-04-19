@@ -147,6 +147,11 @@ def build_symbol_signal(symbol_df: pd.DataFrame) -> dict[str, float | bool]:
     enriched = add_basic_indicators(df)
     latest = enriched.iloc[-1]
 
+    atr_raw = latest.get("atr14")
+    atr_f = float(atr_raw) if atr_raw is not None and pd.notna(atr_raw) else 0.0
+    close_px = float(latest["close"])
+    atr_pct = (atr_f / close_px * 100.0) if close_px > 0 and atr_f > 0 else 0.0
+
     signal: dict[str, float | bool] = {
         "ma20_gt_ma60": bool(latest["ma20"] > latest["ma60"]) if pd.notna(latest["ma20"]) and pd.notna(latest["ma60"]) else False,
         "drop_3d_in_range": bool(-6.0 <= float(latest["ret_3d_pct"]) <= -3.0) if pd.notna(latest["ret_3d_pct"]) else False,
@@ -154,11 +159,34 @@ def build_symbol_signal(symbol_df: pd.DataFrame) -> dict[str, float | bool]:
         "bullish_reversal": bool(latest["is_bullish"]),
         "ma20": float(latest["ma20"]) if pd.notna(latest["ma20"]) else 0.0,
         "ma60": float(latest["ma60"]) if pd.notna(latest["ma60"]) else 0.0,
-        "close": float(latest["close"]),
+        "close": close_px,
         "ret_3d_pct": float(latest["ret_3d_pct"]) if pd.notna(latest["ret_3d_pct"]) else 0.0,
         "rsi14": float(latest["rsi14"]) if pd.notna(latest["rsi14"]) else 50.0,
+        "atr14": atr_f,
+        "atr_pct": atr_pct,
     }
     return signal
+
+
+def orders_to_strategy_signals(
+    orders: list[OrderRequest],
+    *,
+    strategy_name: str,
+    reason: str = "swing_exit",
+) -> list[StrategySignal]:
+    """OrderRequest → StrategySignal (완화 스윙 등 청산 경로용)."""
+    return [
+        StrategySignal(
+            symbol=o.symbol,
+            side=o.side,
+            quantity=o.quantity,
+            price=o.price,
+            stop_loss_pct=o.stop_loss_pct,
+            reason=reason,
+            strategy_name=strategy_name,
+        )
+        for o in orders
+    ]
 
 
 def should_enter_long(signal: dict[str, float | bool]) -> bool:
