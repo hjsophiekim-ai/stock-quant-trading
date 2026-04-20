@@ -17,6 +17,53 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Get-RequestedCodeSigningCert {
+  $thumb = $env:RELEASE_CODESIGN_THUMBPRINT
+  if ($thumb) {
+    $t = ($thumb -replace '\s', '').ToUpperInvariant()
+    $c = Get-Item -LiteralPath ("Cert:\CurrentUser\My\" + $t) -ErrorAction SilentlyContinue
+    if (-not $c) { throw "RELEASE_CODESIGN_THUMBPRINT not found in Cert:\\CurrentUser\\My: $t" }
+    return $c
+  }
+
+  $pfx = $env:RELEASE_CODESIGN_PFX_PATH
+  if ($pfx) {
+    if (-not (Test-Path -LiteralPath $pfx)) { throw "RELEASE_CODESIGN_PFX_PATH not found: $pfx" }
+    $pw = $env:RELEASE_CODESIGN_PFX_PASSWORD
+    if (-not $pw) { throw "RELEASE_CODESIGN_PFX_PASSWORD is required when RELEASE_CODESIGN_PFX_PATH is set." }
+    $secure = ConvertTo-SecureString -String $pw -AsPlainText -Force
+    $imported = Import-PfxCertificate -FilePath $pfx -Password $secure -CertStoreLocation "Cert:\CurrentUser\My"
+    if (-not $imported) { throw "Failed to import PFX: $pfx" }
+    return $imported
+  }
+
+  if ($env:RELEASE_CODESIGN_SELF_SIGN -eq "true") {
+    return New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=Stock Quant Desktop (Dev)" -CertStoreLocation "Cert:\CurrentUser\My" -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256
+  }
+
+  return $null
+}
+
+function Try-SignExecutable {
+  param(
+    [Parameter(Mandatory = $true)][string]$ExePath,
+    [Parameter(Mandatory = $true)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Cert
+  )
+
+  $sig = Get-AuthenticodeSignature -FilePath $ExePath
+  if ($sig.Status -eq "Valid") { return }
+
+  try {
+    $ts = $env:RELEASE_CODESIGN_TIMESTAMP_SERVER
+    if (-not $ts) { $ts = "http://timestamp.digicert.com" }
+    $r = Set-AuthenticodeSignature -FilePath $ExePath -Certificate $Cert -HashAlgorithm SHA256 -TimestampServer $ts
+    if (-not $r.SignerCertificate) { throw $r.StatusMessage }
+  } catch {
+    $r2 = Set-AuthenticodeSignature -FilePath $ExePath -Certificate $Cert -HashAlgorithm SHA256
+    if (-not $r2.SignerCertificate) { throw $r2.StatusMessage }
+  }
+}
+
 function Write-Utf8BomFile {
   param(
     [Parameter(Mandatory = $true)][string]$Path,
@@ -93,6 +140,27 @@ $deskStage = Join-Path $releaseDir "desktop-zip-staging"
 if (Test-Path $deskStage) { Remove-Item -Recurse -Force $deskStage }
 New-Item -ItemType Directory -Force -Path $deskStage | Out-Null
 
+$codeSignCert = $null
+$signerCer = $null
+try {
+  $codeSignCert = Get-RequestedCodeSigningCert
+  if ($codeSignCert) {
+    Try-SignExecutable -ExePath $setupExe.FullName -Cert $codeSignCert
+    $signerCer = Join-Path $deskStage "StockQuantDesktop-Signer.cer"
+    Export-Certificate -Cert $codeSignCert -FilePath $signerCer | Out-Null
+    $sigNow = Get-AuthenticodeSignature -FilePath $setupExe.FullName
+    if ($sigNow.SignerCertificate) {
+      Write-Host "[release] signed $($setupExe.Name) (signature status: $($sigNow.Status))" -ForegroundColor Green
+    } else {
+      Write-Warning "[release] signing did not attach a signer certificate."
+    }
+  } else {
+    Write-Host "[release] no code signing configured (RELEASE_CODESIGN_*). ZIP will contain an unsigned installer." -ForegroundColor Yellow
+  }
+} catch {
+  Write-Warning "[release] code signing failed: $($_.Exception.Message)"
+}
+
 Copy-Item -LiteralPath $setupExe.FullName -Destination $deskStage
 $exeName = $setupExe.Name
 
@@ -100,9 +168,50 @@ $installBat = @"
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
+if exist "INSTALL-DESKTOP.ps1" (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0INSTALL-DESKTOP.ps1"
+  exit /b %ERRORLEVEL%
+)
 start "" "$exeName"
 "@
 Write-Utf8BomFile -Path (Join-Path $deskStage "INSTALL-DESKTOP.bat") -Content $installBat
+
+$installPs1 = @"
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+Set-Location -LiteralPath $PSScriptRoot
+
+if (Test-Path -LiteralPath ".\UNBLOCK-FILES.ps1") {
+  & ".\UNBLOCK-FILES.ps1" | Out-Null
+}
+
+if (Test-Path -LiteralPath ".\StockQuantDesktop-Signer.cer") {
+  try {
+    Write-Host ""
+    Write-Host "이 패키지에는 자체 서명 인증서(StockQuantDesktop-Signer.cer)가 포함되어 있습니다." -ForegroundColor Yellow
+    Write-Host "Windows가 설치 파일을 차단하는 경우, 현재 사용자 인증서 저장소에 추가하면 차단이 완화될 수 있습니다." -ForegroundColor Yellow
+    $ans = Read-Host "인증서를 추가할까요? (Y/N)"
+    if ($ans -match '^(y|Y)$') {
+      Import-Certificate -FilePath ".\StockQuantDesktop-Signer.cer" -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
+      Import-Certificate -FilePath ".\StockQuantDesktop-Signer.cer" -CertStoreLocation "Cert:\CurrentUser\TrustedPublisher" | Out-Null
+    }
+  } catch {
+  }
+}
+
+Start-Process -FilePath ".\$exeName"
+"@
+Write-Utf8BomFile -Path (Join-Path $deskStage "INSTALL-DESKTOP.ps1") -Content $installPs1
+
+$unblockPs1 = @"
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "SilentlyContinue"
+Set-Location -LiteralPath $PSScriptRoot
+Get-ChildItem -LiteralPath $PSScriptRoot -Recurse -File | ForEach-Object {
+  try { Unblock-File -LiteralPath $_.FullName } catch { }
+}
+"@
+Write-Utf8BomFile -Path (Join-Path $deskStage "UNBLOCK-FILES.ps1") -Content $unblockPs1
 
 $deskReadme = @"
 Stock Quant Desktop — Windows 설치 패키지
@@ -112,8 +221,13 @@ Stock Quant Desktop — Windows 설치 패키지
 설치 방법
 1) 이 ZIP을 임의 폴더에 압축 해제합니다.
 2) 다음 중 하나를 더블클릭합니다.
-   - INSTALL-DESKTOP.bat  (설치 마법사 실행)
-   - $exeName  (동일)
+   - INSTALL-DESKTOP.bat  (권장)
+   - $exeName
+
+Windows 11 Smart App Control/SmartScreen 관련
+- 설치 파일(.exe)이 "디지털 서명되지 않음/알 수 없는 게시자"로 차단될 수 있습니다.
+- 가장 확실한 해결책은 상용 코드 서명 인증서(EV 권장)로 설치 파일에 서명해서 배포하는 것입니다.
+- 이 ZIP에 StockQuantDesktop-Signer.cer 가 포함되어 있으면, INSTALL-DESKTOP.bat 가 인증서를 현재 사용자 저장소에 추가한 뒤 설치를 실행합니다.
 
 자세한 안내: README-KO.txt
 
