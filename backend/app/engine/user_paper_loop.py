@@ -124,6 +124,7 @@ class UserPaperTradingLoop:
         reload_cached_token_fn: Callable[[], str | None] | None = None,
         paper_market: str = "domestic",
         manual_override_enabled: bool = False,
+        paper_market_mode_manual: str = "auto",
     ) -> None:
         self._app_key = app_key
         self._app_secret = app_secret
@@ -142,6 +143,7 @@ class UserPaperTradingLoop:
         self._last_token_ensure_wall: float = 0.0
         self._paper_market = (paper_market or "domestic").strip().lower()
         self._manual_override_enabled = bool(manual_override_enabled)
+        self._paper_market_mode_manual = (paper_market_mode_manual or "auto").strip().lower() or "auto"
         self._univ_sig: str | None = None
         self._univ_ts: float = 0.0
         self._univ_df: Any = None
@@ -530,6 +532,12 @@ class UserPaperTradingLoop:
     def set_manual_override(self, enabled: bool) -> None:
         self._manual_override_enabled = bool(enabled)
 
+    def set_paper_market_mode_manual(self, mode: str | None) -> None:
+        self._paper_market_mode_manual = (mode or "auto").strip().lower() or "auto"
+
+    def get_paper_market_mode_manual(self) -> str:
+        return str(self._paper_market_mode_manual or "auto")
+
     def _run_swing_daily_tick(self, client, swing_symbols: list[str], *, swing_strategy_id: str) -> dict[str, Any]:
         """멀티 모드 스윙 레그: 일봉 유니버스 + run_daily_cycle."""
         cfg = get_settings()
@@ -562,7 +570,14 @@ class UserPaperTradingLoop:
             logger=logger,
         )
         sp500 = build_mock_sp500_proxy_from_kospi(kospi)
-        return dict(jobs.run_daily_cycle(universe=universe, kospi_index=kospi, sp500_index=sp500))
+        return dict(
+            jobs.run_daily_cycle(
+                universe=universe,
+                kospi_index=kospi,
+                sp500_index=sp500,
+                paper_market_mode_manual=self._paper_market_mode_manual,
+            )
+        )
 
     def _run_multi_strategy_tick(self) -> dict[str, Any]:
         """스윙(일봉) + 선택된 스캘프(분봉) 순차 1틱. 단일 브로커·동일 현금 풀."""
@@ -774,6 +789,7 @@ class UserPaperTradingLoop:
                 intraday_universe_row_count=intraday_universe_row_count,
                 regular_session_kst=regular_session_kst,
                 intraday_session_snapshot=session_snap,
+                paper_market_mode_manual=self._paper_market_mode_manual,
             )
             report = dict(report)
             report["paper_trading_symbols_resolved"] = paper_trading_symbols_resolved
@@ -968,6 +984,7 @@ class UserPaperTradingLoop:
                 intraday_universe_row_count=intraday_universe_row_count,
                 regular_session_kst=regular_session_kst,
                 intraday_session_snapshot=session_snap,
+                paper_market_mode_manual=self._paper_market_mode_manual,
             )
             report = dict(report)
             report["paper_trading_symbols_resolved"] = paper_trading_symbols_resolved
@@ -1129,7 +1146,12 @@ class UserPaperTradingLoop:
                 self._kospi_df = kospi
             failed_step = "daily_cycle"
             sp500 = build_mock_sp500_proxy_from_kospi(kospi)
-            report = jobs.run_daily_cycle(universe=universe, kospi_index=kospi, sp500_index=sp500)
+            report = jobs.run_daily_cycle(
+                universe=universe,
+                kospi_index=kospi,
+                sp500_index=sp500,
+                paper_market_mode_manual=self._paper_market_mode_manual,
+            )
 
             if self._backend.screener_auto_refresh_with_runtime:
                 try:
@@ -1385,6 +1407,7 @@ class UserPaperTradingLoop:
                 intraday_universe_row_count=int(len(tf_df)),
                 regular_session_kst=bool(intraday_snap.regular_session_kst),
                 intraday_session_snapshot=intraday_snap,
+                paper_market_mode_manual=self._paper_market_mode_manual,
             )
             report = dict(report)
             report["market"] = "us"
@@ -1451,7 +1474,12 @@ class UserPaperTradingLoop:
 
             failed_step = "us_daily_cycle"
             jobs = self._build_us_daily_jobs(client)
-            report = jobs.run_daily_cycle(universe=universe, kospi_index=kospi_df, sp500_index=sp500_df)
+            report = jobs.run_daily_cycle(
+                universe=universe,
+                kospi_index=kospi_df,
+                sp500_index=sp500_df,
+                paper_market_mode_manual=self._paper_market_mode_manual,
+            )
             report = dict(report)
             report["market"] = "us"
             report["us_session_state"] = session_snap.state

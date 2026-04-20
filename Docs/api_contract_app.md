@@ -75,15 +75,21 @@ Base: `/api/paper-trading`
 - `POST /stop`
   - res: `{ ok: boolean } & PaperTradingStatusResponse`
 - `GET /status`
-  - res: `PaperTradingStatusResponse`
+  - optional `Authorization: Bearer` — when present, `manual_market_mode_override` reflects the **persisted** per-user Paper market-mode preference even if no session is running (after stop, `_user_id` is cleared; unauthenticated calls fall back to `auto` for that field).
+  - res: `PaperTradingStatusResponse` (includes `manual_market_mode_override`, `market_mode` snapshot from last tick when available, `market_mode_summary` human string)
 - `GET /positions`
   - res: `PaperTradingPositionsResponse`
 - `GET /pnl`
   - res: `PaperTradingPnlResponse`
 - `GET /logs`
   - res: `PaperTradingLogsResponse`
+- `GET /market-mode` (Authorization: Bearer)
+  - res: `{ ok: true, manual_market_mode_override, ... }` plus last tick `market_mode` fields when session owner is running.
+- `POST /market-mode` (Authorization: Bearer)
+  - req: `{ "manual_market_mode": "auto" | "aggressive" | "neutral" | "defensive" }`
+  - res: `{ ok: true, manual_market_mode_override }` — persisted per user; next paper tick applies to strategy policy.
 - `GET /dashboard-data` (Authorization: Bearer)
-  - res: `{ ok: true, candidate_count, candidates, generated_order_count, generated_orders, no_order_reason, last_diagnostics, candidate_filter_breakdown, tick_report, ... }`
+  - res: `{ ok: true, candidate_count, candidates, generated_order_count, generated_orders, no_order_reason, last_diagnostics, candidate_filter_breakdown, tick_report, manual_market_mode_override, market_mode, ... }`
   - `tick_report`: 위 틱 메타를 한 객체로 묶은 것(중복 허용·클라이언트 표시용).
   - `candidate_filter_breakdown`: `candidate_count===0` 이고 유니버스가 있을 때 swing 품질 필터 종목별 실패 사유.
 

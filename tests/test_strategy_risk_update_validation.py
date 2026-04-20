@@ -73,13 +73,25 @@ def test_scalp_rsi_flag_hf_calls_rsi_red_flag_buy_on_entry(monkeypatch: pytest.M
 
     red_calls: list[str] = []
 
-    def fake_red(sub: pd.DataFrame) -> dict:
+    def fake_red(sub: pd.DataFrame, **kwargs) -> dict:
         red_calls.append("red")
         return {
             "rsi_red_flag_buy": True,
             "rsi_red_flag_reason": "unit",
             "rsi_red_path_hits": 3,
         }
+
+    monkeypatch.setattr(
+        "app.strategy.scalp_rsi_flag_hf_v1_strategy.evaluate_momentum_continuation_entry",
+        lambda *a, **k: {
+            "momentum_continuation_ok": False,
+            "momentum_continuation_reason": "unit_off",
+            "momentum_path_hits": 0,
+            "momentum_paths_detail": "",
+            "trend_strength_score": 0.0,
+            "continuation_quality_score": 0.0,
+        },
+    )
 
     monkeypatch.setattr("app.strategy.scalp_rsi_flag_hf_v1_strategy.rsi_red_flag_buy", fake_red)
 

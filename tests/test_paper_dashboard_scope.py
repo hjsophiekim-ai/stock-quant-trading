@@ -30,6 +30,7 @@ def test_jobs_report_includes_generated_meta() -> None:
     jobs.broker.initial_cash = 1_000_000.0
     out = jobs.run_daily_cycle()
     assert "candidate_count" in out
+    assert "market_mode" in out
     assert "generated_order_count" in out
     assert "no_order_reason" in out
     assert "regime" in out

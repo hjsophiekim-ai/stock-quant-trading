@@ -278,6 +278,53 @@ class Settings(BaseSettings):
         alias="PAPER_RSI_HF_MIN_ENTRY_SCORE",
         description="RSI red 서브조건(경로 A/B/C) 충족 개수 최소.",
     )
+    paper_rsi_hf_momentum_min_hits: int = Field(
+        default=3,
+        ge=2,
+        le=5,
+        alias="PAPER_RSI_HF_MOMENTUM_MIN_HITS",
+        description="모멘텀 연속 진입: 구조적 서브조건 최소 충족 개수.",
+    )
+    paper_rsi_hf_momentum_min_hits_late: int = Field(
+        default=4,
+        ge=2,
+        le=6,
+        alias="PAPER_RSI_HF_MOMENTUM_MIN_HITS_LATE",
+        description="장 후반(분 기준) 모멘텀 연속 진입 최소 히트 상향.",
+    )
+    paper_rsi_hf_leader_symbols_csv: str = Field(
+        default="005930,000660,005380",
+        alias="PAPER_RSI_HF_LEADER_SYMBOLS_CSV",
+        description="유동 대형·지수성 종목(거래량 완화·모멘텀 품질 판단에 사용). 콤마 구분 6자리 코드.",
+    )
+    paper_rsi_hf_sideways_momentum_qty_mult: float = Field(
+        default=0.65,
+        ge=0.2,
+        le=1.0,
+        alias="PAPER_RSI_HF_SIDEWAYS_MOMENTUM_QTY_MULT",
+        description="횡보 국면에서 모멘텀 연속 진입 시 수량 스케일.",
+    )
+    paper_rsi_hf_sideways_reversal_qty_mult: float = Field(
+        default=0.85,
+        ge=0.2,
+        le=1.0,
+        alias="PAPER_RSI_HF_SIDEWAYS_REVERSAL_QTY_MULT",
+        description="횡보 국면에서 RSI 반전 진입 시 수량 스케일.",
+    )
+    paper_rsi_hf_momentum_stop_tighten_mult: float = Field(
+        default=0.92,
+        ge=0.7,
+        le=1.0,
+        alias="PAPER_RSI_HF_MOMENTUM_STOP_TIGHTEN_MULT",
+        description="모멘텀 연속 진입 시 손절 폭(%)에 곱해 더 타이트하게.",
+    )
+    paper_rsi_hf_late_session_open_minutes: float = Field(
+        default=330.0,
+        ge=120.0,
+        le=390.0,
+        alias="PAPER_RSI_HF_LATE_SESSION_OPEN_MINUTES",
+        description="정규장 개장 후 이 분 이상이면 '후반'으로 보고 모멘텀 최소 히트 상향 등에 사용.",
+    )
     paper_scalp_macd_entry_open_block_minutes: int = Field(
         default=10,
         ge=0,

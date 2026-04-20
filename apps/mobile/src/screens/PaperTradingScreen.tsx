@@ -143,6 +143,8 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
   const [lastError, setLastError] = useState<string | null>(null);
   const [lastTick, setLastTick] = useState<string | null>(null);
   const [manualOverride, setManualOverride] = useState(false);
+  const [marketModeSummary, setMarketModeSummary] = useState("");
+  const [paperMarketModeChoice, setPaperMarketModeChoice] = useState("auto");
   const [message, setMessage] = useState("");
   const [positions, setPositions] = useState<Array<{ symbol: string; quantity: number; average_price: number }>>([]);
   const [pnlText, setPnlText] = useState("");
@@ -248,6 +250,15 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
         setLastError((statusData.last_error as string | null) ?? null);
         setLastTick((statusData.last_tick_at as string | null) ?? null);
         setManualOverride(Boolean(statusData.manual_override_enabled));
+        const mmSum =
+          (typeof statusData.market_mode_summary === "string" && statusData.market_mode_summary) ||
+          (typeof (statusData.market_mode as Record<string, unknown> | undefined)?.status_line === "string"
+            ? String((statusData.market_mode as Record<string, unknown>).status_line)
+            : "") ||
+          "";
+        setMarketModeSummary(mmSum);
+        const mo = statusData.manual_market_mode_override != null ? String(statusData.manual_market_mode_override) : "auto";
+        setPaperMarketModeChoice(mo);
       }
       if (posRes.ok) setPositions(posData.items ?? []);
       if (pnlRes.ok) {
@@ -345,6 +356,25 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
     }
   };
 
+  const applyPaperMarketMode = async () => {
+    try {
+      const res = await fetch(paperApiUrl("market-mode"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ manual_market_mode: paperMarketModeChoice }),
+      });
+      const data = (await res.json()) as { detail?: unknown };
+      if (!res.ok) {
+        setMessage(formatApiErrorDetail(data?.detail) || "시장 모드 저장 실패");
+        return;
+      }
+      setMessage(`시장 모드 저장: ${paperMarketModeChoice}`);
+      await refresh();
+    } catch {
+      setMessage("network error");
+    }
+  };
+
   const toggleManualOverride = async () => {
     try {
       const res = await fetch(paperApiUrl("manual-override-toggle"), {
@@ -398,6 +428,24 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
           <Text style={{ fontSize: 12, marginTop: 4, color: manualOverride ? "#b91c1c" : "#64748b" }}>
             수동 재개 토글: {manualOverride ? "ON" : "OFF"}
           </Text>
+          <Text style={{ fontSize: 12, marginTop: 6, color: "#14532d" }}>
+            시장 모드: {marketModeSummary || "— (틱 후 갱신)"}
+          </Text>
+          <View style={{ marginTop: 8, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+            <Text style={{ fontSize: 12, color: "#475569" }}>수동 모드</Text>
+            <Picker
+              selectedValue={paperMarketModeChoice}
+              onValueChange={(v) => setPaperMarketModeChoice(String(v))}
+              style={{ flex: 1, minWidth: 160, maxHeight: 48 }}
+              mode="dropdown"
+            >
+              <Picker.Item label="Auto" value="auto" />
+              <Picker.Item label="Aggressive" value="aggressive" />
+              <Picker.Item label="Neutral" value="neutral" />
+              <Picker.Item label="Defensive" value="defensive" />
+            </Picker>
+            <Button title="모드 적용" onPress={applyPaperMarketMode} />
+          </View>
           {lastError ? <Text style={{ fontSize: 12, color: "#b91c1c", marginTop: 6 }}>{lastError}</Text> : null}
         </View>
 

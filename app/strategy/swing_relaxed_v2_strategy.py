@@ -31,7 +31,7 @@ from app.strategy.swing_strategy import (
 )
 
 
-def _v2_conditions(signal: dict[str, Any]) -> tuple[bool, bool, bool, bool, dict[str, Any]]:
+def _v2_conditions(signal: dict[str, Any], *, rsi_max: float = 55.0) -> tuple[bool, bool, bool, bool, dict[str, Any]]:
     ma20 = float(signal.get("ma20") or 0.0)
     ma60 = float(signal.get("ma60") or 0.0)
     trend_ok = ma20 >= ma60
@@ -44,7 +44,7 @@ def _v2_conditions(signal: dict[str, Any]) -> tuple[bool, bool, bool, bool, dict
     drop_cond = -10.0 <= ret3 <= 0.0
 
     rsi = float(signal.get("rsi14") or 99.0)
-    rsi_cond = rsi < 55.0
+    rsi_cond = rsi < float(rsi_max)
 
     bullish = bool(signal.get("bullish_reversal"))
     rebound_hint = ret3 > -0.8 and (ma20 > 0) and float(signal.get("close") or 0.0) >= ma20 * 0.99
@@ -62,7 +62,7 @@ def _v2_conditions(signal: dict[str, Any]) -> tuple[bool, bool, bool, bool, dict
 
 
 def _swing_v2_liquidity_and_weak_bounce(
-    symbol_df: pd.DataFrame, signal: dict[str, Any]
+    symbol_df: pd.DataFrame, signal: dict[str, Any], *, vol_surge_min: float = 1.10
 ) -> tuple[bool, str, dict[str, Any]]:
     """거래대금 대비 최소 유동성 + 약한 반등(추격) 차단."""
     sd = symbol_df.sort_values("date")
@@ -86,10 +86,10 @@ def _swing_v2_liquidity_and_weak_bounce(
     if weak:
         return False, "약한 반등·추격 위험(반등 강도 미흡)", extra
     # 거래량 급증: 유동성은 통과했으나 거래대금이 평소 대비 너무 낮으면 가짜 반등·칼날 리스크
-    vol_surge_min = 1.10
-    if vol_ratio < vol_surge_min:
+    vsm = float(vol_surge_min)
+    if vol_ratio < vsm:
         extra["volume_surge_ok"] = False
-        return False, f"거래량 급증 미달(당일/20일 ≥ {vol_surge_min:.2f})", extra
+        return False, f"거래량 급증 미달(당일/20일 ≥ {vsm:.2f})", extra
     extra["volume_surge_ok"] = True
     return True, "", extra
 
@@ -216,8 +216,10 @@ def _build_exit_signals_relaxed_v2(
     return [], diag
 
 
-def should_enter_long_relaxed_v2(signal: dict[str, Any]) -> tuple[bool, int, dict[str, Any]]:
-    trend_cond, drop_cond, rsi_cond, rebound_cond, detail = _v2_conditions(signal)
+def should_enter_long_relaxed_v2(
+    signal: dict[str, Any], *, min_hits: int = 2, rsi_max: float = 55.0
+) -> tuple[bool, int, dict[str, Any]]:
+    trend_cond, drop_cond, rsi_cond, rebound_cond, detail = _v2_conditions(signal, rsi_max=rsi_max)
     hits = sum([trend_cond, drop_cond, rsi_cond, rebound_cond])
     detail.update(
         {
@@ -226,9 +228,11 @@ def should_enter_long_relaxed_v2(signal: dict[str, Any]) -> tuple[bool, int, dic
             "rsi_cond": rsi_cond,
             "rebound_cond": rebound_cond,
             "hit_count": hits,
+            "min_hits_required": int(min_hits),
+            "rsi_max_used": float(rsi_max),
         }
     )
-    return hits >= 2, hits, detail
+    return hits >= int(min_hits), hits, detail
 
 
 @dataclass
@@ -246,6 +250,15 @@ class SwingRelaxedV2Strategy(SwingStrategy):
         return filter_relaxed_swing_candidates(prices)
 
     def generate_signals(self, context: StrategyContext) -> list[StrategySignal]:
+        mm_snap = getattr(self, "_paper_market_mode_snapshot", None) or {}
+        sv2 = (mm_snap.get("policy") or {}).get("swing_relaxed_v2", {}) if mm_snap else {}
+        min_hits_eff = max(2, min(4, 2 + int(sv2.get("min_hits_delta", 0) or 0)))
+        rsi_max_eff = float(55.0 + float(sv2.get("rsi_max_delta", 0.0) or 0.0))
+        rsi_max_eff = max(48.0, min(62.0, rsi_max_eff))
+        vol_surge_eff = max(1.02, 1.10 + float(sv2.get("vol_surge_min_delta", 0.0) or 0.0))
+        top_n_eff = max(3, int(self.config.ranking_top_n) + int(sv2.get("ranking_top_n_delta", 0) or 0))
+        qty_scale = max(0.75, min(1.25, float(sv2.get("size_mult", 1.0) or 1.0)))
+
         regime = classify_market_regime(
             MarketRegimeInputs(
                 kospi=context.kospi_index,
@@ -260,7 +273,7 @@ class SwingRelaxedV2Strategy(SwingStrategy):
             prices_df=context.prices,
             candidate_symbols=candidates,
             regime=regime.regime,
-            top_n=self.config.ranking_top_n,
+            top_n=top_n_eff,
         )
         self.last_ranking = ranked
         self.last_ranking_report = build_ranking_report_rows(ranked)
@@ -291,16 +304,16 @@ class SwingRelaxedV2Strategy(SwingStrategy):
             if pos is None:
                 if regime.regime == "high_volatility_risk":
                     continue
-                gate_ok, _, _ = _swing_v2_liquidity_and_weak_bounce(symbol_df, bs)
+                gate_ok, _, _ = _swing_v2_liquidity_and_weak_bounce(symbol_df, bs, vol_surge_min=vol_surge_eff)
                 if not gate_ok:
                     continue
-                ok, _, _ = should_enter_long_relaxed_v2(bs)
+                ok, _, _ = should_enter_long_relaxed_v2(bs, min_hits=min_hits_eff, rsi_max=rsi_max_eff)
                 if ok:
                     signals.append(
                         StrategySignal(
                             symbol=symbol,
                             side="buy",
-                            quantity=max(1, int(self.config.order_quantity)),
+                            quantity=max(1, int(round(float(self.config.order_quantity) * qty_scale))),
                             price=None,
                             stop_loss_pct=self.config.stop_loss_pct,
                             reason="swing_relaxed_v2 test entry",
@@ -330,10 +343,17 @@ class SwingRelaxedV2Strategy(SwingStrategy):
         regime_str: str,
         signals: list[StrategySignal],
     ) -> None:
+        mm_snap = getattr(self, "_paper_market_mode_snapshot", None) or {}
+        sv2 = (mm_snap.get("policy") or {}).get("swing_relaxed_v2", {}) if mm_snap else {}
+        min_hits_eff = max(2, min(4, 2 + int(sv2.get("min_hits_delta", 0) or 0)))
+        rsi_max_eff = max(48.0, min(62.0, float(55.0 + float(sv2.get("rsi_max_delta", 0.0) or 0.0))))
+        vol_surge_eff = max(1.02, 1.10 + float(sv2.get("vol_surge_min_delta", 0.0) or 0.0))
+        top_n_eff = max(3, int(self.config.ranking_top_n) + int(sv2.get("ranking_top_n_delta", 0) or 0))
+
         buy_syms = {s.symbol for s in signals if s.side == "buy"}
         sym_list = [r.symbol for r in self.last_ranking]
         if not sym_list:
-            sym_list = sorted(self.paper_candidate_symbols(context.prices))[: max(10, self.config.ranking_top_n)]
+            sym_list = sorted(self.paper_candidate_symbols(context.prices))[: max(10, top_n_eff)]
 
         rows: list[dict[str, Any]] = []
         for sym in sym_list:
@@ -343,8 +363,8 @@ class SwingRelaxedV2Strategy(SwingStrategy):
             bs = build_symbol_signal(sdf)
             pos = _get_position_row(context.portfolio, sym)
             entered = sym in buy_syms
-            ok, hits, detail = should_enter_long_relaxed_v2(bs)
-            gate_ok, gate_reason, gate_ex = _swing_v2_liquidity_and_weak_bounce(sdf, bs)
+            ok, hits, detail = should_enter_long_relaxed_v2(bs, min_hits=min_hits_eff, rsi_max=rsi_max_eff)
+            gate_ok, gate_reason, gate_ex = _swing_v2_liquidity_and_weak_bounce(sdf, bs, vol_surge_min=vol_surge_eff)
             blocked: str | None = None
             if not entered:
                 if pos is not None:
@@ -360,10 +380,10 @@ class SwingRelaxedV2Strategy(SwingStrategy):
                     if not detail["drop_cond"]:
                         reasons.append("3일수익률 -10~0% 범위 아님")
                     if not detail["rsi_cond"]:
-                        reasons.append("RSI>=55")
+                        reasons.append(f"RSI>={rsi_max_eff:.1f}")
                     if not detail["rebound_cond"]:
                         reasons.append("반등 신호 없음")
-                    blocked = "완화 v2(4중2): " + ", ".join(reasons) + f" (충족 {hits}/4)"
+                    blocked = f"완화 v2(4중{min_hits_eff}): " + ", ".join(reasons) + f" (충족 {hits}/4)"
                 else:
                     blocked = "완화 v2 조건 충족 — 이번 틱 매수 신호 없음"
 

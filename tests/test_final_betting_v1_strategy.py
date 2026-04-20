@@ -12,6 +12,7 @@ from app.strategy.base_strategy import StrategyContext
 from app.strategy.final_betting_v1_strategy import (
     FinalBettingV1Strategy,
     _calendar_days_between,
+    apply_aggressive_kospi_tape_overlay,
     set_final_betting_debug_now,
 )
 from app.strategy.intraday_paper_state import IntradayPaperState, IntradayPaperStateStore
@@ -33,6 +34,36 @@ def _index_frame(n: int = 130) -> pd.DataFrame:
 def test_calendar_days_between() -> None:
     assert _calendar_days_between("20260101", "20260103") == 2
     assert _calendar_days_between("20260103", "20260101") == 2
+
+
+def test_apply_aggressive_kospi_tape_overlay_strong_day() -> None:
+    us_h, kp_h, us_s, kp_s = 0.52, -1.35, 0.28, -1.55
+    nu_h, nk_h, nu_s, nk_s, diag = apply_aggressive_kospi_tape_overlay(
+        market_mode_active="aggressive",
+        kospi_day_ret_pct=1.4,
+        us_h=us_h,
+        kp_h=kp_h,
+        us_s=us_s,
+        kp_s=kp_s,
+    )
+    assert diag["tape_overlay_applied"] is True
+    assert diag["tape_tier"] == "strong"
+    assert nu_h < us_h
+    assert nk_h < kp_h
+    assert nu_s < us_s
+    assert nk_s < kp_s
+
+
+def test_apply_aggressive_kospi_tape_overlay_skipped_for_neutral() -> None:
+    _, _, _, _, diag = apply_aggressive_kospi_tape_overlay(
+        market_mode_active="neutral",
+        kospi_day_ret_pct=2.0,
+        us_h=0.5,
+        kp_h=-1.2,
+        us_s=0.3,
+        kp_s=-1.5,
+    )
+    assert diag["tape_overlay_applied"] is False
 
 
 def _minute_series(symbol: str, ymd: str) -> pd.DataFrame:

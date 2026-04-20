@@ -7,6 +7,7 @@ import uuid
 
 import pandas as pd
 
+from app.config import get_settings
 from app.brokers.base_broker import BaseBroker
 from app.brokers.paper_broker import PaperBroker
 from app.orders.models import OrderRequest, OrderSignal
@@ -18,6 +19,7 @@ from app.scheduler.equity_tracker import EquityTracker
 from app.strategy.base_strategy import StrategyContext
 from app.scheduler.kis_universe import build_mock_volatility_series
 from app.strategy.filters import explain_swing_candidate_filters, filter_quality_swing_candidates
+from app.strategy.market_mode_engine import attach_market_mode_to_strategy
 from app.strategy.market_regime import MarketRegimeConfig, MarketRegimeInputs, classify_market_regime
 from app.strategy.swing_strategy import SwingStrategy
 
@@ -64,6 +66,7 @@ class SchedulerJobs:
     equity_tracker: EquityTracker | None = None
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger("app.scheduler.jobs"))
     manual_override_enabled: bool = False
+    _last_market_mode_bundle: dict[str, object] | None = field(default=None, repr=False)
 
     def run_daily_cycle(
         self,
@@ -71,6 +74,7 @@ class SchedulerJobs:
         *,
         kospi_index: pd.DataFrame | None = None,
         sp500_index: pd.DataFrame | None = None,
+        paper_market_mode_manual: str | None = None,
     ) -> dict[str, object]:
         self.logger.info("[START] Paper trading daily cycle started")
         universe = universe if universe is not None else self._build_mock_universe()
@@ -88,11 +92,20 @@ class SchedulerJobs:
                 "regime": None,
                 "no_order_reason": "유니버스 가격 데이터 없음",
                 "last_diagnostics": [],
+                "market_mode": {},
             }
 
         kospi = kospi_index if kospi_index is not None else self._build_mock_index("KOSPI")
         sp500 = sp500_index if sp500_index is not None else self._build_mock_index("SP500")
         vol = build_mock_volatility_series(kospi)
+        self._last_market_mode_bundle = attach_market_mode_to_strategy(
+            self.strategy,
+            manual=paper_market_mode_manual,
+            kospi=kospi,
+            sp500=sp500,
+            volatility=vol,
+            settings=get_settings(),
+        )
         rcfg = getattr(self.strategy, "regime_config", MarketRegimeConfig())
         regime_snap = classify_market_regime(
             MarketRegimeInputs(kospi=kospi, sp500=sp500, volatility=vol),
@@ -150,6 +163,7 @@ class SchedulerJobs:
                     position_count=pos_n,
                 ),
                 "last_diagnostics": [],
+                "market_mode": dict(self._last_market_mode_bundle or {}),
             }
 
         self.logger.info("[INTRADAY] Price check and strategy signal generation")
@@ -221,6 +235,7 @@ class SchedulerJobs:
             regime=regime_label,
             position_count=pos_n,
         )
+        report["market_mode"] = dict(self._last_market_mode_bundle or {})
         self.logger.info("[DONE] Daily cycle complete: %s", report)
         return report
 

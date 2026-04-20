@@ -33,6 +33,7 @@ from app.strategy.intraday_common import (
     should_force_flatten_before_close_kst,
 )
 from app.strategy.intraday_paper_state import IntradayPaperStateStore, iso_now_utc
+from app.strategy.market_mode_engine import attach_market_mode_to_strategy
 from app.strategy.market_regime import MarketRegimeConfig, MarketRegimeInputs, classify_market_regime
 
 _KST = ZoneInfo("Asia/Seoul")
@@ -124,6 +125,7 @@ class IntradaySchedulerJobs:
     state_store: IntradayPaperStateStore | None = None
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger("app.scheduler.intraday_jobs"))
     manual_override_enabled: bool = False
+    _last_market_mode_bundle: dict[str, Any] | None = field(default=None, repr=False)
 
     def run_intraday_cycle(
         self,
@@ -139,6 +141,7 @@ class IntradaySchedulerJobs:
         intraday_universe_row_count: int | None = None,
         regular_session_kst: bool | None = None,
         intraday_session_snapshot: IntradaySessionSnapshot | None = None,
+        paper_market_mode_manual: str | None = None,
     ) -> dict[str, Any]:
         cfg = get_settings()
         self.logger.info("[INTRADAY] cycle start tf=%s rows=%s", timeframe, len(universe_tf))
@@ -162,6 +165,14 @@ class IntradaySchedulerJobs:
             state = IntradayPaperState()
 
         vol = build_mock_volatility_series(kospi_index)
+        self._last_market_mode_bundle = attach_market_mode_to_strategy(
+            self.strategy,
+            manual=paper_market_mode_manual,
+            kospi=kospi_index,
+            sp500=sp500_index,
+            volatility=vol,
+            settings=cfg,
+        )
         rcfg = getattr(self.strategy, "regime_config", MarketRegimeConfig())
         regime_snap = classify_market_regime(
             MarketRegimeInputs(kospi=kospi_index, sp500=sp500_index, volatility=vol),
@@ -335,6 +346,7 @@ class IntradaySchedulerJobs:
                 "risk_halt_new_entries": risk_halt,
                 "paper_intraday_target_round_trip_trades": int(cfg.paper_intraday_target_round_trip_trades),
                 "ranking": [],
+                "market_mode": dict(self._last_market_mode_bundle or {}),
                 "no_order_reason": _intraday_no_order_reason(
                     halted=False,
                     halt_message=None,
@@ -524,6 +536,7 @@ class IntradaySchedulerJobs:
                 "risk_halt_new_entries": risk_halt,
                 "paper_intraday_target_round_trip_trades": int(cfg.paper_intraday_target_round_trip_trades),
                 "ranking": [],
+                "market_mode": dict(self._last_market_mode_bundle or {}),
                 "no_order_reason": _intraday_no_order_reason(
                     halted=True,
                     halt_message=halt_message,

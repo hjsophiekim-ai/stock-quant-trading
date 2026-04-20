@@ -4,8 +4,8 @@
 
 | 항목 | 값 |
 |------|-----|
-| 빌드 일시 (로컬) | 2026-04-18 (재생성) |
-| 저장소 커밋 (데스크톱 빌드 스탬프에 포함) | `42a70f4` (`main`; 빌드 시점 `git rev-parse HEAD`) |
+| 빌드 일시 (로컬) | 2026-04-20 (기존 `release/*.zip`·스테이징 폴더 폐기 후 재생성) |
+| 저장소 커밋 (데스크톱 빌드 스탬프에 포함) | 푸시 직전 `main` 의 `git rev-parse HEAD` (NSIS 빌드 시 `GIT_COMMIT_SHA` 주입) |
 | 스크립트 | `scripts/build-release-zips.ps1` (또는 `npm run release:build:zips`) |
 | 데스크톱 버전 | `apps/desktop/package.json` → 0.1.0 |
 | Windows (전용 ZIP) | `release/Stock-Quant-Desktop-Windows-0.1.0.zip` — NSIS 설치 `.exe` + `INSTALL-DESKTOP.bat` + `README-KO.txt` |

@@ -51,9 +51,20 @@ class ScalpMacdRsi3mV1Strategy(BaseStrategy):
 
     def generate_signals(self, context: StrategyContext) -> list[StrategySignal]:
         cfg = get_settings()
+        mm_snap = getattr(self, "_paper_market_mode_snapshot", None) or {}
+        m_pol = (mm_snap.get("policy") or {}).get("scalp_macd_rsi_3m", {}) if mm_snap else {}
         self.last_diagnostics = []
         self.last_intraday_filter_breakdown = []
-        self.last_intraday_signal_breakdown = {"entries_evaluated": 0, "exits_evaluated": 0, "strategy_role": "main_intraday"}
+        self.last_intraday_signal_breakdown = {
+            "entries_evaluated": 0,
+            "exits_evaluated": 0,
+            "strategy_role": "main_intraday",
+            "market_mode": {
+                "market_mode_active": mm_snap.get("market_mode_active"),
+                "market_mode_source": mm_snap.get("market_mode_source"),
+                "status_line": mm_snap.get("status_line"),
+            },
+        }
         signals: list[StrategySignal] = []
         st = self.intraday_state
 
@@ -193,6 +204,11 @@ class ScalpMacdRsi3mV1Strategy(BaseStrategy):
         max_new = max(0, max_open - open_n)
         entries_added = 0
         m_vol, m_spread, m_chase = intraday_liquidity_multipliers_for_state(sess_state, cfg)
+        m_vol *= float(m_pol.get("liquidity_mult", 1.0) or 1.0)
+        m_spread *= float(m_pol.get("spread_mult", 1.0) or 1.0)
+        m_chase *= float(m_pol.get("chase_mult", 1.0) or 1.0)
+        need_macd_hits = max(2, min(6, 4 + int(m_pol.get("macd_core_hits_required_delta", 0) or 0)))
+        self.last_intraday_signal_breakdown["macd_core_hits_required"] = int(need_macd_hits)
 
         if not prices.empty:
             for sym in prices["symbol"].unique():
@@ -294,8 +310,8 @@ class ScalpMacdRsi3mV1Strategy(BaseStrategy):
                     self.last_diagnostics.append(diag)
                     continue
 
-                if hit_count < 4:
-                    diag["blocked_reason"] = f"score_below_4 (hits={hit_count}/6)"
+                if hit_count < need_macd_hits:
+                    diag["blocked_reason"] = f"score_below_{need_macd_hits} (hits={hit_count}/6)"
                     self.last_diagnostics.append(diag)
                     continue
 
@@ -306,6 +322,7 @@ class ScalpMacdRsi3mV1Strategy(BaseStrategy):
 
                 last_px = last_close
                 qty_buy = resolved_intraday_entry_quantity(cfg, self, price_krw=last_px, stop_loss_pct_points=sl_pct)
+                qty_buy = max(1, int(round(float(qty_buy) * float(m_pol.get("size_mult", 1.0) or 1.0))))
                 signals.append(
                     StrategySignal(
                         symbol=sym,

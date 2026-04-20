@@ -18,6 +18,7 @@ from backend.app.api.broker_routes import get_broker_service
 from backend.app.core.config import get_backend_settings
 from backend.app.engine.user_paper_loop import UserPaperTradingLoop
 from app.config import get_settings as app_get_settings, paper_final_betting_diagnostics, paper_final_betting_enabled_fresh
+from app.strategy.market_mode_engine import normalize_manual_mode
 from backend.app.portfolio.sync_engine import run_portfolio_sync
 
 logger = logging.getLogger("backend.app.engine.paper_session_controller")
@@ -73,6 +74,7 @@ class PaperSessionController:
         self._desired_running: bool = False
         self._paper_market: str = "domestic"
         self._manual_override_enabled: bool = False
+        self._market_mode_prefs: dict[str, str] = {}
         self._resume_info: dict[str, Any] = {
             "enabled": True,
             "restored_from_state": False,
@@ -82,6 +84,8 @@ class PaperSessionController:
         acfg = app_get_settings()
         self._resume_info["enabled"] = bool(getattr(acfg, "paper_session_auto_resume", True))
         self._state_path = Path(acfg.paper_session_state_path).expanduser().resolve()
+        self._market_mode_prefs_path = self._state_path.parent / "paper_market_mode_prefs.json"
+        self._load_market_mode_prefs()
         self._load_desired_state()
         self._try_auto_resume()
 
@@ -105,6 +109,41 @@ class PaperSessionController:
         if bool(acfg.paper_intraday_enabled) and sid in ("scalp_momentum_v1", "scalp_momentum_v2", "scalp_momentum_v3"):
             return max(20, int(acfg.paper_intraday_loop_interval_sec))
         return max(25, int(acfg.paper_trading_interval_sec))
+
+    def _load_market_mode_prefs(self) -> None:
+        p = getattr(self, "_market_mode_prefs_path", None)
+        if p is None or not p.is_file():
+            self._market_mode_prefs = {}
+            return
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+            users = raw.get("users") if isinstance(raw, dict) else None
+            if not isinstance(users, dict):
+                self._market_mode_prefs = {}
+                return
+            out: dict[str, str] = {}
+            for k, v in users.items():
+                uid = str(k).strip()
+                if not uid:
+                    continue
+                out[uid] = normalize_manual_mode(str(v))
+            self._market_mode_prefs = out
+        except (OSError, ValueError, TypeError) as exc:
+            logger.warning("paper market mode prefs load skipped: %s", exc)
+            self._market_mode_prefs = {}
+
+    def _save_market_mode_prefs(self) -> None:
+        p = getattr(self, "_market_mode_prefs_path", None)
+        if p is None:
+            return
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(
+                json.dumps({"version": 1, "users": dict(self._market_mode_prefs)}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            logger.warning("paper market mode prefs save skipped: %s", exc)
 
     def _append_log(self, level: str, msg: str) -> None:
         entry = {"ts": datetime.now(timezone.utc).isoformat(), "level": level, "message": msg[:2000]}
@@ -209,6 +248,8 @@ class PaperSessionController:
             ):
                 budget_base[_k] = _v
         if ok:
+            rep = out.get("report")
+            mm = rep.get("market_mode") if isinstance(rep, dict) else None
             self._paper_diagnostics = {
                 "last_error": None,
                 "last_failed_step": None,
@@ -220,9 +261,12 @@ class PaperSessionController:
                 "rate_limit": None,
                 "retry_after_sec": None,
                 "http_status": None,
+                "market_mode": mm if isinstance(mm, dict) else {},
                 **budget_base,
             }
             return
+        rep = out.get("report")
+        mm = rep.get("market_mode") if isinstance(rep, dict) else None
         self._paper_diagnostics = {
             "last_error": out.get("error"),
             "last_failed_step": out.get("failed_step"),
@@ -234,6 +278,7 @@ class PaperSessionController:
             "rate_limit": kis_ctx.get("rate_limit"),
             "retry_after_sec": kis_ctx.get("retry_after_sec"),
             "http_status": kis_ctx.get("http_status"),
+            "market_mode": mm if isinstance(mm, dict) else {},
             **budget_base,
         }
 
@@ -344,6 +389,7 @@ class PaperSessionController:
                         reload_cached_token_fn=_reload_cached,
                         paper_market=self._paper_market,
                         manual_override_enabled=self._manual_override_enabled,
+                        paper_market_mode_manual=self._market_mode_prefs.get(uid, "auto"),
                     )
                     self._user_loop_identity = identity
                     self._append_log(
@@ -353,6 +399,7 @@ class PaperSessionController:
                     )
                 else:
                     self._user_loop.set_manual_override(self._manual_override_enabled)
+                    self._user_loop.set_paper_market_mode_manual(self._market_mode_prefs.get(uid, "auto"))
                 loop = self._user_loop
                 out = loop.run_intraday_tick()
                 try:
@@ -564,11 +611,22 @@ class PaperSessionController:
         self._append_log("info", "Paper risk_off 해제")
         return {"ok": True, "status": self._status}
 
-    def status_payload(self) -> dict[str, Any]:
+    def status_payload(self, *, pref_user_id: str | None = None) -> dict[str, Any]:
+        """
+        pref_user_id: JWT viewer id — when set, `manual_market_mode_override` is read from persisted
+        prefs for that user even if no Paper session is running (stopped clears `_user_id`).
+        When omitted, uses session owner `_user_id` (backward compatible).
+        """
         from backend.app.core.version_info import get_backend_version_payload
 
         ver = get_backend_version_payload()
         with self._lock:
+            pref_uid = pref_user_id if pref_user_id is not None else self._user_id
+            manual_mm = (
+                normalize_manual_mode(self._market_mode_prefs.get(str(pref_uid), "auto"))
+                if pref_uid
+                else normalize_manual_mode("auto")
+            )
             return {
                 "mode": "paper",
                 "status": self._status,
@@ -598,6 +656,15 @@ class PaperSessionController:
                 "resume_info": dict(self._resume_info),
                 "diagnostics": dict(self._paper_diagnostics),
                 "manual_override_enabled": self._manual_override_enabled,
+                "manual_market_mode_override": manual_mm,
+                "market_mode": self._last_report.get("market_mode")
+                if isinstance(self._last_report.get("market_mode"), dict)
+                else {},
+                "market_mode_summary": (
+                    str((self._last_report.get("market_mode") or {}).get("status_line") or "")
+                    if isinstance(self._last_report.get("market_mode"), dict)
+                    else ""
+                ),
                 "session_state": self._last_report.get("us_session_state")
                 or self._last_report.get("krx_session_state"),
                 "final_betting_enabled_effective": paper_final_betting_diagnostics().get(
@@ -626,14 +693,21 @@ class PaperSessionController:
             loop = self._user_loop
             if loop is not None:
                 loop.set_manual_override(enabled)
+                loop.set_paper_market_mode_manual(self._market_mode_prefs.get(requester_id, "auto"))
             self._save_desired_state()
         self._append_log("warning", f"Paper manual override toggled enabled={enabled}")
         return {"ok": True, "manual_override_enabled": enabled, "status": self._status}
 
-    def diagnostics_payload(self) -> dict[str, Any]:
+    def diagnostics_payload(self, *, pref_user_id: str | None = None) -> dict[str, Any]:
         from backend.app.core.version_info import get_backend_version_payload
 
         with self._lock:
+            pref_uid = pref_user_id if pref_user_id is not None else self._user_id
+            manual_mm = (
+                normalize_manual_mode(self._market_mode_prefs.get(str(pref_uid), "auto"))
+                if pref_uid
+                else normalize_manual_mode("auto")
+            )
             base = dict(self._paper_diagnostics)
             merged = {**self._paper_token_ensure_meta, **base}
             merged["session_last_error"] = self._last_error
@@ -650,7 +724,33 @@ class PaperSessionController:
             merged["final_betting_env_sources"] = fb.get("final_betting_env_sources")
             merged["paper_final_betting_cache_mismatch"] = fb.get("settings_cache_mismatch")
             merged["paper_start_diagnostics"] = dict(self._last_start_diagnostics)
+            mm = self._last_report.get("market_mode") if isinstance(self._last_report.get("market_mode"), dict) else {}
+            merged["market_mode"] = mm
+            merged["manual_market_mode_override"] = manual_mm
             return merged
+
+    def get_paper_market_mode(self, user_id: str) -> dict[str, Any]:
+        m = normalize_manual_mode(self._market_mode_prefs.get(user_id, "auto"))
+        with self._lock:
+            rep_mm = self._last_report.get("market_mode") if isinstance(self._last_report.get("market_mode"), dict) else {}
+            owner_ok = self._user_id == user_id and self._session_running()
+        out: dict[str, Any] = {"ok": True, "manual_market_mode_override": m}
+        if owner_ok and rep_mm:
+            out.update(rep_mm)
+        else:
+            out["note_ko"] = "실행 중인 본인 Paper 세션 틱이 돌기 전에는 자동 모드 스냅샷이 비어 있을 수 있습니다."
+        return out
+
+    def set_paper_market_mode(self, user_id: str, mode: str) -> dict[str, Any]:
+        m = normalize_manual_mode(mode)
+        self._market_mode_prefs[user_id] = m
+        self._save_market_mode_prefs()
+        with self._lock:
+            loop = self._user_loop
+            if self._user_id == user_id and loop is not None:
+                loop.set_paper_market_mode_manual(m)
+        self._append_log("info", "Paper market mode preference updated")
+        return {"ok": True, "manual_market_mode_override": m}
 
     def paper_token_ensure_snapshot(self) -> dict[str, Any]:
         """마지막 Paper start 시도 시 토큰 확보 메타(HTTP 예외 detail 용)."""
@@ -747,7 +847,7 @@ class PaperSessionController:
                 return {"ok": False, "error": "NOT_OWNER_OR_NO_SESSION"}
             if self._status not in ("running", "risk_off"):
                 return {"ok": False, "error": "PAPER_SESSION_NOT_ACTIVE"}
-            st = self.status_payload()
+            st = self.status_payload(pref_user_id=user_id)
             rep = dict(self._last_report)
             loop = self._user_loop
         if loop is None:
@@ -804,6 +904,7 @@ class PaperSessionController:
             "orders_blocked_session": rep.get("orders_blocked_session"),
             "strategy_profile": rep.get("strategy_profile"),
             "close_betting_forced_flatten": rep.get("close_betting_forced_flatten"),
+            "market_mode": rep.get("market_mode") if isinstance(rep.get("market_mode"), dict) else {},
         }
 
         return {
@@ -834,6 +935,7 @@ class PaperSessionController:
             "candidates": rep.get("candidates") or [],
             "candidate_filter_breakdown": cfb,
             "tick_report": tick_report,
+            "manual_market_mode_override": normalize_manual_mode(self._market_mode_prefs.get(user_id, "auto")),
         }
 
     def get_logs(self) -> list[dict[str, str]]:

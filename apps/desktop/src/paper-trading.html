@@ -194,6 +194,23 @@
           <button type="button" id="riskResetBtn" style="margin-left: 12px">risk 해제 후 재개</button>
           <button type="button" id="manualOverrideToggleBtn" style="margin-left: 8px">수동 재개 토글: OFF</button>
         </div>
+        <div class="panel" style="background: #f0fdf4; border-color: #86efac">
+          <div><b>시장 모드 (KOSPI 적응 · Paper)</b></div>
+          <p id="marketModeStatusLine" style="margin: 6px 0; font-size: 0.9rem; color: #14532d">로그인 후 상태를 불러오면 표시됩니다.</p>
+          <div style="margin-top: 6px; font-size: 0.85rem; color: #475569">
+            <label for="paperMarketModeSelect">수동 선택</label>
+            <select id="paperMarketModeSelect" style="margin-left: 6px">
+              <option value="auto" selected>Auto (자동 분류)</option>
+              <option value="aggressive">Aggressive</option>
+              <option value="neutral">Neutral</option>
+              <option value="defensive">Defensive</option>
+            </select>
+            <button type="button" id="paperMarketModeApplyBtn" style="margin-left: 8px">모드 적용</button>
+          </div>
+          <p style="margin: 6px 0 0; font-size: 0.78rem; color: #64748b">
+            자동 모드는 틱마다 KOSPI·국면을 반영합니다. 수동은 전략 게이트를 강제로 맞춥니다(리스크 킬스위치·일손실 한도는 그대로).
+          </p>
+        </div>
         <div class="row">
           <label>시작 시 전략: </label>
           <select id="strategyId">
@@ -386,6 +403,9 @@
         const riskOffPanel = document.getElementById("riskOffPanel");
         const riskResetBtn = document.getElementById("riskResetBtn");
         const manualOverrideToggleBtn = document.getElementById("manualOverrideToggleBtn");
+        const marketModeStatusLine = document.getElementById("marketModeStatusLine");
+        const paperMarketModeSelect = document.getElementById("paperMarketModeSelect");
+        const paperMarketModeApplyBtn = document.getElementById("paperMarketModeApplyBtn");
         const pnlSummary = document.getElementById("pnlSummary");
         const message = document.getElementById("message");
         const positionsList = document.getElementById("positionsList");
@@ -640,13 +660,14 @@
         async function refreshPaper() {
           await checkBrokerGate();
           try {
+            const ah = await authHeaders();
             const [statusRes, posRes, pnlRes, logsRes, dashRes, diagRes] = await Promise.all([
-              fetch(paperApiUrl("status")),
+              authFetch(paperApiUrl("status"), { headers: ah }),
               fetch(paperApiUrl("positions")),
               fetch(paperApiUrl("pnl")),
               fetch(paperApiUrl("logs")),
               authFetch(paperApiUrl("dashboard-data"), { headers: await authHeaders() }),
-              fetch(paperApiUrl("diagnostics")),
+              authFetch(paperApiUrl("diagnostics"), { headers: ah }),
             ]);
             const statusData = await statusRes.json();
             const posData = await posRes.json();
@@ -694,6 +715,14 @@
                 manualOverrideToggleBtn.style.background = mo ? "#fee2e2" : "";
                 manualOverrideToggleBtn.style.color = mo ? "#991b1b" : "";
                 manualOverrideToggleBtn.style.borderColor = mo ? "#ef4444" : "";
+              }
+              var mmSum = statusData.market_mode_summary || (statusData.market_mode && statusData.market_mode.status_line) || "";
+              var mmSrc = statusData.market_mode && statusData.market_mode.market_mode_source ? String(statusData.market_mode.market_mode_source) : "";
+              if (marketModeStatusLine) {
+                marketModeStatusLine.innerText = mmSum ? mmSum + (mmSrc ? " · source: " + mmSrc : "") : "— (틱 후 갱신)";
+              }
+              if (paperMarketModeSelect && statusData.manual_market_mode_override) {
+                paperMarketModeSelect.value = String(statusData.manual_market_mode_override);
               }
             }
             if (pnlRes.ok) {
@@ -1194,6 +1223,29 @@
           toast("ok", on ? "수동 재개 ON (리스크 차단 우회)" : "수동 재개 OFF (기본 차단 복구)");
           refreshPaper();
         });
+
+        if (paperMarketModeApplyBtn && paperMarketModeSelect) {
+          paperMarketModeApplyBtn.addEventListener("click", async function () {
+            var v = paperMarketModeSelect.value || "auto";
+            const res = await authFetch(paperApiUrl("market-mode"), {
+              method: "POST",
+              headers: await authHeaders({ "Content-Type": "application/json" }),
+              body: JSON.stringify({ manual_market_mode: v }),
+            });
+            const data = await res.json().catch(function () {
+              return {};
+            });
+            if (!res.ok) {
+              var em = formatApiErrorDetail(data.detail);
+              if (em === "요청이 거절되었습니다." && !data.detail) em = "시장 모드 저장 실패";
+              message.innerText = em;
+              toast("err", em);
+              return;
+            }
+            toast("ok", "시장 모드 저장: " + v);
+            refreshPaper();
+          });
+        }
 
         document.getElementById("startBtn").addEventListener("click", async function () {
           if (startBtn.disabled) return;

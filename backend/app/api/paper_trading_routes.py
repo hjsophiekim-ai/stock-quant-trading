@@ -26,6 +26,16 @@ def _paper_user(authorization: str | None):
         raise
 
 
+def _optional_pref_user_id(authorization: str | None) -> str | None:
+    """Bearer가 유효하면 사용자 id, 아니면 None (Paper status/diagnostics용 비차단)."""
+    if not authorization:
+        return None
+    try:
+        return get_current_user_from_auth_header(authorization).id
+    except (ValueError, HTTPException):
+        return None
+
+
 def _require_broker_ready_for_start(user_id: str) -> None:
     svc = get_broker_service()
     try:
@@ -355,11 +365,13 @@ def get_paper_trading_capabilities() -> dict[str, object]:
 @router.get("/status")
 def get_paper_trading_status(
     market: str | None = Query(default=None, description="domestic | us — 세션과 다르면 market_mismatch"),
+    authorization: str | None = Header(default=None),
 ) -> dict[str, object]:
     ctrl = get_paper_session_controller()
     ok_m, req, sess = ctrl.market_request_matches(market)
+    pref_uid = _optional_pref_user_id(authorization)
     return {
-        **ctrl.status_payload(),
+        **ctrl.status_payload(pref_user_id=pref_uid),
         "requested_market": req,
         "paper_market_normalized": sess,
         "market_mismatch": not ok_m,
@@ -368,9 +380,10 @@ def get_paper_trading_status(
 
 
 @router.get("/engine/status")
-def paper_engine_status() -> dict[str, Any]:
+def paper_engine_status(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     """Paper 전용 런타임(사용자 모의 루프) 상태 — `/api/runtime-engine` 과 구분."""
-    return get_paper_session_controller().status_payload()
+    pref_uid = _optional_pref_user_id(authorization)
+    return get_paper_session_controller().status_payload(pref_user_id=pref_uid)
 
 
 @router.get("/positions")
@@ -390,9 +403,11 @@ def get_paper_pnl(
 @router.get("/diagnostics")
 def get_paper_diagnostics(
     market: str | None = Query(default=None, description="예약: domestic | us"),
+    authorization: str | None = Header(default=None),
 ) -> dict[str, object]:
     """Paper 세션 마지막 KIS 실패 맥락·토큰 출처(민감값 제외)."""
-    return get_paper_session_controller().diagnostics_payload()
+    pref_uid = _optional_pref_user_id(authorization)
+    return get_paper_session_controller().diagnostics_payload(pref_user_id=pref_uid)
 
 
 @router.get("/dashboard-data")
@@ -422,3 +437,33 @@ def get_paper_logs(
         ]
     out["items"] = logs[:40]
     return out
+
+
+class PaperMarketModeBody(BaseModel):
+    manual_market_mode: str = Field(
+        default="auto",
+        description="auto | aggressive | neutral | defensive",
+        min_length=2,
+        max_length=16,
+    )
+
+
+@router.get("/market-mode")
+def get_paper_market_mode(
+    authorization: str | None = Header(default=None),
+    market: str | None = Query(default=None, description="예약: domestic | us"),
+) -> dict[str, object]:
+    _ = market
+    user = _paper_user(authorization)
+    return get_paper_session_controller().get_paper_market_mode(user.id)
+
+
+@router.post("/market-mode")
+def set_paper_market_mode(
+    body: PaperMarketModeBody,
+    authorization: str | None = Header(default=None),
+    market: str | None = Query(default=None, description="예약: domestic | us"),
+) -> dict[str, object]:
+    _ = market
+    user = _paper_user(authorization)
+    return get_paper_session_controller().set_paper_market_mode(user.id, body.manual_market_mode)

@@ -42,6 +42,62 @@ _KST = ZoneInfo("Asia/Seoul")
 _debug_now_kst: datetime | None = None
 
 
+def _fb_mm_policy(strategy: Any) -> dict[str, Any]:
+    snap = getattr(strategy, "_paper_market_mode_snapshot", None) or {}
+    pol = snap.get("policy") or {}
+    return pol.get("final_betting") or {}
+
+
+def _fb_clamp(v: float, lo: float, hi: float) -> float:
+    return float(min(hi, max(lo, v)))
+
+
+def apply_aggressive_kospi_tape_overlay(
+    *,
+    market_mode_active: str | None,
+    kospi_day_ret_pct: float | None,
+    us_h: float,
+    kp_h: float,
+    us_s: float,
+    kp_s: float,
+) -> tuple[float, float, float, float, dict[str, Any]]:
+    """
+    When Paper mode is aggressive and the cash KOSPI day is clearly strong, relax the same-day
+    index tape gates further (still bounded by the same clamps as the base thresholds).
+    """
+    diag: dict[str, Any] = {"tape_overlay_applied": False, "tape_tier": None, "kospi_day_ret_pct": kospi_day_ret_pct}
+    if (market_mode_active or "").strip().lower() != "aggressive" or kospi_day_ret_pct is None:
+        return us_h, kp_h, us_s, kp_s, diag
+    kr = float(kospi_day_ret_pct)
+    tier: str | None = None
+    d_us_h = d_kp_h = d_us_s = d_kp_s = 0.0
+    if kr >= 1.25:
+        tier = "strong"
+        d_us_h, d_kp_h, d_us_s, d_kp_s = -0.16, -0.32, -0.12, -0.26
+    elif kr >= 0.75:
+        tier = "firm"
+        d_us_h, d_kp_h, d_us_s, d_kp_s = -0.09, -0.18, -0.07, -0.14
+    if tier is None:
+        return us_h, kp_h, us_s, kp_s, diag
+    nu_h = _fb_clamp(us_h + d_us_h, 0.38, 1.15)
+    nk_h = _fb_clamp(kp_h + d_kp_h, -2.2, -0.35)
+    nu_s = _fb_clamp(us_s + d_us_s, 0.15, 0.75)
+    nk_s = _fb_clamp(kp_s + d_kp_s, -2.5, -0.55)
+    diag.update(
+        {
+            "tape_overlay_applied": True,
+            "tape_tier": tier,
+            "delta_us_h": d_us_h,
+            "delta_kp_h": d_kp_h,
+            "delta_us_s": d_us_s,
+            "delta_kp_s": d_kp_s,
+            "before": {"us_h": us_h, "kp_h": kp_h, "us_s": us_s, "kp_s": kp_s},
+            "after": {"us_h": nu_h, "kp_h": nk_h, "us_s": nu_s, "kp_s": nk_s},
+        }
+    )
+    return nu_h, nk_h, nu_s, nk_s, diag
+
+
 def _now_kst() -> datetime:
     if _debug_now_kst is not None:
         return _debug_now_kst
@@ -442,11 +498,28 @@ class FinalBettingV1Strategy(BaseStrategy):
         )
         soft = compute_soft_regime(regime.features, regime.regime)
 
+        fbp = _fb_mm_policy(self)
+        mm_snap = getattr(self, "_paper_market_mode_snapshot", None) or {}
+        us_h = _fb_clamp(0.8 + float(fbp.get("us_night_hard_delta", 0.0)), 0.38, 1.15)
+        kp_h = _fb_clamp(-1.0 + float(fbp.get("kospi_hard_delta", 0.0)), -2.2, -0.35)
+        us_s = _fb_clamp(0.4 + float(fbp.get("us_soft_delta", 0.0)), 0.15, 0.75)
+        kp_s = _fb_clamp(-1.35 + float(fbp.get("kospi_soft_delta", 0.0)), -2.5, -0.55)
+
         kospi_day_ret = _index_day_return_pct(context.kospi_index)
         # 현 코드베이스에는 CME 나스닥100 야간선물 전용 feed가 없어 SP500 proxy를 우선 사용.
         us_night_proxy_ret = _index_day_return_pct(context.sp500_index)
+        us_h, kp_h, us_s, kp_s, kospi_tape_overlay = apply_aggressive_kospi_tape_overlay(
+            market_mode_active=mm_snap.get("market_mode_active"),
+            kospi_day_ret_pct=kospi_day_ret,
+            us_h=us_h,
+            kp_h=kp_h,
+            us_s=us_s,
+            kp_s=kp_s,
+        )
         market_filter_ready = us_night_proxy_ret is not None
-        market_filter_ok = bool(market_filter_ready and us_night_proxy_ret >= 0.8 and (kospi_day_ret is None or kospi_day_ret > -1.0))
+        market_filter_ok = bool(
+            market_filter_ready and us_night_proxy_ret >= us_h and (kospi_day_ret is None or kospi_day_ret > kp_h)
+        )
         market_filter_ok_effective = market_filter_ok
         if (
             not market_filter_ok_effective
@@ -454,21 +527,36 @@ class FinalBettingV1Strategy(BaseStrategy):
             and us_night_proxy_ret is not None
             and soft.market_regime in ("neutral", "mild_bullish", "mild_bearish")
         ):
-            market_filter_ok_effective = bool(us_night_proxy_ret >= 0.4 and (kospi_day_ret is None or kospi_day_ret > -1.35))
+            market_filter_ok_effective = bool(us_night_proxy_ret >= us_s and (kospi_day_ret is None or kospi_day_ret > kp_s))
         self.last_intraday_signal_breakdown["market_filter"] = {
             "us_night_proxy_ret_pct": us_night_proxy_ret,
             "kospi_day_ret_pct": kospi_day_ret,
             "market_filter_ready": market_filter_ready,
             "market_filter_ok": market_filter_ok,
             "market_filter_ok_effective": market_filter_ok_effective,
-            "rule": "us_night_proxy>=+0.8 and kospi>-1.0",
-            "rule_soft": "neutral/mild: us>=0.4 and kospi>-1.35",
+            "rule": f"us_night_proxy>={us_h} and kospi>{kp_h}",
+            "rule_soft": f"neutral/mild: us>={us_s} and kospi>{kp_s}",
+            "market_mode_active": mm_snap.get("market_mode_active"),
+            "market_mode_source": mm_snap.get("market_mode_source"),
+            "effective_us_night_hard_min": us_h,
+            "effective_kospi_day_ret_hard_min": kp_h,
+            "effective_us_night_soft_min": us_s,
+            "effective_kospi_day_ret_soft_min": kp_s,
+            "aggressive_kospi_tape_overlay": kospi_tape_overlay,
         }
         self.last_intraday_signal_breakdown["market_regime"] = soft.market_regime
         self.last_intraday_signal_breakdown["regime_score"] = soft.regime_score
         self.last_intraday_signal_breakdown["regime_entry_allowed"] = soft.regime_entry_allowed
         self.last_intraday_signal_breakdown["regime_size_multiplier"] = soft.regime_size_multiplier
         self.last_intraday_signal_breakdown["regime_block_reason"] = soft.regime_block_reason
+        self.last_intraday_signal_breakdown["market_mode"] = {
+            "market_mode_active": mm_snap.get("market_mode_active"),
+            "market_mode_source": mm_snap.get("market_mode_source"),
+            "market_mode_reason": mm_snap.get("market_mode_reason"),
+            "manual_market_mode_override": mm_snap.get("manual_market_mode_override"),
+            "auto_market_mode": mm_snap.get("auto_market_mode"),
+            "status_line": mm_snap.get("status_line"),
+        }
 
         prices = context.prices
         portfolio = context.portfolio
@@ -608,17 +696,23 @@ class FinalBettingV1Strategy(BaseStrategy):
             self.last_intraday_signal_breakdown["blocked"] = "soft_regime_entry_not_allowed"
             return signals
         # 지수 필터: KOSPI 수익률이 음수이고 5일 EMA 아래면 보수화(신규 진입 중단).
+        idx_block = _fb_clamp(-0.35 - float(fbp.get("index_kospi_vs_ema5_block_relax", 0.0)), -0.65, -0.2)
         if not context.kospi_index.empty and "close" in context.kospi_index.columns:
             kclose = context.kospi_index.sort_values("date")["close"].astype(float)
             if len(kclose) >= 6:
                 ema5 = _ema(kclose, 5)
-                if (not self.manual_override_enabled) and float(kclose.iloc[-1]) < float(ema5.iloc[-1]) and kospi_day_ret_for_rel <= -0.35:
+                if (not self.manual_override_enabled) and float(kclose.iloc[-1]) < float(ema5.iloc[-1]) and kospi_day_ret_for_rel <= idx_block:
                     self.last_intraday_signal_breakdown["blocked"] = "index_filter_risk_off"
                     return signals
         if not in_entry_window:
             return signals
 
-        open_slots = max(0, int(cfg.paper_final_betting_max_new_positions) - len(pos_symbols))
+        eff_max_new = max(
+            1,
+            int(cfg.paper_final_betting_max_new_positions) + int(fbp.get("max_new_positions_delta", 0) or 0),
+        )
+        self.last_intraday_signal_breakdown["effective_max_new_positions_fb"] = eff_max_new
+        open_slots = max(0, eff_max_new - len(pos_symbols))
         entered_today = list(carry.get("entered_symbols_today") or [])
         if open_slots <= 0:
             self.last_intraday_signal_breakdown["blocked"] = "max_open_positions"
@@ -643,7 +737,7 @@ class FinalBettingV1Strategy(BaseStrategy):
 
         last_exit_map: dict[str, str] = dict(carry.get("last_exit_kst") or {})
         cooldown = int(cfg.paper_final_betting_reentry_cooldown_days)
-        min_tv = float(cfg.paper_final_betting_min_trade_value_krw)
+        min_tv = float(cfg.paper_final_betting_min_trade_value_krw) * float(fbp.get("min_trade_value_mult", 1.0) or 1.0)
 
         cohort_tv: list[float] = []
         if not prices.empty:
@@ -671,7 +765,7 @@ class FinalBettingV1Strategy(BaseStrategy):
                 sym = str(sym).strip()
                 if sym in pos_symbols:
                     continue
-                if len(entered_today) >= int(cfg.paper_final_betting_max_new_positions) and sym not in entered_today:
+                if len(entered_today) >= eff_max_new and sym not in entered_today:
                     continue
                 if sym in entered_today:
                     continue
@@ -714,7 +808,12 @@ class FinalBettingV1Strategy(BaseStrategy):
                         }
                     )
                     continue
-                if liq and liq["spread_pct"] > 0.55:
+                max_spread_limit = (
+                    float(fbp["max_spread_pct_floor"])
+                    if fbp.get("max_spread_pct_floor") is not None
+                    else 0.55
+                )
+                if liq and liq["spread_pct"] > max_spread_limit:
                     self.last_diagnostics.append(
                         {
                             "symbol": sym,
@@ -734,7 +833,8 @@ class FinalBettingV1Strategy(BaseStrategy):
                     hi_roll = float(late_tail["high"].max())
                     last_c2 = float(late_tail["close"].iloc[-1])
                     plunge_pct = ((hi_roll - last_c2) / hi_roll * 100.0) if hi_roll > 0 else 0.0
-                    if plunge_pct >= 2.85:
+                    plunge_thr = _fb_clamp(2.85 + float(fbp.get("late_plunge_pct_delta", 0.0)), 1.9, 4.5)
+                    if plunge_pct >= plunge_thr:
                         self.last_diagnostics.append(
                             {
                                 "symbol": sym,
@@ -768,7 +868,8 @@ class FinalBettingV1Strategy(BaseStrategy):
                 ma20_up = ma20_last >= ma20_prev
                 flow_score, flow_ok = _flow_proxy_score(sub_s, session_ymd, day_vwap_last)
                 auction_instability = _auction_instability_score(sub_s, session_ymd)
-                if auction_instability >= 1.8:
+                auction_thr = _fb_clamp(1.8 + float(fbp.get("auction_instability_delta", 0.0)), 1.2, 2.6)
+                if auction_instability >= auction_thr:
                     self.last_diagnostics.append(
                         {
                             "symbol": sym,
@@ -789,7 +890,11 @@ class FinalBettingV1Strategy(BaseStrategy):
                     afternoon, morning_lo, day_lo, day_hi, last_close, day_vwap_last
                 )
                 close_above = last_close >= day_vwap_last * 0.998 if day_vwap_last > 0 else False
-                zone_pct = float(cfg.paper_final_betting_day_high_zone_pct)
+                zone_pct = _fb_clamp(
+                    float(cfg.paper_final_betting_day_high_zone_pct) + float(fbp.get("day_high_zone_pct_delta", 0.0)),
+                    6.0,
+                    48.0,
+                )
                 in_high_zone = last_close >= day_lo + (day_hi - day_lo) * (1.0 - zone_pct / 100.0) if day_hi > day_lo else False
                 rel_score, rel_ok = _relative_strength_ok(sym, sub_s, kospi_day_ret_for_rel, cohort_tv, min_tv)
 
@@ -814,7 +919,11 @@ class FinalBettingV1Strategy(BaseStrategy):
                     afternoon=afternoon,
                     kospi_day_ret=kospi_day_ret_for_rel,
                 )
-                rmin = float(cfg.paper_final_betting_rebound_score_min)
+                rmin = _fb_clamp(
+                    float(cfg.paper_final_betting_rebound_score_min) + float(fbp.get("rebound_score_delta", 0.0)),
+                    0.05,
+                    0.95,
+                )
                 entry_rebound_core = (
                     bool(rebound_info.get("bearish_rebound_candidate"))
                     and float(rebound_info.get("final_betting_quality_score", 0)) >= rmin
@@ -866,7 +975,19 @@ class FinalBettingV1Strategy(BaseStrategy):
                     tv_hist_day[sym] = today
                 avg5 = sum(tv_hist.get(sym) or []) / max(1, len(tv_hist.get(sym) or []))
                 tv_spike_ok = avg5 <= 0 or tv_sym >= avg5 * 2.0
-                weak_rsi_max = float(getattr(cfg, "paper_final_betting_weak_close_rsi_max", 74.0))
+                weak_rsi_max = _fb_clamp(
+                    float(getattr(cfg, "paper_final_betting_weak_close_rsi_max", 74.0))
+                    + float(fbp.get("weak_rsi_max_delta", 0.0)),
+                    58.0,
+                    80.0,
+                )
+                min_weak_hits = max(1, 2 + int(fbp.get("min_hits_weak_flow_delta", 0) or 0))
+                min_tv_hits = max(2, 3 + int(fbp.get("min_hits_tv_spike_delta", 0) or 0))
+                self.last_intraday_signal_breakdown["fb_hit_thresholds"] = {
+                    "min_weak_hits": min_weak_hits,
+                    "min_tv_spike_hits": min_tv_hits,
+                    "weak_rsi_max": weak_rsi_max,
+                }
                 net_buy_rank_ok_eff = bool(net_buy_rank_ok) or bool(entry_rebound_core and flow_ok)
                 if rsi14 >= weak_rsi_max and not entry_rebound_core:
                     blocked = "weak_close_rsi_high"
@@ -884,9 +1005,9 @@ class FinalBettingV1Strategy(BaseStrategy):
                     blocked = "day_return_out_of_range"
                 elif not candle_ok:
                     blocked = "candle_pattern_fail"
-                elif hits_eff < 2 and not flow_ok and not entry_rebound_core:
+                elif hits_eff < min_weak_hits and not flow_ok and not entry_rebound_core:
                     blocked = "signals_weak"
-                elif not tv_spike_ok and hits_eff < 3 and not entry_rebound_core:
+                elif not tv_spike_ok and hits_eff < min_tv_hits and not entry_rebound_core:
                     blocked = "trade_value_not_2x_avg5"
                 eff_sl_blk, eff_tp_blk, atr_blend_blk = blend_stop_tp_with_atr(
                     fixed_stop_pct=float(cfg.paper_final_betting_stop_loss_pct),
@@ -970,7 +1091,10 @@ class FinalBettingV1Strategy(BaseStrategy):
                 )
 
         ranked.sort(key=lambda x: -x[0])
-        pool_n = max(3, int(getattr(cfg, "paper_final_betting_rank_pool_top_n", 5)))
+        pool_n = max(
+            3,
+            min(14, int(getattr(cfg, "paper_final_betting_rank_pool_top_n", 5)) + int(fbp.get("rank_pool_delta", 0) or 0)),
+        )
         self.last_intraday_signal_breakdown["filtered_universe_count"] = len(ranked)
         self.last_intraday_signal_breakdown["ranking_cutoff_used"] = int(pool_n)
         self.last_intraday_signal_breakdown["universe_filter_block_reason"] = (
@@ -980,7 +1104,7 @@ class FinalBettingV1Strategy(BaseStrategy):
         for rank_i, (_rank_score, sym, _sc_pack) in enumerate(ranked[:pool_n]):
             if entries_added >= open_slots:
                 break
-            if len(entered_today) + entries_added >= int(cfg.paper_final_betting_max_new_positions):
+            if len(entered_today) + entries_added >= eff_max_new:
                 break
             self.last_intraday_signal_breakdown["entries_evaluated"] = (
                 int(self.last_intraday_signal_breakdown.get("entries_evaluated") or 0) + 1
@@ -1000,8 +1124,12 @@ class FinalBettingV1Strategy(BaseStrategy):
                 afternoon, morning_lo, day_lo, day_hi, last_close, day_vwap_last
             )
             close_above = last_close >= day_vwap_last * 0.998 if day_vwap_last > 0 else False
-            zone_pct = float(cfg.paper_final_betting_day_high_zone_pct)
-            in_high_zone = last_close >= day_lo + (day_hi - day_lo) * (1.0 - zone_pct / 100.0) if day_hi > day_lo else False
+            zone_pct2 = _fb_clamp(
+                float(cfg.paper_final_betting_day_high_zone_pct) + float(fbp.get("day_high_zone_pct_delta", 0.0)),
+                6.0,
+                48.0,
+            )
+            in_high_zone = last_close >= day_lo + (day_hi - day_lo) * (1.0 - zone_pct2 / 100.0) if day_hi > day_lo else False
             rel_score, rel_ok = _relative_strength_ok(sym, sub_s, kospi_day_ret_for_rel, cohort_tv, min_tv)
             hits = sum([m_ok, a_ok, close_above, in_high_zone, rel_ok])
             close_s = sub_s["close"].astype(float)
@@ -1016,8 +1144,19 @@ class FinalBettingV1Strategy(BaseStrategy):
 
             eq_base = float(getattr(self, "_final_betting_equity_krw", 0.0) or 0.0)
             eq = max(1.0, eq_base * float(soft.regime_size_multiplier) * float(health_mult))
-            min_pct = float(getattr(cfg, "paper_final_betting_min_allocation_pct", 20.0))
-            max_pct = float(cfg.paper_final_betting_max_capital_per_position_pct)
+            szm = float(fbp.get("size_mult", 1.0) or 1.0)
+            min_pct = _fb_clamp(
+                float(getattr(cfg, "paper_final_betting_min_allocation_pct", 20.0))
+                + float(fbp.get("min_alloc_pct_delta", 0.0)),
+                10.0,
+                35.0,
+            )
+            max_pct = _fb_clamp(
+                float(cfg.paper_final_betting_max_capital_per_position_pct) * szm
+                + float(fbp.get("max_capital_per_position_pct_delta", 0.0)),
+                12.0,
+                38.0,
+            )
             px = float(last_close)
             daily_ohlc2 = build_daily_ohlc_from_intraday(sub)
             atr14_2, atr_pct_2, atr_fb2 = daily_atr14_pct(daily_ohlc2)
