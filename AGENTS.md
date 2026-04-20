@@ -71,6 +71,7 @@
 - 앱의 모의투자 실행/중지/모니터링 기능은 `paper-trading` 전용 API로 분리합니다.
 - 모의투자 제어 API는 `PaperBroker`만 사용하며, live 주문 경로와 로직을 혼합하지 않습니다.
 - 코어 실행기(`python -m app.main`)에서 KIS **모의투자 REST**와 주문을 연결할 때는 `KisPaperBroker`만 사용합니다(`https://openapivts...` 전용, 실전 도메인과 분리). 환경변수 `PAPER_USE_KIS_EXECUTION`, `PAPER_TRADING_LOOP` 등으로 켭니다.
+- 백엔드 **앱 사용자 Paper 루프**(`UserPaperTradingLoop`)는 모의 OAuth를 주기마다 무조건 재발급하지 않고 잔고 probe로 유효성을 확인한 뒤 필요 시에만 재발급하며, 실패 시 in-memory·SQLite 캐시·백오프로 복구한다. 연속 OAuth 실패는 일반 틱 실패 streak과 분리해 `risk_off`한다(`PAPER_KIS_TOKEN_*`, `PAPER_SESSION_MAX_TOKEN_FAILURES_BEFORE_RISK_OFF`).
 - live trading unlock은 환경변수 + 앱 다중 확인 + 추가 승인 상태를 모두 요구합니다.
 - `LIVE_TRADING=true` 단독으로는 live 주문을 허용하지 않습니다.
 - live 안전 설정 변경은 반드시 이력(history)으로 남기고, 앱에 위험 경고를 표시합니다.

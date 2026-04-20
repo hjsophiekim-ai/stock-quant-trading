@@ -9,18 +9,32 @@ Paper 종가베팅 v1 — T+1 overnight / close-betting (scalp·장마감 강제
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 from typing import Any
 
 import pandas as pd
 from zoneinfo import ZoneInfo
 
 from app.config import get_settings
+from app.orders.models import OrderRequest, OrderResult
 from app.strategy.base_strategy import BaseStrategy, StrategyContext, StrategySignal
 from app.strategy.intraday_common import parse_krx_hhmm, quote_liquidity_from_payload, session_vwap
 from app.strategy.intraday_paper_state import IntradayPaperState
+from app.strategy.final_betting_rebound import (
+    blend_stop_tp_with_atr,
+    build_daily_ohlc_from_intraday,
+    daily_atr14_pct,
+    evaluate_bearish_rebound_candidate,
+)
 from app.strategy.market_regime import MarketRegimeConfig, MarketRegimeInputs, classify_market_regime
 from app.strategy.paper_position_sizing import compute_intraday_buy_quantity
+from app.strategy.regime_soft import compute_soft_regime
+from app.strategy.strategy_fill_performance import (
+    apply_fb_dynamic_cooldown,
+    fb_health_size_multiplier,
+    fb_performance_snapshot,
+    record_fb_sell_outcome,
+)
 
 _KST = ZoneInfo("Asia/Seoul")
 
@@ -32,6 +46,30 @@ def _now_kst() -> datetime:
     if _debug_now_kst is not None:
         return _debug_now_kst
     return datetime.now(_KST)
+
+
+def _fb_cooldown_detail(state: IntradayPaperState | None, carry: dict[str, Any] | None) -> dict[str, Any]:
+    """쿨다운 잔여·사유(종목별)."""
+    trace = (carry or {}).get("fb_cooldown_trace") or {}
+    if state is None:
+        return {"symbols": {}}
+    now = datetime.now(timezone.utc)
+    out: dict[str, dict[str, Any]] = {}
+    for sym, iso in (state.cooldown_until_iso or {}).items():
+        try:
+            cd = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+            rem = max(0.0, (cd - now).total_seconds())
+            active = rem > 0.5
+        except ValueError:
+            rem = 0.0
+            active = False
+        tr = trace.get(sym) or trace.get(str(sym)) or {}
+        out[str(sym)] = {
+            "cooldown_active": active,
+            "cooldown_remaining_sec": round(rem, 3),
+            "cooldown_reason": tr.get("cooldown_reason"),
+        }
+    return {"symbols": out}
 
 
 def _bar_dt_kst(ts: Any) -> datetime:
@@ -295,24 +333,79 @@ class FinalBettingV1Strategy(BaseStrategy):
     def consume_pending_carry_update(self, symbol: str) -> dict[str, Any] | None:
         return self.pending_carry_updates.pop(symbol, None)
 
-    def on_fb_sell_accepted(self, symbol: str, sold_qty: int, state: IntradayPaperState) -> None:
+    def on_fb_sell_accepted(
+        self,
+        symbol: str,
+        sold_qty: int,
+        state: IntradayPaperState,
+        *,
+        order: OrderRequest | None = None,
+        fill_result: OrderResult | None = None,
+    ) -> None:
+        cfg = get_settings()
         carry = state.final_betting_carry
         pos = carry.get("positions") or {}
         meta = pos.get(symbol)
         if not meta:
             return
+        ref_close = float(meta.get("ref_close") or 0.0)
         before = int(meta.get("shares", 0))
-        left = before - int(sold_qty)
+        order_req_px = float(order.price) if order and order.price is not None else None
+        broker_avg = (
+            float(fill_result.avg_fill_price) if fill_result and fill_result.avg_fill_price is not None else None
+        )
+        if broker_avg is not None:
+            fill_px = broker_avg
+            pnl_src = "broker_avg_fill"
+        elif order_req_px is not None:
+            fill_px = order_req_px
+            pnl_src = "order_request_price"
+        else:
+            fill_px = ref_close
+            pnl_src = "reference_close_fallback"
+        reason = str(order.signal_reason or "") if order else ""
+        pnl_pct = (fill_px / ref_close - 1.0) * 100.0 if ref_close > 0 else 0.0
+        sold_qty_i = int(sold_qty)
+        record_fb_sell_outcome(
+            carry,
+            symbol=str(symbol),
+            sold_qty=sold_qty_i,
+            fill_px=fill_px,
+            entry_px=ref_close,
+            reason=reason,
+            reference_close=ref_close,
+            order_request_price=order_req_px,
+            executed_avg_fill_price=broker_avg,
+            pnl_price_source=pnl_src,
+        )
+        left = before - sold_qty_i
         if left <= 0:
             pos.pop(symbol, None)
             carry["positions"] = pos
             carry.setdefault("last_exit_kst", {})[symbol] = _now_kst().strftime("%Y%m%d")
         else:
             meta["shares"] = left
-            if int(sold_qty) < before:
+            if sold_qty_i < before:
                 meta["partial_scaleout_done"] = True
             pos[symbol] = meta
             carry["positions"] = pos
+        if order is not None:
+            apply_fb_dynamic_cooldown(
+                cfg=cfg,
+                state=state,
+                carry=carry,
+                symbol=str(symbol),
+                reason=reason,
+                pnl_pct=pnl_pct,
+                today_kst=_now_kst().strftime("%Y%m%d"),
+            )
+        carry.setdefault("fb_last_sell_price_diag", {})[str(symbol)] = {
+            "reference_close": ref_close,
+            "order_request_price": order_req_px,
+            "executed_avg_fill_price": broker_avg,
+            "pnl_price_used": fill_px,
+            "pnl_price_source": pnl_src,
+        }
 
     def generate_signals(self, context: StrategyContext) -> list[StrategySignal]:
         cfg = get_settings()
@@ -347,20 +440,35 @@ class FinalBettingV1Strategy(BaseStrategy):
             ),
             self.regime_config,
         )
-        high_vol_block = regime.regime == "high_volatility_risk"
+        soft = compute_soft_regime(regime.features, regime.regime)
 
         kospi_day_ret = _index_day_return_pct(context.kospi_index)
         # 현 코드베이스에는 CME 나스닥100 야간선물 전용 feed가 없어 SP500 proxy를 우선 사용.
         us_night_proxy_ret = _index_day_return_pct(context.sp500_index)
         market_filter_ready = us_night_proxy_ret is not None
         market_filter_ok = bool(market_filter_ready and us_night_proxy_ret >= 0.8 and (kospi_day_ret is None or kospi_day_ret > -1.0))
+        market_filter_ok_effective = market_filter_ok
+        if (
+            not market_filter_ok_effective
+            and market_filter_ready
+            and us_night_proxy_ret is not None
+            and soft.market_regime in ("neutral", "mild_bullish", "mild_bearish")
+        ):
+            market_filter_ok_effective = bool(us_night_proxy_ret >= 0.4 and (kospi_day_ret is None or kospi_day_ret > -1.35))
         self.last_intraday_signal_breakdown["market_filter"] = {
             "us_night_proxy_ret_pct": us_night_proxy_ret,
             "kospi_day_ret_pct": kospi_day_ret,
             "market_filter_ready": market_filter_ready,
             "market_filter_ok": market_filter_ok,
+            "market_filter_ok_effective": market_filter_ok_effective,
             "rule": "us_night_proxy>=+0.8 and kospi>-1.0",
+            "rule_soft": "neutral/mild: us>=0.4 and kospi>-1.35",
         }
+        self.last_intraday_signal_breakdown["market_regime"] = soft.market_regime
+        self.last_intraday_signal_breakdown["regime_score"] = soft.regime_score
+        self.last_intraday_signal_breakdown["regime_entry_allowed"] = soft.regime_entry_allowed
+        self.last_intraday_signal_breakdown["regime_size_multiplier"] = soft.regime_size_multiplier
+        self.last_intraday_signal_breakdown["regime_block_reason"] = soft.regime_block_reason
 
         prices = context.prices
         portfolio = context.portfolio
@@ -384,6 +492,12 @@ class FinalBettingV1Strategy(BaseStrategy):
         rest_until = str(carry.get("rest_until_kst_date") or "")
         self.last_intraday_signal_breakdown["loss_days"] = list(loss_days)
         self.last_intraday_signal_breakdown["rest_until_kst_date"] = rest_until
+        self.last_intraday_signal_breakdown["fb_performance"] = fb_performance_snapshot(carry)
+        _health_lbl, health_mult = fb_health_size_multiplier(carry)
+        self.last_intraday_signal_breakdown["strategy_health"] = _health_lbl
+        self.last_intraday_signal_breakdown["health_position_size_mult"] = health_mult
+        _meta_fb = carry.get("fb_intraday_meta") or {}
+        self.last_intraday_signal_breakdown["symbol_stopout_count_today"] = dict(_meta_fb.get("stopout_counts") or {})
         scale_start = time(9, 5)
         scale_end = time(9, 30)
 
@@ -450,6 +564,13 @@ class FinalBettingV1Strategy(BaseStrategy):
                             carry["rest_until_kst_date"] = datetime.fromordinal(ny).strftime("%Y%m%d")
                         except ValueError:
                             carry["rest_until_kst_date"] = today
+                self.last_intraday_signal_breakdown.setdefault("final_betting_exit_intents", []).append(
+                    {
+                        "symbol": sym,
+                        "final_betting_exit_reason": exit_reason,
+                        "final_betting_nextday_gap_mode": "atr_scaled",
+                    }
+                )
                 signals.append(
                     StrategySignal(
                         symbol=sym,
@@ -476,11 +597,15 @@ class FinalBettingV1Strategy(BaseStrategy):
             self.last_intraday_signal_breakdown["blocked"] = "two_loss_days_rest"
             self.last_intraday_signal_breakdown["rest_until_kst_date"] = rest_until
             return signals
-        if not market_filter_ok:
+        if not market_filter_ok_effective:
             self.last_intraday_signal_breakdown["blocked"] = "market_filter_blocked_1430"
             return signals
-        if high_vol_block and (not self.manual_override_enabled):
-            self.last_intraday_signal_breakdown["blocked"] = "high_volatility_risk_no_entry"
+        # 신규 진입: soft 국면 entry_allowed + (고변동 레거시는 compute_soft_regime 에서 이미 차단).
+        soft_regime_gate_ok = bool(soft.regime_entry_allowed) or bool(self.manual_override_enabled)
+        self.last_intraday_signal_breakdown["soft_regime_used_as_gate"] = True
+        self.last_intraday_signal_breakdown["regime_gate_decision"] = "allowed" if soft_regime_gate_ok else "blocked"
+        if not soft_regime_gate_ok:
+            self.last_intraday_signal_breakdown["blocked"] = "soft_regime_entry_not_allowed"
             return signals
         # 지수 필터: KOSPI 수익률이 음수이고 5일 EMA 아래면 보수화(신규 진입 중단).
         if not context.kospi_index.empty and "close" in context.kospi_index.columns:
@@ -536,6 +661,10 @@ class FinalBettingV1Strategy(BaseStrategy):
                     cohort_tv.append(tv2)
 
         ranked: list[tuple[float, str, dict[str, Any]]] = []
+        if not prices.empty:
+            self.last_intraday_signal_breakdown["raw_universe_count"] = int(prices["symbol"].nunique())
+        else:
+            self.last_intraday_signal_breakdown["raw_universe_count"] = 0
 
         if not prices.empty:
             for sym in prices["symbol"].unique():
@@ -670,7 +799,38 @@ class FinalBettingV1Strategy(BaseStrategy):
                 rng = max(day_hi - day_lo, 1e-9)
                 body = abs(last_close - day_open)
                 long_bull_today = last_close > day_open and body / rng >= 0.45
-                candle_ok = long_bull_today
+                daily_ohlc = build_daily_ohlc_from_intraday(sub)
+                atr14, atr_pct, atr_fallback = daily_atr14_pct(daily_ohlc)
+                rebound_info = evaluate_bearish_rebound_candidate(
+                    sub_s=sub_s,
+                    day_open=day_open,
+                    day_hi=day_hi,
+                    day_lo=day_lo,
+                    last_close=last_close,
+                    rsi14=rsi14,
+                    ma20_last=ma20_last,
+                    ma20_prev=ma20_prev,
+                    morning=morning,
+                    afternoon=afternoon,
+                    kospi_day_ret=kospi_day_ret_for_rel,
+                )
+                rmin = float(cfg.paper_final_betting_rebound_score_min)
+                entry_rebound_core = (
+                    bool(rebound_info.get("bearish_rebound_candidate"))
+                    and float(rebound_info.get("final_betting_quality_score", 0)) >= rmin
+                    and not bool(rebound_info.get("panic_candle"))
+                    and (
+                        soft.market_regime != "bearish"
+                        or float(rebound_info.get("final_betting_reversal_score", 0)) >= 0.62
+                    )
+                )
+                day_ret_ok_eff = bool(day_ret_ok) or (
+                    entry_rebound_core and -1.2 <= float(day_ret_pct) <= 2.8
+                )
+                ma5_ok_eff = bool(ma5_ok) or bool(entry_rebound_core and last_close >= ma5_last * 0.994)
+                patt_b = str(rebound_info.get("final_betting_bearish_close_pattern") or "") == "pattern_B"
+                ma20_up_eff = bool(ma20_up) or bool(entry_rebound_core and patt_b)
+                candle_ok = bool(long_bull_today) or bool(entry_rebound_core)
                 qp_rank_foreign = _rank_from_quote(
                     qp,
                     ("frgn_ntby_rank", "foreign_net_buy_rank", "frgn_buy_rank", "foreign_rank"),
@@ -695,6 +855,7 @@ class FinalBettingV1Strategy(BaseStrategy):
                     + 0.25 * min(1.0, max(0.0, (last_close - day_lo) / max(day_hi - day_lo, 1e-9)))
                     + 0.25 * rel_score
                 )
+                hits_eff = int(hits) + (1 if entry_rebound_core and m_ok else 0)
                 blocked = ""
                 tv_sym = float(liq["acml_tr_pbmn"]) if liq else 0.0
                 trade_value_ok = tv_sym >= 10_000_000_000.0
@@ -706,26 +867,34 @@ class FinalBettingV1Strategy(BaseStrategy):
                 avg5 = sum(tv_hist.get(sym) or []) / max(1, len(tv_hist.get(sym) or []))
                 tv_spike_ok = avg5 <= 0 or tv_sym >= avg5 * 2.0
                 weak_rsi_max = float(getattr(cfg, "paper_final_betting_weak_close_rsi_max", 74.0))
-                if rsi14 >= weak_rsi_max:
+                net_buy_rank_ok_eff = bool(net_buy_rank_ok) or bool(entry_rebound_core and flow_ok)
+                if rsi14 >= weak_rsi_max and not entry_rebound_core:
                     blocked = "weak_close_rsi_high"
-                elif not net_buy_rank_ok:
+                elif not net_buy_rank_ok_eff:
                     blocked = "net_buy_rank_or_flow_fail"
-                elif not ma5_ok:
+                elif not ma5_ok_eff:
                     blocked = "close_below_ma5"
-                elif not ma20_up:
+                elif not ma20_up_eff:
                     blocked = "ma20_not_rising"
                 elif not trade_value_ok:
                     blocked = "trade_value_lt_100eok"
                 elif not market_cap_ok:
                     blocked = "market_cap_lt_500eok"
-                elif not day_ret_ok:
+                elif not day_ret_ok_eff:
                     blocked = "day_return_out_of_range"
                 elif not candle_ok:
                     blocked = "candle_pattern_fail"
-                elif hits < 2 and not flow_ok:
+                elif hits_eff < 2 and not flow_ok and not entry_rebound_core:
                     blocked = "signals_weak"
-                elif not tv_spike_ok and hits < 3:
+                elif not tv_spike_ok and hits_eff < 3 and not entry_rebound_core:
                     blocked = "trade_value_not_2x_avg5"
+                eff_sl_blk, eff_tp_blk, atr_blend_blk = blend_stop_tp_with_atr(
+                    fixed_stop_pct=float(cfg.paper_final_betting_stop_loss_pct),
+                    fixed_tp_pct=float(cfg.paper_final_betting_target_pct),
+                    atr_pct=float(atr_pct),
+                    atr_stop_mult=float(getattr(cfg, "paper_final_betting_atr_stop_mult", 1.0)),
+                    atr_tp_mult=float(getattr(cfg, "paper_final_betting_atr_tp_mult", 1.0)),
+                )
                 if blocked:
                     self.last_diagnostics.append(
                         {
@@ -756,6 +925,15 @@ class FinalBettingV1Strategy(BaseStrategy):
                             "trade_value_avg5": round(avg5, 2),
                             "trade_value_spike_ok": bool(tv_spike_ok),
                             "final_betting_rank": None,
+                            "atr14": round(float(atr14), 6),
+                            "atr_pct": round(float(atr_pct), 4),
+                            "atr_fallback_used": bool(atr_fallback or atr_blend_blk),
+                            "exit_mode": "atr_blended" if not atr_blend_blk else "atr_fallback_fixed",
+                            "effective_stop_pct": round(float(eff_sl_blk), 4),
+                            "effective_take_profit_pct": round(float(eff_tp_blk), 4),
+                            "entry_rebound_core": bool(entry_rebound_core),
+                            "final_betting_rebound_candidate": bool(rebound_info.get("bearish_rebound_candidate")),
+                            **{k: v for k, v in rebound_info.items() if isinstance(k, str)},
                         }
                     )
                     continue
@@ -785,13 +963,21 @@ class FinalBettingV1Strategy(BaseStrategy):
                             "flow_proxy_score": flow_score,
                             "avg5": avg5,
                             "net_buy_amt": net_buy_amt,
+                            "rebound_entry": bool(entry_rebound_core),
+                            "rebound_info": rebound_info,
                         },
                     )
                 )
 
         ranked.sort(key=lambda x: -x[0])
+        pool_n = max(3, int(getattr(cfg, "paper_final_betting_rank_pool_top_n", 5)))
+        self.last_intraday_signal_breakdown["filtered_universe_count"] = len(ranked)
+        self.last_intraday_signal_breakdown["ranking_cutoff_used"] = int(pool_n)
+        self.last_intraday_signal_breakdown["universe_filter_block_reason"] = (
+            None if len(ranked) > 0 else "no_candidates_passed_gates"
+        )
         entries_added = 0
-        for rank_i, (_rank_score, sym, _sc_pack) in enumerate(ranked[:3]):
+        for rank_i, (_rank_score, sym, _sc_pack) in enumerate(ranked[:pool_n]):
             if entries_added >= open_slots:
                 break
             if len(entered_today) + entries_added >= int(cfg.paper_final_betting_max_new_positions):
@@ -828,21 +1014,35 @@ class FinalBettingV1Strategy(BaseStrategy):
                 + 0.25 * rel_score
             )
 
-            eq = float(getattr(self, "_final_betting_equity_krw", 0.0) or 0.0)
+            eq_base = float(getattr(self, "_final_betting_equity_krw", 0.0) or 0.0)
+            eq = max(1.0, eq_base * float(soft.regime_size_multiplier) * float(health_mult))
             min_pct = float(getattr(cfg, "paper_final_betting_min_allocation_pct", 20.0))
             max_pct = float(cfg.paper_final_betting_max_capital_per_position_pct)
             px = float(last_close)
+            daily_ohlc2 = build_daily_ohlc_from_intraday(sub)
+            atr14_2, atr_pct_2, atr_fb2 = daily_atr14_pct(daily_ohlc2)
+            eff_sl, eff_tp, atr_blend_fb = blend_stop_tp_with_atr(
+                fixed_stop_pct=float(cfg.paper_final_betting_stop_loss_pct),
+                fixed_tp_pct=float(cfg.paper_final_betting_target_pct),
+                atr_pct=float(atr_pct_2),
+                atr_stop_mult=float(getattr(cfg, "paper_final_betting_atr_stop_mult", 1.0)),
+                atr_tp_mult=float(getattr(cfg, "paper_final_betting_atr_tp_mult", 1.0)),
+            )
+            # `compute_intraday_buy_quantity` defaults max_shares_cap=500; that cap is for generic
+            # paper paths. Here feasible = min(risk, position-cap) must not be artifically limited
+            # below min-allocation share count (paper_final_betting_min_allocation_pct).
+            q_cap_sh = max(1, int((eq * (max_pct / 100.0)) / max(px, 1e-9))) if eq > 0 else 1
             risk_q = compute_intraday_buy_quantity(
                 price_krw=px,
-                stop_loss_pct_points=float(cfg.paper_final_betting_stop_loss_pct),
+                stop_loss_pct_points=float(eff_sl),
                 equity_krw=eq,
                 intraday_budget_krw=max(eq, 1.0),
                 max_position_pct=max_pct,
-                risk_per_trade_pct=min(float(cfg.paper_risk_per_trade_pct), float(cfg.paper_final_betting_stop_loss_pct)),
+                risk_per_trade_pct=min(float(cfg.paper_risk_per_trade_pct), float(eff_sl)),
                 fallback_qty=1,
+                max_shares_cap=q_cap_sh,
             )
             q_risk = int(risk_q)
-            q_cap_sh = max(1, int((eq * (max_pct / 100.0)) / max(px, 1e-9))) if eq > 0 else 1
             q_min = max(1, int((eq * (min_pct / 100.0)) / max(px, 1e-9))) if eq > 0 else 1
             feasible = min(q_risk, q_cap_sh)
             alloc_diag: dict[str, Any] = {
@@ -889,11 +1089,12 @@ class FinalBettingV1Strategy(BaseStrategy):
                     side="buy",
                     quantity=int(q),
                     price=last_close,
-                    stop_loss_pct=float(cfg.paper_final_betting_stop_loss_pct),
+                    stop_loss_pct=float(eff_sl),
                     reason="final_betting_v1_entry",
                     strategy_name="final_betting_v1",
                 )
             )
+            ri = _sc_pack.get("rebound_info") or {}
             diag = {
                 "symbol": sym,
                 "strategy": "final_betting_v1",
@@ -913,7 +1114,18 @@ class FinalBettingV1Strategy(BaseStrategy):
                 "final_betting_rank": rank_i + 1,
                 "final_betting_allocation_pct_equity": round(float(notional_pct), 3),
                 "final_betting_min_allocation_pct": min_pct,
+                "atr14": round(float(atr14_2), 6),
+                "atr_pct": round(float(atr_pct_2), 4),
+                "atr_fallback_used": bool(atr_fb2 or atr_blend_fb),
+                "effective_stop_pct": round(float(eff_sl), 4),
+                "effective_take_profit_pct": round(float(eff_tp), 4),
+                "exit_mode": "atr_blended" if not atr_blend_fb else "atr_fallback_fixed",
+                "final_betting_entry_aggressive": bool(_sc_pack.get("rebound_entry")),
+                "final_betting_rebound_candidate": bool((ri or {}).get("bearish_rebound_candidate")),
+                "final_betting_position_alloc_pct": round(float(notional_pct), 3),
+                "final_betting_nextday_gap_mode": "atr_scaled",
                 **alloc_diag,
+                **{k: v for k, v in ri.items() if isinstance(k, str)},
             }
             self.last_diagnostics.append(diag)
             entries_added += 1
@@ -921,6 +1133,7 @@ class FinalBettingV1Strategy(BaseStrategy):
         carry["tv_history"] = tv_hist
         carry["tv_history_day"] = tv_hist_day
 
+        self.last_intraday_signal_breakdown["cooldown_diagnostics"] = _fb_cooldown_detail(st, carry)
         return signals
 
 

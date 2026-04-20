@@ -67,6 +67,8 @@ class PaperSessionController:
         self._last_paper_portfolio_sync_at: float = 0.0
         self._paper_token_ensure_meta: dict[str, Any] = {}
         self._last_paper_initial_token_source: str | None = None
+        self._token_failure_streak: int = 0
+        self._risk_off_reason: str | None = None
         self._started_at_utc: str | None = None
         self._desired_running: bool = False
         self._paper_market: str = "domestic"
@@ -85,6 +87,9 @@ class PaperSessionController:
 
     def _max_failures(self) -> int:
         return max(1, int(get_backend_settings().runtime_max_consecutive_failures))
+
+    def _max_token_failures_before_risk_off(self) -> int:
+        return max(3, int(app_get_settings().paper_session_max_token_failures_before_risk_off))
 
     def _interval_sec(self) -> int:
         # Paper 세션 틱 간격: 인트라데이(scalp)는 PAPER_INTRADAY_LOOP_INTERVAL_SEC, 그 외 PAPER_TRADING_INTERVAL_SEC.
@@ -195,6 +200,14 @@ class PaperSessionController:
             "last_kis_token_error_code": out.get("paper_loop_last_token_error_code"),
             "last_kis_token_http_status": out.get("paper_loop_last_token_http_status"),
         }
+        for _k, _v in out.items():
+            if isinstance(_k, str) and (
+                _k.startswith("paper_token_")
+                or _k.startswith("paper_session_paused")
+                or _k.startswith("paper_oauth_")
+                or _k.startswith("paper_consecutive_token")
+            ):
+                budget_base[_k] = _v
         if ok:
             self._paper_diagnostics = {
                 "last_error": None,
@@ -223,6 +236,57 @@ class PaperSessionController:
             "http_status": kis_ctx.get("http_status"),
             **budget_base,
         }
+
+    def _account_failed_paper_tick(self, out: dict[str, Any]) -> None:
+        """실패 틱에 대한 streak·risk_off — 단위 테스트에서 검증 가능하도록 분리."""
+        fk = str(out.get("failure_kind") or "")
+        err = str(out.get("error") or "tick_failed")
+        if fk == "token_recovery_wait":
+            self._append_log("warning", f"Paper 토큰 복구 대기(백오프): {err[:2000]}")
+            return
+        if fk == "token_hard_failure":
+            self._token_failure_streak += 1
+            self._failure_streak = 0
+            self._last_error = err
+            self._append_log(
+                "error",
+                f"Paper 토큰 확보 실패 streak={self._token_failure_streak}: {err[:2000]}",
+            )
+            if self._token_failure_streak >= self._max_token_failures_before_risk_off():
+                if self._manual_override_enabled:
+                    self._append_log("warning", "manual override — token streak risk_off 생략")
+                    self._token_failure_streak = 0
+                else:
+                    self._status = "risk_off"
+                    self._risk_off_reason = "kis_oauth_token_failures"
+                    self._append_log(
+                        "error",
+                        "연속 토큰(OAuth) 실패 한도 → risk_off (paper-trading/risk-reset 또는 연결 테스트)",
+                    )
+                    self._save_desired_state()
+            return
+        if fk == "token_rate_limit":
+            self._append_log("warning", f"Paper OAuth rate limit: {err[:2000]}")
+            return
+        self._failure_streak += 1
+        self._token_failure_streak = 0
+        self._last_error = err
+        self._append_log("error", f"tick 실패 ({fk or 'unknown'}): {err[:2000]}")
+        if self._failure_streak >= self._max_failures():
+            if self._manual_override_enabled:
+                self._append_log(
+                    "warning",
+                    "연속 실패 한도 도달했지만 manual override ON으로 risk_off 전환 생략",
+                )
+                self._failure_streak = 0
+            else:
+                self._status = "risk_off"
+                self._risk_off_reason = "consecutive_tick_failures"
+                self._append_log(
+                    "error",
+                    "연속 실패 한도 → risk_off (paper-trading/risk-reset 또는 stop 후 재시작)",
+                )
+                self._save_desired_state()
 
     def _loop(self) -> None:
         settings = get_backend_settings()
@@ -258,6 +322,15 @@ class PaperSessionController:
                         api_base=api_base,
                         app_key=key,
                     )
+
+                    def _reload_cached() -> str | None:
+                        return svc.get_cached_token(
+                            user_id=uid,
+                            trading_mode=mode,
+                            api_base=api_base,
+                            app_key=key,
+                        )
+
                     self._user_loop = UserPaperTradingLoop(
                         app_key=key,
                         app_secret=secret,
@@ -268,6 +341,7 @@ class PaperSessionController:
                         user_tag=uid[:12].replace("/", "_").replace("\\", "_"),
                         initial_access_token=cached_token,
                         initial_token_source_label=self._last_paper_initial_token_source,
+                        reload_cached_token_fn=_reload_cached,
                         paper_market=self._paper_market,
                         manual_override_enabled=self._manual_override_enabled,
                     )
@@ -281,12 +355,23 @@ class PaperSessionController:
                     self._user_loop.set_manual_override(self._manual_override_enabled)
                 loop = self._user_loop
                 out = loop.run_intraday_tick()
+                try:
+                    loop._merge_token_fields(out)
+                except Exception:
+                    pass
                 self._last_tick_at = datetime.now(timezone.utc).isoformat()
                 self._apply_paper_tick_diagnostics(out)
                 if not out.get("ok"):
-                    raise RuntimeError(str(out.get("error") or "tick_failed"))
+                    self._account_failed_paper_tick(out)
+                    end = time.monotonic() + float(self._interval_sec())
+                    while self._run_flag and time.monotonic() < end:
+                        time.sleep(min(1.0, end - time.monotonic()))
+                    continue
+
                 self._failure_streak = 0
+                self._token_failure_streak = 0
                 self._last_error = None
+                self._risk_off_reason = None
                 rep = out.get("report")
                 self._last_report = rep if isinstance(rep, dict) else {}
                 acfg = app_get_settings()
@@ -325,6 +410,7 @@ class PaperSessionController:
                     self._paper_diagnostics["portfolio_sync_skipped"] = True
             except Exception as exc:
                 self._failure_streak += 1
+                self._token_failure_streak = 0
                 self._last_error = str(exc)
                 logger.exception("paper session tick error (streak=%s)", self._failure_streak)
                 self._append_log("error", f"{type(exc).__name__}: {exc}")
@@ -334,6 +420,7 @@ class PaperSessionController:
                         self._failure_streak = 0
                     else:
                         self._status = "risk_off"
+                        self._risk_off_reason = "consecutive_tick_failures"
                         self._append_log("error", "연속 실패 한도 → risk_off (paper-trading/risk-reset 또는 stop 후 재시작)")
                         self._save_desired_state()
             end = time.monotonic() + float(self._interval_sec())
@@ -412,6 +499,8 @@ class PaperSessionController:
             self._strategy_id = strategy_id
             self._paper_market = requested_market
             self._failure_streak = 0
+            self._token_failure_streak = 0
+            self._risk_off_reason = None
             self._last_error = None
             self._status = "running"
             self._started_at_utc = datetime.now(timezone.utc).isoformat()
@@ -460,6 +549,8 @@ class PaperSessionController:
             if self._status != "risk_off":
                 return {"ok": False, "message": "risk_off 상태가 아닙니다.", "status": self._status}
             self._failure_streak = 0
+            self._token_failure_streak = 0
+            self._risk_off_reason = None
             self._last_error = None
             self._status = "running"
             if not self._run_flag:
@@ -490,6 +581,9 @@ class PaperSessionController:
                 "user_session_active": bool(self._run_flag and self._thread and self._thread.is_alive()),
                 "failure_streak": self._failure_streak,
                 "max_failures": self._max_failures(),
+                "token_failure_streak": self._token_failure_streak,
+                "max_token_failures": self._max_token_failures_before_risk_off(),
+                "risk_off_reason": self._risk_off_reason,
                 "last_error": self._last_error,
                 "last_tick_at": self._last_tick_at,
                 "last_tick_summary": {
@@ -544,6 +638,9 @@ class PaperSessionController:
             merged = {**self._paper_token_ensure_meta, **base}
             merged["session_last_error"] = self._last_error
             merged["session_status"] = self._status
+            merged["token_failure_streak"] = self._token_failure_streak
+            merged["max_token_failures_before_risk_off"] = self._max_token_failures_before_risk_off()
+            merged["risk_off_reason"] = self._risk_off_reason
             ver = get_backend_version_payload()
             merged["backend_git_sha"] = ver.get("git_sha", "")
             merged["backend_build_time"] = ver.get("build_time", "")

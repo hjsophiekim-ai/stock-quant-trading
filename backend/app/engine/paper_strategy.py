@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from app.config import get_settings
 from app.strategy.base_strategy import BaseStrategy
 from app.strategy.bear_strategy import BearStrategy
 from app.strategy.bull_strategy import BullStrategy
 from app.strategy.final_betting_v1_strategy import FinalBettingV1Strategy
 from app.strategy.swing_relaxed_strategy import SwingRelaxedStrategy
 from app.strategy.swing_relaxed_v2_strategy import SwingRelaxedV2Strategy
-from app.strategy.swing_strategy import SwingStrategy
+from app.strategy.swing_strategy import SwingStrategy, SwingStrategyConfig
 from app.strategy.scalp_momentum_v1_strategy import ScalpMomentumV1Strategy
 from app.strategy.scalp_momentum_v2_strategy import ScalpMomentumV2Strategy
 from app.strategy.scalp_momentum_v3_strategy import ScalpMomentumV3Strategy
@@ -46,4 +47,6 @@ def strategy_for_paper_id(strategy_id: str) -> BaseStrategy:
         return UsSwingRelaxedV1Strategy()
     if sid == "us_scalp_momentum_v1":
         return UsScalpMomentumV1Strategy()
-    return SwingStrategy()
+    cfg = get_settings()
+    top_n = max(3, int(getattr(cfg, "paper_ranking_top_n_default", 5)))
+    return SwingStrategy(config=SwingStrategyConfig(ranking_top_n=top_n))

@@ -67,6 +67,50 @@ class Settings(BaseSettings):
             "PAPER_KOSPI_CACHE_TTL_SEC",
         ),
     )
+    # Paper KIS OAuth: 루프가 주기적으로 /oauth2/tokenP 를 호출할 때 간격·복구 정책 (모의 전용 경로)
+    paper_kis_token_refresh_sec: int = Field(
+        default=1500,
+        ge=60,
+        le=86400,
+        alias="PAPER_KIS_TOKEN_REFRESH_SEC",
+        description="KISClient 재사용 주기(초). 만료 전에는 잔고 probe로 유효성 확인 후 불필요한 OAuth 완화.",
+    )
+    paper_kis_token_force_reissue_wall_sec: int = Field(
+        default=82800,
+        ge=3600,
+        le=86400,
+        alias="PAPER_KIS_TOKEN_FORCE_REISSUE_WALL_SEC",
+        description="wall-clock 기준 이 시간이 지나면 반드시 OAuth 재발급 시도(기본 ~23h, KIS 토큰 만료 전).",
+    )
+    paper_kis_token_oauth_max_attempts: int = Field(
+        default=4,
+        ge=1,
+        le=12,
+        alias="PAPER_KIS_TOKEN_OAUTH_MAX_ATTEMPTS",
+    )
+    paper_kis_token_oauth_backoff_base_sec: float = Field(
+        default=0.55,
+        ge=0.05,
+        alias="PAPER_KIS_TOKEN_OAUTH_BACKOFF_BASE_SEC",
+    )
+    paper_kis_token_oauth_backoff_cap_sec: float = Field(
+        default=12.0,
+        ge=0.5,
+        alias="PAPER_KIS_TOKEN_OAUTH_BACKOFF_CAP_SEC",
+    )
+    paper_kis_token_resume_wall_gap_sec: float = Field(
+        default=120.0,
+        ge=30.0,
+        alias="PAPER_KIS_TOKEN_RESUME_WALL_GAP_SEC",
+        description="틱 간 wall-clock 간격이 이 값을 넘기면 슬립/재개 등으로 간주해 OAuth 순서·백오프를 완화.",
+    )
+    paper_session_max_token_failures_before_risk_off: int = Field(
+        default=15,
+        ge=3,
+        le=200,
+        alias="PAPER_SESSION_MAX_TOKEN_FAILURES_BEFORE_RISK_OFF",
+        description="OAuth+probe+캐시 모두 실패한 연속 틱만 카운트; 일반 KIS 오류 streak 과 분리.",
+    )
     paper_positions_refresh_interval_sec: int = Field(
         default=900,
         ge=0,
@@ -307,6 +351,62 @@ class Settings(BaseSettings):
         le=95.0,
         alias="PAPER_FINAL_BETTING_WEAK_CLOSE_RSI_MAX",
         description="당일 막바 RSI(14)가 이 값 이상이면 약한 마감으로 보고 신규 진입 차단.",
+    )
+    paper_final_betting_rank_pool_top_n: int = Field(
+        default=5,
+        ge=3,
+        le=15,
+        alias="PAPER_FINAL_BETTING_RANK_POOL_TOP_N",
+        description="종가베팅 후보 랭킹 상위 N 종목까지 진입 검토(유동성·스프레드 필터 후).",
+    )
+    paper_final_betting_rebound_score_min: float = Field(
+        default=0.52,
+        ge=0.2,
+        le=0.95,
+        alias="PAPER_FINAL_BETTING_REBOUND_SCORE_MIN",
+        description="베어리시 마감 반등 후보 진입에 필요한 최소 reversal+quality 결합 점수.",
+    )
+    paper_final_betting_cd_after_profit_minutes: int = Field(
+        default=15,
+        ge=0,
+        le=180,
+        alias="PAPER_FINAL_BETTING_CD_AFTER_PROFIT_MINUTES",
+        description="final_betting 익절·갭상승 청산 후 동일 종목 재진입 쿨다운(분).",
+    )
+    paper_final_betting_cd_after_stop_minutes: int = Field(
+        default=35,
+        ge=0,
+        le=240,
+        alias="PAPER_FINAL_BETTING_CD_AFTER_STOP_MINUTES",
+        description="손절·갭손절 등 첫 스탑 후 쿨다운(분).",
+    )
+    paper_final_betting_cd_after_repeat_stop_minutes: int = Field(
+        default=90,
+        ge=0,
+        le=360,
+        alias="PAPER_FINAL_BETTING_CD_AFTER_REPEAT_STOP_MINUTES",
+        description="당일 동일 종목 반복 스탑아웃 시 쿨다운(분).",
+    )
+    paper_final_betting_atr_stop_mult: float = Field(
+        default=1.0,
+        ge=0.5,
+        le=2.5,
+        alias="PAPER_FINAL_BETTING_ATR_STOP_MULT",
+        description="일봉 ATR%에 곱해 고정 손절%와 혼합(동적 손절).",
+    )
+    paper_final_betting_atr_tp_mult: float = Field(
+        default=1.0,
+        ge=0.5,
+        le=3.0,
+        alias="PAPER_FINAL_BETTING_ATR_TP_MULT",
+        description="목표가(익절) 가이드용 ATR 배수(진단·향후 확장).",
+    )
+    paper_ranking_top_n_default: int = Field(
+        default=5,
+        ge=2,
+        le=40,
+        alias="PAPER_RANKING_TOP_N_DEFAULT",
+        description="스윙 등 rank_candidates top_n 기본 완화(유니버스 후보 상한).",
     )
 
     # KRX 세션(장전/정규/장후) — Paper 인트라데이 분봉·주문 게이트

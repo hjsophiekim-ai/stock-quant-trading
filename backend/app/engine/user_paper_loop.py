@@ -10,7 +10,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from app.brokers.kis_paper_broker import KisPaperBroker
 from app.brokers.kis_us_paper_broker import KisUsPaperBroker
@@ -121,6 +121,7 @@ class UserPaperTradingLoop:
         backend_settings: BackendSettings | None = None,
         initial_access_token: str | None = None,
         initial_token_source_label: str | None = None,
+        reload_cached_token_fn: Callable[[], str | None] | None = None,
         paper_market: str = "domestic",
         manual_override_enabled: bool = False,
     ) -> None:
@@ -136,6 +137,9 @@ class UserPaperTradingLoop:
         self._token_monotonic: float = time.monotonic() if initial_access_token else 0.0
         self._token_issued_locally: bool = False
         self._initial_token_source_label: str | None = initial_token_source_label
+        self._reload_cached_token_fn = reload_cached_token_fn
+        self._token_obtained_wall: float = time.time()
+        self._last_token_ensure_wall: float = 0.0
         self._paper_market = (paper_market or "domestic").strip().lower()
         self._manual_override_enabled = bool(manual_override_enabled)
         self._univ_sig: str | None = None
@@ -147,32 +151,239 @@ class UserPaperTradingLoop:
         self._last_token_failure_at_iso: str | None = None
         self._last_token_error_code: str | None = None
         self._last_token_http_status: int | None = None
+        self._token_recovery_mode: str = "none"
+        self._last_token_refresh_attempt_at_iso: str | None = None
+        self._last_token_refresh_success_at_iso: str | None = None
+        self._next_oauth_attempt_not_before_mono: float = 0.0
+        self._oauth_attempt_seq: int = 0
+        self._consecutive_token_hard_failures: int = 0
+        self._paused_for_token_recovery: bool = False
+        self._last_token_tick_diag: dict[str, Any] = {}
 
-    def _issue_token(self) -> str:
-        tr = issue_access_token(
-            app_key=self._app_key,
-            app_secret=self._app_secret,
-            base_url=self._api_base,
-            timeout_sec=12,
-        )
-        self._last_token_http_status = tr.status_code
-        if not tr.ok or not tr.access_token:
+    def _token_diag_snapshot(self) -> dict[str, Any]:
+        now_mono = time.monotonic()
+        rem = max(0.0, float(self._next_oauth_attempt_not_before_mono) - now_mono)
+        return {
+            "paper_token_recovery_mode": self._token_recovery_mode,
+            "paper_last_token_refresh_attempt_at_utc": self._last_token_refresh_attempt_at_iso,
+            "paper_last_token_refresh_success_at_utc": self._last_token_refresh_success_at_iso,
+            "paper_last_token_refresh_failure_at_utc": self._last_token_failure_at_iso,
+            "paper_session_paused_for_token_recovery": self._paused_for_token_recovery,
+            "paper_consecutive_token_hard_failures": self._consecutive_token_hard_failures,
+            "paper_oauth_backoff_remaining_sec": round(rem, 3),
+            "paper_last_token_http_status": self._last_token_http_status,
+            "paper_last_token_error_code": self._last_token_error_code,
+            **self._last_token_tick_diag,
+        }
+
+    def _merge_token_fields(self, out: dict[str, Any]) -> None:
+        out.update(self._token_diag_snapshot())
+
+    def _kis_token_error_dict(self, exc: BaseException) -> dict[str, Any]:
+        err_s = str(exc)
+        is_rl = err_s.startswith("TOKEN_RATE_LIMIT:") or "TOKEN_RATE_LIMIT" in err_s
+        if err_s.startswith("TOKEN_RECOVERY_WAIT:"):
+            fk = "token_recovery_wait"
+            tec = "TOKEN_RECOVERY_WAIT"
+        elif err_s.startswith("TOKEN_HARD_FAILURE:"):
+            fk = "token_hard_failure"
+            tec = self._last_token_error_code or "TOKEN_HARD_FAILURE"
+        elif is_rl:
+            fk = "token_rate_limit"
+            tec = "TOKEN_RATE_LIMIT"
+        else:
+            fk = "token_failure"
+            tec = self._last_token_error_code or "TOKEN_FAILURE"
+        out: dict[str, Any] = {
+            "ok": False,
+            "error": err_s,
+            "failed_step": "kis_token",
+            "kis_context": {},
+            "token_source": self.token_source_for_diagnostics(),
+            "failure_kind": fk,
+            "token_error_code": tec,
+            "paper_loop_fresh_issue": False,
+            "paper_loop_last_token_failure_at": self._last_token_failure_at_iso,
+            "paper_loop_last_token_http_status": self._last_token_http_status,
+            "paper_loop_last_token_error_code": self._last_token_error_code,
+        }
+        self._merge_token_fields(out)
+        return out
+
+    def _probe_token_valid(self, token: str) -> bool:
+        """잔고/해외잔고 한 번 호출로 토큰 유효성 확인 (가벼운 probe)."""
+        try:
+            client = build_kis_client_for_paper_user(
+                base_url=self._api_base,
+                access_token=token,
+                app_key=self._app_key,
+                app_secret=self._app_secret,
+            )
+            if self._paper_market in ("us", "usa"):
+                client.get_overseas_inquire_balance(
+                    account_no=self._account_no,
+                    account_product_code=self._product_code,
+                    ovrs_excg_cd="NASD",
+                    tr_crcy_cd="USD",
+                )
+            else:
+                client.get_balance(self._account_no, self._product_code)
+            return True
+        except Exception:
+            return False
+
+    def _attempt_oauth_issue(self) -> tuple[bool, str | None]:
+        cfg = get_settings()
+        max_attempts = int(cfg.paper_kis_token_oauth_max_attempts)
+        base = float(cfg.paper_kis_token_oauth_backoff_base_sec)
+        cap = float(cfg.paper_kis_token_oauth_backoff_cap_sec)
+        self._last_token_refresh_attempt_at_iso = datetime.now(timezone.utc).isoformat()
+        last_tr = None
+        for attempt in range(max_attempts):
+            self._oauth_attempt_seq += 1
+            tr = issue_access_token(
+                app_key=self._app_key,
+                app_secret=self._app_secret,
+                base_url=self._api_base,
+                timeout_sec=12,
+                max_retries=2,
+            )
+            last_tr = tr
+            self._last_token_http_status = tr.status_code
+            if tr.ok and tr.access_token:
+                self._last_token_failure_at_iso = None
+                self._last_token_error_code = None
+                self._last_token_refresh_success_at_iso = datetime.now(timezone.utc).isoformat()
+                self._access_token = tr.access_token
+                self._token_monotonic = time.monotonic()
+                self._token_issued_locally = True
+                self._token_obtained_wall = time.time()
+                self._token_recovery_mode = "oauth_fresh"
+                self._consecutive_token_hard_failures = 0
+                self._next_oauth_attempt_not_before_mono = 0.0
+                return True, tr.access_token
             code = tr.error_code or ""
             self._last_token_failure_at_iso = datetime.now(timezone.utc).isoformat()
             self._last_token_error_code = code or "TOKEN_FAILURE"
-            msg = tr.message or "token_failed"
             if code == "TOKEN_RATE_LIMIT":
-                raise RuntimeError("TOKEN_RATE_LIMIT: " + msg)
-            raise RuntimeError(msg)
-        self._last_token_failure_at_iso = None
-        self._last_token_error_code = None
-        self._access_token = tr.access_token
-        self._token_monotonic = time.monotonic()
-        self._token_issued_locally = True
-        return tr.access_token
+                return False, "TOKEN_RATE_LIMIT"
+            if attempt < max_attempts - 1:
+                sleep_s = min(cap, base * (2**attempt))
+                time.sleep(sleep_s)
+        return False, (last_tr.error_code if last_tr else None) or "TOKEN_HTTP_ERROR"
+
+    def _try_reload_sqlite_token(self) -> str | None:
+        if self._reload_cached_token_fn is None:
+            return None
+        try:
+            tok = self._reload_cached_token_fn()
+        except Exception:
+            return None
+        if isinstance(tok, str) and tok.strip():
+            return tok.strip()
+        return None
+
+    def _ensure_valid_access_token(self) -> str:
+        """
+        OAuth 실패 시 in-memory·SQLite 캐시·probe 순으로 복구. 모두 실패 시 RuntimeError.
+        불필요한 주기적 OAuth 는 probe 로 완화 (간격은 PAPER_KIS_TOKEN_REFRESH_SEC).
+        """
+        cfg = get_settings()
+        refresh_sec = float(cfg.paper_kis_token_refresh_sec)
+        force_wall = float(cfg.paper_kis_token_force_reissue_wall_sec)
+        resume_gap = float(cfg.paper_kis_token_resume_wall_gap_sec)
+        now_mono = time.monotonic()
+        now_wall = time.time()
+        prev_ensure = self._last_token_ensure_wall
+        wall_delta = now_wall - prev_ensure if prev_ensure > 0 else 0.0
+        resume_likely = prev_ensure > 0 and wall_delta > resume_gap
+        self._last_token_ensure_wall = now_wall
+        self._paused_for_token_recovery = False
+
+        self._last_token_tick_diag = {
+            "paper_token_resume_likely": resume_likely,
+            "paper_token_wall_gap_sec": round(wall_delta, 3),
+        }
+
+        interval_elapsed = (now_mono - self._token_monotonic) >= refresh_sec
+        force_reissue = (now_wall - self._token_obtained_wall) >= force_wall
+
+        if self._access_token and not force_reissue and not interval_elapsed:
+            self._token_recovery_mode = self._token_recovery_mode or "in_memory_reuse"
+            return self._access_token
+
+        if self._access_token and not force_reissue and interval_elapsed:
+            if self._probe_token_valid(self._access_token):
+                self._token_monotonic = time.monotonic()
+                self._token_recovery_mode = "interval_probe_valid"
+                self._consecutive_token_hard_failures = 0
+                return self._access_token
+
+        if resume_likely and now_mono < self._next_oauth_attempt_not_before_mono:
+            extra = min(8.0, float(cfg.paper_kis_token_oauth_backoff_cap_sec))
+            self._next_oauth_attempt_not_before_mono = min(
+                self._next_oauth_attempt_not_before_mono,
+                now_mono + extra * 0.25,
+            )
+
+        if self._access_token and now_mono < self._next_oauth_attempt_not_before_mono:
+            if self._probe_token_valid(self._access_token):
+                self._token_recovery_mode = "oauth_backoff_in_memory_probe"
+                self._consecutive_token_hard_failures = 0
+                return self._access_token
+            cached = self._try_reload_sqlite_token()
+            if cached and self._probe_token_valid(cached):
+                self._access_token = cached
+                self._token_monotonic = time.monotonic()
+                self._token_obtained_wall = time.time()
+                self._token_recovery_mode = "sqlite_cached_during_backoff"
+                self._consecutive_token_hard_failures = 0
+                return self._access_token
+            self._paused_for_token_recovery = True
+            self._token_recovery_mode = "oauth_backoff_waiting"
+            raise RuntimeError(
+                "TOKEN_RECOVERY_WAIT: OAuth 백오프 중이며 유효 토큰을 확보하지 못했습니다."
+            )
+
+        oauth_ok, oauth_note = self._attempt_oauth_issue()
+        if oauth_ok and self._access_token:
+            return self._access_token
+
+        if oauth_note == "TOKEN_RATE_LIMIT":
+            raise RuntimeError("TOKEN_RATE_LIMIT: KIS OAuth rate limit")
+
+        backoff_base = float(cfg.paper_kis_token_oauth_backoff_base_sec)
+        backoff_cap = float(cfg.paper_kis_token_oauth_backoff_cap_sec)
+        fail_n = int(self._consecutive_token_hard_failures) + 1
+        sleep_need = min(backoff_cap, backoff_base * (2 ** min(fail_n, 6)))
+        self._next_oauth_attempt_not_before_mono = time.monotonic() + sleep_need
+
+        if self._access_token and self._probe_token_valid(self._access_token):
+            self._token_recovery_mode = "in_memory_stale_after_oauth_fail"
+            self._token_monotonic = time.monotonic()
+            self._consecutive_token_hard_failures = 0
+            return self._access_token
+
+        cached2 = self._try_reload_sqlite_token()
+        if cached2 and self._probe_token_valid(cached2):
+            self._access_token = cached2
+            self._token_monotonic = time.monotonic()
+            self._token_obtained_wall = time.time()
+            self._token_recovery_mode = "sqlite_cached_fallback"
+            self._consecutive_token_hard_failures = 0
+            return self._access_token
+
+        self._consecutive_token_hard_failures += 1
+        self._token_recovery_mode = "hard_failure"
+        raise RuntimeError(
+            "TOKEN_HARD_FAILURE: OAuth 실패 후 in-memory·SQLite probe 모두 실패 "
+            f"(last_oauth={oauth_note or 'unknown'})"
+        )
 
     def token_source_for_diagnostics(self) -> str:
         """브로커 메모리/DB 캐시·루프 내 재발급 구분 (diagnostics token_cache_source)."""
+        if self._token_recovery_mode not in ("none", ""):
+            return self._token_recovery_mode
         if self._token_issued_locally:
             return "fresh_issue"
         if self._initial_token_source_label:
@@ -180,8 +391,7 @@ class UserPaperTradingLoop:
         return "broker_reuse"
 
     def _kis_client(self):
-        if not self._access_token or (time.monotonic() - self._token_monotonic) > 1500:
-            self._issue_token()
+        self._ensure_valid_access_token()
         return build_kis_client_for_paper_user(
             base_url=self._api_base,
             access_token=self._access_token or "",
@@ -360,21 +570,7 @@ class UserPaperTradingLoop:
         try:
             client = self._kis_client()
         except RuntimeError as exc:
-            err_s = str(exc)
-            is_rl = err_s.startswith("TOKEN_RATE_LIMIT:") or "TOKEN_RATE_LIMIT" in err_s
-            fk = "token_rate_limit" if is_rl else "token_failure"
-            return {
-                "ok": False,
-                "error": err_s,
-                "failed_step": "kis_token",
-                "kis_context": {},
-                "token_source": self.token_source_for_diagnostics(),
-                "failure_kind": fk,
-                "token_error_code": "TOKEN_RATE_LIMIT" if is_rl else (self._last_token_error_code or "TOKEN_FAILURE"),
-                "paper_loop_fresh_issue": False,
-                "paper_loop_last_token_failure_at": self._last_token_failure_at_iso,
-                "paper_loop_last_token_http_status": self._last_token_http_status,
-            }
+            return self._kis_token_error_dict(exc)
 
         cfg = get_settings()
         route = route_swing_vs_scalp_symbols(
@@ -479,21 +675,7 @@ class UserPaperTradingLoop:
             try:
                 client = self._kis_client()
             except RuntimeError as exc:
-                err_s = str(exc)
-                is_rl = err_s.startswith("TOKEN_RATE_LIMIT:") or "TOKEN_RATE_LIMIT" in err_s
-                fk = "token_rate_limit" if is_rl else "token_failure"
-                return {
-                    "ok": False,
-                    "error": err_s,
-                    "failed_step": "kis_token",
-                    "kis_context": {},
-                    "token_source": self.token_source_for_diagnostics(),
-                    "failure_kind": fk,
-                    "token_error_code": "TOKEN_RATE_LIMIT" if is_rl else (self._last_token_error_code or "TOKEN_FAILURE"),
-                    "paper_loop_fresh_issue": False,
-                    "paper_loop_last_token_failure_at": self._last_token_failure_at_iso,
-                    "paper_loop_last_token_http_status": self._last_token_http_status,
-                }
+                return self._kis_token_error_dict(exc)
 
             cfg = get_settings()
             symbols = cfg.resolved_final_betting_symbol_list()
@@ -661,21 +843,7 @@ class UserPaperTradingLoop:
             try:
                 client = client_override if client_override is not None else self._kis_client()
             except RuntimeError as exc:
-                err_s = str(exc)
-                is_rl = err_s.startswith("TOKEN_RATE_LIMIT:") or "TOKEN_RATE_LIMIT" in err_s
-                fk = "token_rate_limit" if is_rl else "token_failure"
-                return {
-                    "ok": False,
-                    "error": err_s,
-                    "failed_step": "kis_token",
-                    "kis_context": {},
-                    "token_source": self.token_source_for_diagnostics(),
-                    "failure_kind": fk,
-                    "token_error_code": "TOKEN_RATE_LIMIT" if is_rl else (self._last_token_error_code or "TOKEN_FAILURE"),
-                    "paper_loop_fresh_issue": False,
-                    "paper_loop_last_token_failure_at": self._last_token_failure_at_iso,
-                    "paper_loop_last_token_http_status": self._last_token_http_status,
-                }
+                return self._kis_token_error_dict(exc)
 
             cfg = get_settings()
             symbols = list(symbols_override) if symbols_override is not None else cfg.resolved_intraday_symbol_list()
@@ -893,21 +1061,7 @@ class UserPaperTradingLoop:
             try:
                 client = self._kis_client()
             except RuntimeError as exc:
-                err_s = str(exc)
-                is_rl = err_s.startswith("TOKEN_RATE_LIMIT:") or "TOKEN_RATE_LIMIT" in err_s
-                fk = "token_rate_limit" if is_rl else "token_failure"
-                return {
-                    "ok": False,
-                    "error": err_s,
-                    "failed_step": "kis_token",
-                    "kis_context": {},
-                    "token_source": self.token_source_for_diagnostics(),
-                    "failure_kind": fk,
-                    "token_error_code": "TOKEN_RATE_LIMIT" if is_rl else (self._last_token_error_code or "TOKEN_FAILURE"),
-                    "paper_loop_fresh_issue": False,
-                    "paper_loop_last_token_failure_at": self._last_token_failure_at_iso,
-                    "paper_loop_last_token_http_status": self._last_token_http_status,
-                }
+                return self._kis_token_error_dict(exc)
 
             failed_step = "build_jobs"
             jobs = self._build_jobs(client)
@@ -1035,21 +1189,8 @@ class UserPaperTradingLoop:
                 "failure_kind": type(exc).__name__,
             }
 
-    def _us_token_error_out(self, err_s: str) -> dict[str, Any]:
-        is_rl = err_s.startswith("TOKEN_RATE_LIMIT:") or "TOKEN_RATE_LIMIT" in err_s
-        fk = "token_rate_limit" if is_rl else "token_failure"
-        return {
-            "ok": False,
-            "error": err_s,
-            "failed_step": "kis_token",
-            "kis_context": {},
-            "token_source": self.token_source_for_diagnostics(),
-            "failure_kind": fk,
-            "token_error_code": "TOKEN_RATE_LIMIT" if is_rl else (self._last_token_error_code or "TOKEN_FAILURE"),
-            "paper_loop_fresh_issue": False,
-            "paper_loop_last_token_failure_at": self._last_token_failure_at_iso,
-            "paper_loop_last_token_http_status": self._last_token_http_status,
-        }
+    def _us_token_error_out(self, exc: BaseException) -> dict[str, Any]:
+        return self._kis_token_error_dict(exc if isinstance(exc, RuntimeError) else RuntimeError(str(exc)))
 
     def _run_us_equity_tick(self) -> dict[str, Any]:
         if _is_us_scalp_strategy(self._strategy_id):
@@ -1068,7 +1209,7 @@ class UserPaperTradingLoop:
             try:
                 client = self._kis_client()
             except RuntimeError as exc:
-                return self._us_token_error_out(str(exc))
+                return self._us_token_error_out(exc)
 
             session_snap = analyze_us_equity_session()
             cfg = get_settings()
@@ -1195,7 +1336,7 @@ class UserPaperTradingLoop:
             try:
                 client = self._kis_client()
             except RuntimeError as exc:
-                return self._us_token_error_out(str(exc))
+                return self._us_token_error_out(exc)
 
             cfg = get_settings()
             session_snap = analyze_us_equity_session()
@@ -1296,7 +1437,7 @@ class UserPaperTradingLoop:
             try:
                 client = self._kis_client()
             except RuntimeError as exc:
-                return self._us_token_error_out(str(exc))
+                return self._us_token_error_out(exc)
 
             cfg = get_settings()
             session_snap = analyze_us_equity_session()

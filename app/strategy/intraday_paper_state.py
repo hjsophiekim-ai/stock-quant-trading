@@ -80,6 +80,7 @@ class IntradayPaperStateStore:
         # 신규 진입 일카운터만 초기화. overnight positions / last_exit 는 유지.
         carry["entered_symbols_today"] = []
         carry["entries_kst_date"] = today
+        carry["fb_intraday_meta"] = {"date_kst": today, "stopout_counts": {}}
         return IntradayPaperState(day_kst=today, final_betting_carry=carry, symbol_entries_today={})
 
 

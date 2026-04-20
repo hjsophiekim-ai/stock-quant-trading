@@ -17,7 +17,7 @@ from app.brokers.base_broker import BaseBroker
 from app.brokers.paper_broker import PaperBroker
 from app.clients.kis_client import KISClient, KISClientError
 from app.config import get_settings
-from app.orders.models import OrderRequest, OrderSignal
+from app.orders.models import OrderRequest, OrderResult, OrderSignal
 from app.orders.order_manager import OrderManager
 from app.portfolio.pnl import compute_cumulative_return_pct, compute_daily_return_pct
 from app.risk.kill_switch import KillSwitch
@@ -275,7 +275,7 @@ class IntradaySchedulerJobs:
             result = order_manager.process_signal(signal, snapshot)
             if result.accepted:
                 accepted += 1
-                self._on_accepted_order(order, state, cfg)
+                self._on_accepted_order(order, state, cfg, fill_result=result)
                 self.logger.info("[INTRADAY] accepted id=%s", result.order_id)
             else:
                 rejected += 1
@@ -416,7 +416,9 @@ class IntradaySchedulerJobs:
                 pass
         return {"ok": True, "reason": ""}
 
-    def _on_accepted_order(self, order: OrderRequest, state: Any, cfg: Any) -> None:
+    def _on_accepted_order(
+        self, order: OrderRequest, state: Any, cfg: Any, *, fill_result: OrderResult | None = None
+    ) -> None:
         now_m = time.monotonic()
         strat_id = str(order.strategy_id or "").strip().lower()
         if order.side == "buy":

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from app.brokers.base_broker import BaseBroker, Fill, OpenOrder, PositionView
-from app.orders.models import OrderRequest, OrderResult
+from app.orders.models import OrderRequest, OrderResult, OrderStatus
 
 
 @dataclass
@@ -72,7 +72,14 @@ class PaperBroker(BaseBroker):
         )
         self._fills.append(fill)
         self._open_orders.pop(order_id, None)
-        return OrderResult(order_id=order_id, accepted=True, message="Paper order filled")
+        return OrderResult(
+            order_id=order_id,
+            accepted=True,
+            message="Paper order filled",
+            status=OrderStatus.FILLED,
+            filled_quantity=int(order.quantity),
+            avg_fill_price=float(fill_price),
+        )
 
     def cancel_order(self, order_id: str) -> OrderResult:
         existed = self._open_orders.pop(order_id, None)

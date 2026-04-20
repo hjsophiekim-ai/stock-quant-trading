@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from app.orders.models import OrderRequest
+from app.orders.models import OrderRequest, OrderResult
 from app.scheduler.intraday_jobs import IntradaySchedulerJobs
 
 
@@ -30,8 +30,10 @@ class FinalBettingIntradayJobs(IntradaySchedulerJobs):
                 pass
         return {"ok": True, "reason": ""}
 
-    def _on_accepted_order(self, order: OrderRequest, state: Any, cfg: Any) -> None:
-        super()._on_accepted_order(order, state, cfg)
+    def _on_accepted_order(
+        self, order: OrderRequest, state: Any, cfg: Any, *, fill_result: OrderResult | None = None
+    ) -> None:
+        super()._on_accepted_order(order, state, cfg, fill_result=fill_result)
         if order.side == "buy":
             hook = getattr(self.strategy, "consume_pending_carry_update", None)
             if not callable(hook):
@@ -49,4 +51,10 @@ class FinalBettingIntradayJobs(IntradaySchedulerJobs):
         if order.side == "sell":
             hook = getattr(self.strategy, "on_fb_sell_accepted", None)
             if callable(hook):
-                hook(order.symbol, int(order.quantity or 0), state)
+                hook(
+                    order.symbol,
+                    int(order.quantity or 0),
+                    state,
+                    order=order,
+                    fill_result=fill_result,
+                )
