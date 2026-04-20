@@ -5,7 +5,8 @@
 | 항목 | 값 |
 |------|-----|
 | 빌드 일시 (로컬) | 2026-04-20 (기존 `release/*.zip`·스테이징 폴더 폐기 후 재생성) |
-| 저장소 커밋 (데스크톱 빌드 스탬프에 포함) | 푸시 직전 `main` 의 `git rev-parse HEAD` (NSIS 빌드 시 `GIT_COMMIT_SHA` 주입) |
+| 저장소 커밋 (이번 푸시) | `6effadc` |
+| 참고 | 동일 날짜 생성된 NSIS `.exe` 안의 git 스탬프는 **빌드 실행 시점** 로컬 HEAD(당시 `3bad189`)입니다. 스탬프를 `6effadc`와 맞추려면 `git pull` 후 `npm run release:build:zips` 를 다시 실행하세요. |
 | 스크립트 | `scripts/build-release-zips.ps1` (또는 `npm run release:build:zips`) |
 | 데스크톱 버전 | `apps/desktop/package.json` → 0.1.0 |
 | Windows (전용 ZIP) | `release/Stock-Quant-Desktop-Windows-0.1.0.zip` — NSIS 설치 `.exe` + `INSTALL-DESKTOP.bat` + `README-KO.txt` |
