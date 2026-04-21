@@ -230,28 +230,6 @@
           return { Authorization: "Bearer " + t, ...(extra || {}) };
         }
 
-        async function authFetch(url, options) {
-          var opt = options || {};
-          var hdrIn = opt.headers || {};
-          var h0 = await authHeaders(hdrIn);
-          var res = await fetch(url, Object.assign({}, opt, { headers: h0 }));
-          if (res.status !== 401) return res;
-          var chk = await ensureValidBackendSession(backendUrl);
-          if (!chk.ok) {
-            await clearDesktopSession();
-            window.location.href = "./login.html";
-            throw new Error("session_expired");
-          }
-          var h1 = await authHeaders(hdrIn);
-          res = await fetch(url, Object.assign({}, opt, { headers: h1 }));
-          if (res.status === 401) {
-            await clearDesktopSession();
-            window.location.href = "./login.html";
-            throw new Error("session_expired");
-          }
-          return res;
-        }
-
         function normalizeSession(raw) {
           var s = String(raw || "")
             .toLowerCase()

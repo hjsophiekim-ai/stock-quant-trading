@@ -51,10 +51,6 @@
           const t = s && s.accessToken ? s.accessToken : "";
           return Object.assign({ Authorization: "Bearer " + t }, extra || {});
         }
-        async function authFetch(url, options) {
-          const opt = options || {};
-          return fetch(url, Object.assign({}, opt, { headers: await authHeaders(opt.headers || {}) }));
-        }
         async function refresh() {
           const [stR, rtR, prR, ksR] = await Promise.all([
             authFetch(backendUrl + "/api/live-trading/status"),

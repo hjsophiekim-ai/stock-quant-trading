@@ -13,6 +13,7 @@ import {
 
 import { clearPersistedAuth } from "../lib/session";
 import { clearAuth, getAuthState } from "../store/authStore";
+import { authFetch } from "../lib/authFetch";
 import { type MarketStatusCard } from "../types/trading";
 
 const POLL_MS = 12_000;
@@ -49,13 +50,6 @@ export default function DashboardScreen({ backendUrl, onOpenBrokerSettings }: Pr
   const [initialLoad, setInitialLoad] = useState(true);
   const mounted = useRef(true);
 
-  const authHeaders = useCallback((): HeadersInit => {
-    const token = getAuthState().accessToken;
-    const h: Record<string, string> = {};
-    if (token) h.Authorization = `Bearer ${token}`;
-    return h;
-  }, []);
-
   const load = useCallback(
     async (opts?: { isPull?: boolean }) => {
       if (!mounted.current) return;
@@ -63,15 +57,14 @@ export default function DashboardScreen({ backendUrl, onOpenBrokerSettings }: Pr
       if (pull) setRefreshing(true);
       else setLoading(true);
       try {
-        const headers = authHeaders();
-        const brokerRes = await fetch(`${backendUrl}/api/broker-accounts/me`, { headers });
+        const brokerRes = await authFetch(backendUrl, `/api/broker-accounts/me`);
         if (brokerRes.status === 404) setBrokerLinked(false);
         else if (brokerRes.ok) setBrokerLinked(true);
         else setBrokerLinked(null);
 
         const [summaryRes, tradesRes] = await Promise.all([
-          fetch(`${backendUrl}/api/dashboard/summary`, { headers }),
-          fetch(`${backendUrl}/api/trading/recent-trades?limit=15`, { headers }),
+          authFetch(backendUrl, `/api/dashboard/summary`),
+          authFetch(backendUrl, `/api/trading/recent-trades?limit=15`),
         ]);
         const summaryData = await summaryRes.json();
         const tradesData = await tradesRes.json();
@@ -83,7 +76,12 @@ export default function DashboardScreen({ backendUrl, onOpenBrokerSettings }: Pr
         setMessage("");
         setSummary(summaryData);
         setRecentTrades(tradesData?.items ?? []);
-      } catch {
+      } catch (e) {
+        if (e instanceof Error && e.message === "SESSION_EXPIRED") {
+          setMessage("세션이 만료되었습니다. 다시 로그인해 주세요.");
+          setSummary(null);
+          return;
+        }
         setMessage("네트워크 오류 — 서버 주소와 연결을 확인하세요.");
         setSummary(null);
       } finally {
@@ -94,7 +92,7 @@ export default function DashboardScreen({ backendUrl, onOpenBrokerSettings }: Pr
         }
       }
     },
-    [authHeaders, backendUrl],
+    [backendUrl],
   );
 
   const onLogout = async () => {

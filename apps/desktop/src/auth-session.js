@@ -154,3 +154,98 @@ async function clearDesktopSession() {
     }
   }
 }
+
+function jwtPayloadExpSec(token) {
+  const t = String(token || "").trim();
+  if (!t) return null;
+  const parts = t.split(".");
+  if (parts.length < 2) return null;
+  try {
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padLen = (4 - (b64.length % 4)) % 4;
+    const padded = b64 + "=".repeat(padLen);
+    const json = atob(padded);
+    const payload = JSON.parse(json);
+    const exp = payload && typeof payload.exp === "number" ? payload.exp : null;
+    return Number.isFinite(exp) ? exp : null;
+  } catch {
+    return null;
+  }
+}
+
+let _refreshSingleFlight = null;
+
+async function ensureFreshAccessToken(backendUrl, opts) {
+  const minTtlSec = opts && typeof opts.minTtlSec === "number" ? opts.minTtlSec : 120;
+  const base = String(backendUrl || effectiveBackendUrl()).replace(/\/$/, "");
+  const session = await resolveDesktopSession();
+  if (!session || !session.accessToken) return { ok: false, kind: "no_session" };
+  const exp = jwtPayloadExpSec(session.accessToken);
+  if (exp) {
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (exp - nowSec > minTtlSec) return { ok: true, kind: "fresh", accessToken: session.accessToken };
+  }
+  if (!session.refreshToken) return { ok: false, kind: "no_session" };
+
+  if (_refreshSingleFlight) return _refreshSingleFlight;
+  _refreshSingleFlight = (async () => {
+    const rr = await fetch(base + "/api/auth/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: session.refreshToken }),
+    });
+    if (!rr.ok) return { ok: false, kind: "refresh_failed" };
+    const data = await rr.json();
+    await persistDesktopTokens(data, session.email);
+    return { ok: true, kind: "refreshed", accessToken: data.access_token };
+  })().finally(() => {
+    _refreshSingleFlight = null;
+  });
+  return _refreshSingleFlight;
+}
+
+async function authFetch(url, options, opts) {
+  const base = effectiveBackendUrl();
+  const ensured = await ensureFreshAccessToken(base, { minTtlSec: (opts && opts.minTtlSec) || 120 });
+  if (!ensured.ok) {
+    await clearDesktopSession();
+    window.location.href = "./login.html";
+    throw new Error("session_expired");
+  }
+  const opt = options || {};
+  const hdrIn = opt.headers || {};
+  const h = { ...(hdrIn || {}), Authorization: "Bearer " + ensured.accessToken };
+  let res = await fetch(url, { ...opt, headers: h });
+  if (res.status !== 401) return res;
+
+  const ensured2 = await ensureFreshAccessToken(base, { minTtlSec: 0 });
+  if (!ensured2.ok) {
+    await clearDesktopSession();
+    window.location.href = "./login.html";
+    throw new Error("session_expired");
+  }
+  const h2 = { ...(hdrIn || {}), Authorization: "Bearer " + ensured2.accessToken };
+  res = await fetch(url, { ...opt, headers: h2 });
+  if (res.status === 401) {
+    await clearDesktopSession();
+    window.location.href = "./login.html";
+    throw new Error("session_expired");
+  }
+  return res;
+}
+
+try {
+  const g = typeof window !== "undefined" ? window : globalThis;
+  if (g) {
+    g.persistDesktopTokenPayload = persistDesktopTokenPayload;
+    g.resolveDesktopSession = resolveDesktopSession;
+    g.effectiveBackendUrl = effectiveBackendUrl;
+    g.persistDesktopTokens = persistDesktopTokens;
+    g.ensureValidBackendSession = ensureValidBackendSession;
+    g.clearDesktopSession = clearDesktopSession;
+    g.ensureFreshAccessToken = ensureFreshAccessToken;
+    g.authFetch = authFetch;
+  }
+} catch {
+  /* ignore */
+}

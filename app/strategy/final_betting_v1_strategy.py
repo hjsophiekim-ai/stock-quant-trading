@@ -724,21 +724,51 @@ class FinalBettingV1Strategy(BaseStrategy):
         reduced_size_due_to_market_filter = False
         market_filter_override_applied = False
         
+        def _assess_symbol_quality() -> tuple[int, list[str]]:
+            """Assess symbol quality for aggressive mode reduced-size entry preference."""
+            score = 0
+            factors = []
+            
+            # Will be calculated per symbol later
+            return score, factors
+        
         if not market_filter_ok_effective and market_filter_ready:
             market_mode_active = mm_snap.get("market_mode_active", "").lower()
             if market_mode_active == "aggressive":
-                # In aggressive mode, allow reduced-size entry for borderline market conditions
+                # In aggressive mode, prefer reduced-size entry over full rejection
+                # Allow for borderline market conditions and strong symbols
                 if (soft.market_regime in ("neutral", "mild_bullish", "mild_bearish") and 
                     us_night_proxy_ret is not None and kospi_day_ret is not None):
-                    # Check if market is not clearly bad
+                    # Check if market is neutral-to-okay (wider range than before)
                     us_margin = (us_night_proxy_ret - us_s) / max(abs(us_s), 0.1)
                     kp_margin = (kospi_day_ret - kp_s) / max(abs(kp_s), 0.1)
-                    if us_margin >= -0.3 and kp_margin >= -0.5:  # Within 30%/50% of soft thresholds
+                    
+                    # Wider margin: up to 50%/70% of soft thresholds for neutral-to-okay markets
+                    if us_margin >= -0.5 and kp_margin >= -0.7:
                         market_filter_ok_effective_enhanced = True
                         market_filter_penalty_applied = True
                         reduced_size_due_to_market_filter = True
                         market_filter_override_applied = True
-                        self.last_intraday_signal_breakdown["market_filter_override_reason"] = "aggressive_borderline_market"
+                        
+                        # Determine override reason based on market conditions and symbol quality
+                        # Calculate symbol quality score (will be enhanced in symbol loop)
+                        # For now, use basic symbol strength indicators
+                        symbol_strength_indicators = 0
+                        
+                        # This will be enhanced when symbol quality is calculated
+                        # For now, prefer reduced-size entry for neutral-to-okay markets
+                        if us_margin >= -0.2 and kp_margin >= -0.3:
+                            # Very close to thresholds - minor penalty  
+                            self.last_intraday_signal_breakdown["market_filter_override_reason"] = "aggressive_neutral_market_strong_symbol"
+                            # Apply smaller size reduction for very close thresholds
+                            if not hasattr(self, '_symbol_quality_override'):
+                                self._symbol_quality_override = 0.85  # 15% reduction instead of 25%
+                        else:
+                            # Further from thresholds - moderate penalty
+                            self.last_intraday_signal_breakdown["market_filter_override_reason"] = "aggressive_borderline_market"
+                            # Apply standard size reduction
+                            if not hasattr(self, '_symbol_quality_override'):
+                                self._symbol_quality_override = 0.75  # 25% reduction
         
         self.last_intraday_signal_breakdown["market_filter_ok_effective_enhanced"] = market_filter_ok_effective_enhanced
         self.last_intraday_signal_breakdown["market_filter_penalty_applied"] = market_filter_penalty_applied
@@ -1106,6 +1136,39 @@ class FinalBettingV1Strategy(BaseStrategy):
                     if rebound_core_active or late_recovery_path_active:
                         effective_min_hits = max(1, effective_min_hits - 1)  # Additional reduction for strong candidates
                 
+                # Symbol quality assessment for aggressive mode
+                symbol_quality_score = 0
+                symbol_quality_factors = []
+                
+                if is_aggressive:
+                    # Calculate symbol quality score for reduced-size entry preference
+                    if rebound_core_active:
+                        symbol_quality_score += 3
+                        symbol_quality_factors.append("rebound_core")
+                    if late_recovery_path_active:
+                        symbol_quality_score += 2
+                        symbol_quality_factors.append("late_recovery")
+                    if close_above and in_high_zone:
+                        symbol_quality_score += 2
+                        symbol_quality_factors.append("strong_close")
+                    if hits_eff >= 4:  # Strong signal count
+                        symbol_quality_score += 2
+                        symbol_quality_factors.append("strong_signals")
+                    if tv_spike_ok and tv_sym >= avg5 * 3.0:  # Very strong volume
+                        symbol_quality_score += 1
+                        symbol_quality_factors.append("strong_volume")
+                    if net_buy_rank_ok:
+                        symbol_quality_score += 1
+                        symbol_quality_factors.append("strong_flow")
+                    
+                    # Set symbol quality override for size reduction in aggressive mode
+                    if symbol_quality_score >= 5:  # Strong symbol threshold
+                        self._symbol_quality_override = 0.70  # Only 30% reduction for strong symbols
+                    elif symbol_quality_score >= 3:  # Medium symbol threshold
+                        self._symbol_quality_override = 0.80  # 20% reduction for medium symbols
+                    else:
+                        self._symbol_quality_override = 0.85  # 15% reduction for weaker symbols
+                
                 # Enhanced diagnostics for aggressive mode
                 self.last_intraday_signal_breakdown["fb_hit_thresholds"] = {
                     "min_weak_hits": min_weak_hits,
@@ -1115,6 +1178,8 @@ class FinalBettingV1Strategy(BaseStrategy):
                     "rebound_core_active": rebound_core_active,
                     "late_recovery_path_active": late_recovery_path_active,
                     "aggressive_entry_relaxation_applied": is_aggressive,
+                    "symbol_quality_score": symbol_quality_score,
+                    "symbol_quality_factors": symbol_quality_factors,
                 }
                 net_buy_rank_ok_eff = bool(net_buy_rank_ok) or bool(entry_rebound_core and flow_ok)
                 if rsi14 >= weak_rsi_max and not entry_rebound_core:
@@ -1321,9 +1386,11 @@ class FinalBettingV1Strategy(BaseStrategy):
             # Enhanced allocation logic with aggressive mode relaxations
             size_reduction_factor = 1.0
             if reduced_size_due_to_market_filter:
-                size_reduction_factor = 0.75  # Reduce size by 25% for market filter penalty
+                # Use symbol quality override if available, otherwise default 25%
+                size_reduction_factor = getattr(self, '_symbol_quality_override', 0.75)
             elif is_aggressive and market_filter_penalty_applied:
-                size_reduction_factor = 0.85  # Smaller reduction for aggressive mode
+                # Use symbol quality override if available, otherwise default 15%
+                size_reduction_factor = getattr(self, '_symbol_quality_override', 0.85)
             
             # Apply size reduction
             feasible_reduced = int(feasible * size_reduction_factor)

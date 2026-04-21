@@ -332,33 +332,7 @@
         setInterval(checkBrokerGate, 60000);
       })();
 
-      async function authHeaders(extra) {
-        const s = await resolveDesktopSession();
-        const t = s && s.accessToken ? s.accessToken : "";
-        return { Authorization: "Bearer " + t, ...(extra || {}) };
-      }
-
-      async function authFetch(url, options) {
-        const opt = options || {};
-        const hdrIn = opt.headers || {};
-        const h0 = await authHeaders(hdrIn);
-        let res = await fetch(url, { ...opt, headers: h0 });
-        if (res.status !== 401) return res;
-        const chk = await ensureValidBackendSession(backendUrl);
-        if (!chk.ok) {
-          await clearDesktopSession();
-          window.location.href = "./login.html";
-          throw new Error("session_expired");
-        }
-        const h1 = await authHeaders(hdrIn);
-        res = await fetch(url, { ...opt, headers: h1 });
-        if (res.status === 401) {
-          await clearDesktopSession();
-          window.location.href = "./login.html";
-          throw new Error("session_expired");
-        }
-        return res;
-      }
+      // authFetch is provided by auth-session.js
 
       async function checkBrokerGate() {
         const gate = document.getElementById("brokerGate");

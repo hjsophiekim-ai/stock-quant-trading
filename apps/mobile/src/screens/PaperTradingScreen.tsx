@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { Picker } from "@react-native-picker/picker";
 import { Button, SafeAreaView, ScrollView, Text, TouchableOpacity, View } from "react-native";
 
-import { getAuthState } from "../store/authStore";
+import { authFetch } from "../lib/authFetch";
 import {
   type DomesticStrategyId,
   type MarketId,
@@ -154,29 +154,14 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
   const [versionMeta, setVersionMeta] = useState("빌드 정보 로딩…");
   const [lastStartPayload, setLastStartPayload] = useState("(아직 없음)");
 
-  const authHeaders = useCallback((): HeadersInit => {
-    const token = getAuthState().accessToken;
-    const h: Record<string, string> = {};
-    if (token) h.Authorization = `Bearer ${token}`;
-    return h;
-  }, []);
-
   const paperApiUrl = useCallback(
     (path: string) => `${backendUrl}/api/paper-trading/${path}?market=${market}`,
     [backendUrl, market],
   );
 
   const checkBrokerGate = useCallback(async () => {
-    const token = getAuthState().accessToken;
-    if (!token) {
-      setCanStart(false);
-      setBrokerHint("로그인이 필요합니다.");
-      return;
-    }
     try {
-      const r = await fetch(`${backendUrl}/api/broker-accounts/me/status`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const r = await authFetch(backendUrl, `/api/broker-accounts/me/status`);
       if (r.status === 404) {
         setCanStart(false);
         setBrokerHint("브로커 설정에서 모의(paper) 계정을 저장하고 연결 테스트를 통과하세요.");
@@ -212,13 +197,12 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
   const refresh = useCallback(async () => {
     await checkBrokerGate();
     try {
-      const headers = authHeaders();
       const [statusRes, posRes, pnlRes, logsRes, diagRes] = await Promise.all([
-        fetch(paperApiUrl("status"), { headers }),
-        fetch(paperApiUrl("positions"), { headers }),
-        fetch(paperApiUrl("pnl"), { headers }),
-        fetch(paperApiUrl("logs"), { headers }),
-        fetch(paperApiUrl("diagnostics"), { headers }),
+        authFetch(backendUrl, paperApiUrl("status")),
+        authFetch(backendUrl, paperApiUrl("positions")),
+        authFetch(backendUrl, paperApiUrl("pnl")),
+        authFetch(backendUrl, paperApiUrl("logs")),
+        authFetch(backendUrl, paperApiUrl("diagnostics")),
       ]);
       const statusData = (await statusRes.json()) as Record<string, unknown>;
       const posData = await posRes.json();
@@ -267,10 +251,14 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
         );
       }
       if (logsRes.ok) setLogs((logsData.items ?? []) as LogItem[]);
-    } catch {
+    } catch (e) {
+      if (e instanceof Error && e.message === "SESSION_EXPIRED") {
+        setMessage("세션이 만료되었습니다. 다시 로그인해 주세요.");
+        return;
+      }
       setMessage("network error");
     }
-  }, [authHeaders, checkBrokerGate, market, paperApiUrl]);
+  }, [backendUrl, checkBrokerGate, market, paperApiUrl]);
 
   useEffect(() => {
     void refresh();
@@ -285,9 +273,9 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
     const body = JSON.stringify({ strategy_id: sid, market });
     setLastStartPayload(`start payload: ${body}`);
     try {
-      const res = await fetch(paperApiUrl("start"), {
+      const res = await authFetch(backendUrl, paperApiUrl("start"), {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
+        headers: { "Content-Type": "application/json" },
         body,
       });
       const data = (await res.json()) as { detail?: unknown; start_request_echo?: unknown };
@@ -305,7 +293,7 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
           }
         }
         shown += `last start payload (UI): ${body}\n`;
-        shown = await appendKisBalanceDebugLines(backendUrl, authHeaders(), shown);
+        shown = await appendKisBalanceDebugLines(backendUrl, { "Content-Type": "application/json" }, shown);
         setMessage(shown);
         return;
       }
@@ -313,17 +301,18 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
       setLastStartPayload(`start payload: ${body}${echo ? `\n서버 echo: ${echo}` : ""}`);
       setMessage("Paper 세션 시작됨 (KIS 모의 주문 루프). 첫 틱까지 수십 초 걸릴 수 있습니다.");
       await refresh();
-    } catch {
+    } catch (e) {
+      if (e instanceof Error && e.message === "SESSION_EXPIRED") {
+        setMessage("세션이 만료되었습니다. 다시 로그인해 주세요.");
+        return;
+      }
       setMessage("network error");
     }
   };
 
   const stop = async () => {
     try {
-      const res = await fetch(paperApiUrl("stop"), {
-        method: "POST",
-        headers: authHeaders(),
-      });
+      const res = await authFetch(backendUrl, paperApiUrl("stop"), { method: "POST" });
       const data = (await res.json()) as { detail?: unknown };
       if (!res.ok) {
         const shown = formatApiErrorDetail(data?.detail) || "중지 실패";
@@ -332,17 +321,18 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
       }
       setMessage("Paper 세션 중지됨.");
       await refresh();
-    } catch {
+    } catch (e) {
+      if (e instanceof Error && e.message === "SESSION_EXPIRED") {
+        setMessage("세션이 만료되었습니다. 다시 로그인해 주세요.");
+        return;
+      }
       setMessage("network error");
     }
   };
 
   const riskReset = async () => {
     try {
-      const res = await fetch(paperApiUrl("risk-reset"), {
-        method: "POST",
-        headers: authHeaders(),
-      });
+      const res = await authFetch(backendUrl, paperApiUrl("risk-reset"), { method: "POST" });
       const data = (await res.json()) as { detail?: unknown };
       if (!res.ok) {
         const shown = formatApiErrorDetail(data?.detail) || "risk-reset 실패";
@@ -351,16 +341,20 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
       }
       setMessage("risk_off 해제됨. 루프가 재개됩니다.");
       await refresh();
-    } catch {
+    } catch (e) {
+      if (e instanceof Error && e.message === "SESSION_EXPIRED") {
+        setMessage("세션이 만료되었습니다. 다시 로그인해 주세요.");
+        return;
+      }
       setMessage("network error");
     }
   };
 
   const applyPaperMarketMode = async () => {
     try {
-      const res = await fetch(paperApiUrl("market-mode"), {
+      const res = await authFetch(backendUrl, paperApiUrl("market-mode"), {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ manual_market_mode: paperMarketModeChoice }),
       });
       const data = (await res.json()) as { detail?: unknown };
@@ -370,17 +364,18 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
       }
       setMessage(`시장 모드 저장: ${paperMarketModeChoice}`);
       await refresh();
-    } catch {
+    } catch (e) {
+      if (e instanceof Error && e.message === "SESSION_EXPIRED") {
+        setMessage("세션이 만료되었습니다. 다시 로그인해 주세요.");
+        return;
+      }
       setMessage("network error");
     }
   };
 
   const toggleManualOverride = async () => {
     try {
-      const res = await fetch(paperApiUrl("manual-override-toggle"), {
-        method: "POST",
-        headers: authHeaders(),
-      });
+      const res = await authFetch(backendUrl, paperApiUrl("manual-override-toggle"), { method: "POST" });
       const data = (await res.json()) as { detail?: unknown; manual_override_enabled?: boolean };
       if (!res.ok) {
         const shown = formatApiErrorDetail(data?.detail) || "수동 재개 토글 실패";
@@ -390,7 +385,11 @@ export default function PaperTradingScreen({ backendUrl, onOpenDashboard, onOpen
       const on = Boolean(data.manual_override_enabled);
       setMessage(on ? "수동 재개 ON (리스크 차단 우회)." : "수동 재개 OFF (기본 차단 복구).");
       await refresh();
-    } catch {
+    } catch (e) {
+      if (e instanceof Error && e.message === "SESSION_EXPIRED") {
+        setMessage("세션이 만료되었습니다. 다시 로그인해 주세요.");
+        return;
+      }
       setMessage("network error");
     }
   };

@@ -35,6 +35,29 @@ def mask_secret_tail(value: str, *, keep_last: int = 4) -> str:
     return "*" * (len(value) - keep_last) + value[-keep_last:]
 
 
+def classify_token_issue_error(*, status_code: int | None, detail_msg: str | None) -> str:
+    """
+    Best-effort classification for token issue failures.
+    Used to separate rate-limit conditions from generic HTTP errors.
+    """
+    sc = int(status_code or 0)
+    msg = str(detail_msg or "").strip().lower()
+    if sc == 403:
+        phrases = [
+            "접근토큰 발급",
+            "잠시 후 다시",
+            "1분당",
+            "분당",
+            "발급 제한",
+            "rate limit",
+        ]
+        if any(p in msg for p in phrases):
+            return "TOKEN_RATE_LIMIT"
+    if sc >= 400:
+        return "TOKEN_HTTP_ERROR"
+    return "TOKEN_ISSUE_FAILED"
+
+
 def validate_kis_inputs(
     *,
     app_key: str,
@@ -178,11 +201,17 @@ def issue_access_token(
                 norm_base,
                 tr_id,
             )
+            try:
+                body: dict[str, Any] = response.json()
+            except ValueError:
+                body = {}
+            msg = str(body.get("msg1") or body.get("error_description") or "").strip()
+            code = classify_token_issue_error(status_code=response.status_code, detail_msg=msg)
             return KISTokenResult(
                 False,
                 None,
-                f"토큰 발급 실패: HTTP {response.status_code}",
-                "TOKEN_HTTP_ERROR",
+                f"토큰 발급 실패: {msg}" if msg else f"토큰 발급 실패: HTTP {response.status_code}",
+                code,
                 status_code=response.status_code,
                 kis_base_url=norm_base,
                 kis_http_path=KIS_OAUTH_TOKEN_HTTP_PATH,

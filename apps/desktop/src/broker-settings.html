@@ -356,34 +356,6 @@
           return { Authorization: "Bearer " + t, ...(extra || {}) };
         }
 
-        async function authFetch(url, options) {
-          const opt = options || {};
-          const hdrIn = opt.headers || {};
-          const s0 = await resolveDesktopSession();
-          const tok = s0 && s0.accessToken ? s0.accessToken : "";
-          const h0 = { ...hdrIn, Authorization: "Bearer " + tok };
-          let res = await fetch(url, { ...opt, headers: h0 });
-          if (res.status !== 401) return res;
-          const chk = await ensureValidBackendSession(backendUrl);
-          if (!chk.ok) {
-            await clearDesktopSession();
-            toast("err", "앱 JWT 만료/무효 — " + (chk.message || "다시 로그인하세요. (한투 API 오류와 별개입니다)"));
-            window.location.href = "./login.html";
-            throw new Error("session_expired");
-          }
-          const s1 = await resolveDesktopSession();
-          const t1 = s1 && s1.accessToken ? s1.accessToken : "";
-          const h1 = { ...hdrIn, Authorization: "Bearer " + t1 };
-          res = await fetch(url, { ...opt, headers: h1 });
-          if (res.status === 401) {
-            await clearDesktopSession();
-            toast("err", "앱 로그인이 거부되었습니다. 다시 로그인하세요.");
-            window.location.href = "./login.html";
-            throw new Error("session_expired");
-          }
-          return res;
-        }
-
         function parseDetail(data, status) {
           const d = data && data.detail;
           if (status === 401) {

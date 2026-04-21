@@ -36,33 +36,30 @@ _open_orders_cache: tuple[float, list[dict[str, Any]], str | None] | None = None
 
 
 def _build_market_status_cards(
-    paper_trading_status: dict[str, Any],
+    paper_trading_status_domestic: dict[str, Any],
+    paper_trading_status_us: dict[str, Any],
     psd: dict[str, Any] | None,
     rt: dict[str, Any],
 ) -> list[dict[str, Any]]:
     tick = (psd or {}).get("tick_report") or {}
     domestic_session = tick.get("krx_session_state") or rt.get("market_phase_now") or "closed"
-    sid = paper_trading_status.get("strategy_id")
-    dom_msg = f"strategy={sid}" if sid else "Paper 미실행"
-    pm = str(paper_trading_status.get("paper_market") or "domestic").lower()
-    us_state = str(tick.get("us_session_state") or tick.get("krx_session_state") or "")
-    us_msg = (
-        f"US Paper 시세 틱 (strategy={sid})"
-        if pm == "us"
-        else "국내 Paper 세션 — US는 /api/paper-trading/start body market=us 로 시작"
-    )
+    sid_dom = paper_trading_status_domestic.get("strategy_id")
+    sid_us = paper_trading_status_us.get("strategy_id")
+    dom_msg = f"strategy={sid_dom}" if sid_dom else "Paper 미실행"
+    us_state = str(paper_trading_status_us.get("session_state") or tick.get("us_session_state") or "")
+    us_msg = f"strategy={sid_us}" if sid_us else "Paper 미실행"
     return [
         {
             "market": "domestic",
             "title": "국내 (KRX · Paper)",
-            "status": str(paper_trading_status.get("status") or "unknown"),
+            "status": str(paper_trading_status_domestic.get("status") or "unknown"),
             "session_state": str(domestic_session),
             "message": dom_msg,
         },
         {
             "market": "us",
             "title": "미국 (Paper · KIS overseas)",
-            "status": "active" if pm == "us" else "idle",
+            "status": str(paper_trading_status_us.get("status") or "unknown"),
             "session_state": us_state or "—",
             "message": us_msg,
         },
@@ -464,7 +461,14 @@ def dashboard_summary(authorization: str | None = Header(default=None)) -> dict[
     open_orders, orders_err = _safe_open_orders()
     recent_fills, fills_err = _safe_recent_fills(cfg, limit=15)
 
-    paper_trading_status = _paper_trading_status()
+    paper_trading_status_domestic = _paper_trading_status()
+    try:
+        from backend.app.engine.paper_session_controller import get_paper_session_controller
+
+        paper_trading_status_us = get_paper_session_controller().status_payload(market="us")
+    except Exception as exc:
+        paper_trading_status_us = {"status": "unknown", "error": str(exc)}
+    paper_trading_status = dict(paper_trading_status_domestic)
     paper_session_dashboard: dict[str, Any] | None = None
     use_paper_dashboard = bool(
         user
@@ -476,7 +480,10 @@ def dashboard_summary(authorization: str | None = Header(default=None)) -> dict[
         try:
             from backend.app.engine.paper_session_controller import get_paper_session_controller
 
-            paper_session_dashboard = get_paper_session_controller().get_dashboard_payload(user.id)
+            try:
+                paper_session_dashboard = get_paper_session_controller().get_dashboard_payload(user.id, market="domestic")
+            except TypeError:
+                paper_session_dashboard = get_paper_session_controller().get_dashboard_payload(user.id)
         except Exception as exc:
             paper_session_dashboard = {"ok": False, "error": str(exc)}
     psd = paper_session_dashboard if isinstance(paper_session_dashboard, dict) and paper_session_dashboard.get("ok") else None
@@ -509,7 +516,7 @@ def dashboard_summary(authorization: str | None = Header(default=None)) -> dict[
     last_hb = persisted.get("heartbeat_at") or (rt.get("volatile_summary") or {}).get("last_loop_at")
 
     server_rt_banner = _server_runtime_banner(broker_probe, user_broker_snap)
-    paper_usr_banner = _user_paper_banner(paper_trading_status, psd)
+    paper_usr_banner = _user_paper_banner(paper_trading_status_domestic, psd)
     storage_diag = _storage_diagnostics(cfg)
 
     return {
@@ -593,7 +600,7 @@ def dashboard_summary(authorization: str | None = Header(default=None)) -> dict[
         "user_paper_banner": paper_usr_banner,
         "storage_diagnostics": storage_diag,
         "paper_session_dashboard": paper_session_dashboard,
-        "market_status_cards": _build_market_status_cards(paper_trading_status, psd, rt),
+        "market_status_cards": _build_market_status_cards(paper_trading_status_domestic, paper_trading_status_us, psd, rt),
         "active_paper_market": (
             "domestic"
             if paper_trading_status.get("user_session_active")
@@ -635,8 +642,11 @@ def dashboard_summary(authorization: str | None = Header(default=None)) -> dict[
             "regime_dual_source": not bool(psd),
         },
         "dashboard_todos": _dashboard_todos(),
-        "paper_trading": paper_trading_status,
-        "paper_trading_demo": paper_trading_status,  # backward compatibility
+        "paper_trading": {
+            "domestic": paper_trading_status_domestic,
+            "us": paper_trading_status_us,
+        },
+        "paper_trading_demo": paper_trading_status_domestic,  # backward compatibility
         "broker_cross_checks": {
             "server_env_token_ok": bool(broker_probe.get("token_ok")),
             "app_broker_connection_ok": bool(
@@ -718,10 +728,10 @@ def dashboard_broker_status(authorization: str | None = Header(default=None)) ->
 
 
 def _paper_trading_status() -> dict[str, Any]:
-    """앱 Paper 세션(KIS 모의·사용자 자격). 전역 RuntimeEngine 과 별도."""
+    """앱 Paper 세션(KIS 모의·사용자 자격). 전역 RuntimeEngine 과 별도. (기본: domestic)"""
     try:
         from backend.app.engine.paper_session_controller import get_paper_session_controller
 
-        return get_paper_session_controller().status_payload()
+        return get_paper_session_controller().status_payload(market="domestic")
     except Exception as exc:
         return {"status": "unknown", "error": str(exc)}

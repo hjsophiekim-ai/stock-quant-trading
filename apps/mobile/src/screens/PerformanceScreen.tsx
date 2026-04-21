@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { SafeAreaView, ScrollView, Text, View } from "react-native";
 
+import { authFetch } from "../lib/authFetch";
+
 type Props = { backendUrl: string };
 
 export default function PerformanceScreen({ backendUrl }: Props) {
@@ -16,11 +18,11 @@ export default function PerformanceScreen({ backendUrl }: Props) {
     const load = async () => {
       try {
         const [metricsRes, pnlRes, symbolRes, strategyRes, regimeRes] = await Promise.all([
-          fetch(`${backendUrl}/api/performance/metrics`),
-          fetch(`${backendUrl}/api/performance/pnl-history`),
-          fetch(`${backendUrl}/api/performance/symbol-performance`),
-          fetch(`${backendUrl}/api/performance/strategy-performance`),
-          fetch(`${backendUrl}/api/performance/regime-performance`),
+          authFetch(backendUrl, `/api/performance/metrics`),
+          authFetch(backendUrl, `/api/performance/pnl-history`),
+          authFetch(backendUrl, `/api/performance/symbol-performance`),
+          authFetch(backendUrl, `/api/performance/strategy-performance`),
+          authFetch(backendUrl, `/api/performance/regime-performance`),
         ]);
         const m = await metricsRes.json();
         const p = await pnlRes.json();
@@ -36,7 +38,11 @@ export default function PerformanceScreen({ backendUrl }: Props) {
         setSymbolRows(sy.items ?? []);
         setStrategyRows(st.items ?? []);
         setRegimeRows(rg.items ?? []);
-      } catch {
+      } catch (e) {
+        if (e instanceof Error && e.message === "SESSION_EXPIRED") {
+          setMessage("세션이 만료되었습니다. 다시 로그인해 주세요.");
+          return;
+        }
         setMessage("network error");
       }
     };

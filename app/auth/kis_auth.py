@@ -43,6 +43,7 @@ class KISTokenAPI:
     base_url: str
     http_client: AuthHTTPClient
     timeout_sec: int = 10
+    now_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
 
     def request_access_token(self, app_key: str, app_secret: str) -> TokenRecord:
         endpoint = f"{self.base_url.rstrip('/')}/oauth2/tokenP"
@@ -80,7 +81,7 @@ class KISTokenAPI:
         except (TypeError, ValueError) as exc:
             raise KISTokenRequestError("Token response has invalid expires_in") from exc
 
-        now = datetime.now(timezone.utc)
+        now = self.now_fn()
         expires_at = now + timedelta(seconds=max(expires_in, 0))
         return TokenRecord(access_token=access_token, expires_at=expires_at, token_type=token_type)
 
@@ -93,6 +94,12 @@ class KISTokenService:
     now_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
     refresh_leeway_seconds: int = 60
     logger: logging.Logger = logging.getLogger("app.auth.kis_auth")
+
+    def __post_init__(self) -> None:
+        try:
+            self.token_api.now_fn = self.now_fn
+        except Exception:
+            pass
 
     @classmethod
     def from_env(cls, settings: Settings | None = None) -> "KISTokenService":

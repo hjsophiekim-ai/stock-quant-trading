@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Picker } from "@react-native-picker/picker";
 import { Button, SafeAreaView, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 
-import { getAuthState } from "../store/authStore";
+import { authFetch } from "../lib/authFetch";
 import {
   type MarketId,
   type SessionState,
@@ -117,13 +117,6 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
   const lastDiagRef = useRef<Record<string, unknown>>({});
   const lastDashRef = useRef<Record<string, unknown>>({});
 
-  const authHeaders = useCallback((): HeadersInit => {
-    const token = getAuthState().accessToken;
-    const h: Record<string, string> = {};
-    if (token) h.Authorization = `Bearer ${token}`;
-    return h;
-  }, []);
-
   const paperApiUrl = useCallback(
     (path: string) => `${backendUrl}/api/paper-trading/${path}?market=${market}`,
     [backendUrl, market],
@@ -190,14 +183,13 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
 
   const refresh = useCallback(async () => {
     try {
-      const headers = authHeaders();
       const [statusRes, posRes, logsRes, pnlRes, diagRes, dashRes] = await Promise.all([
-        fetch(paperApiUrl("status"), { headers }),
-        fetch(paperApiUrl("positions"), { headers }),
-        fetch(paperApiUrl("logs"), { headers }),
-        fetch(paperApiUrl("pnl"), { headers }),
-        fetch(paperApiUrl("diagnostics"), { headers }),
-        fetch(paperApiUrl("dashboard-data"), { headers }),
+        authFetch(backendUrl, paperApiUrl("status")),
+        authFetch(backendUrl, paperApiUrl("positions")),
+        authFetch(backendUrl, paperApiUrl("logs")),
+        authFetch(backendUrl, paperApiUrl("pnl")),
+        authFetch(backendUrl, paperApiUrl("diagnostics")),
+        authFetch(backendUrl, paperApiUrl("dashboard-data")),
       ]);
 
       const statusData = (await statusRes.json()) as Record<string, unknown>;
@@ -261,7 +253,11 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
         : "bars: 없음";
       setDiagSummary(`${quoteText}\n${barText}`);
       updateSymbolDiagnostic(selectedSymbol, diagData, dashData);
-    } catch {
+    } catch (e) {
+      if (e instanceof Error && e.message === "SESSION_EXPIRED") {
+        setMessage("세션이 만료되었습니다. 다시 로그인해 주세요.");
+        return;
+      }
       setMessage("network error");
     }
   }, [authHeaders, market, paperApiUrl, selectedSymbol, updateSymbolDiagnostic]);
@@ -283,9 +279,9 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
     const body = JSON.stringify({ strategy_id: sid, market });
     setLastStartPayload(`start payload: ${body}`);
     try {
-      const res = await fetch(paperApiUrl("start"), {
+      const res = await authFetch(backendUrl, paperApiUrl("start"), {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
+        headers: { "Content-Type": "application/json" },
         body,
       });
       const data = (await res.json()) as { detail?: unknown; start_request_echo?: unknown };
@@ -310,17 +306,18 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
       setLastStartPayload(`start payload: ${body}${echo ? `\n서버 echo: ${echo}` : ""}`);
       setMessage("US Paper 세션 시작됨.");
       await refresh();
-    } catch {
+    } catch (e) {
+      if (e instanceof Error && e.message === "SESSION_EXPIRED") {
+        setMessage("세션이 만료되었습니다. 다시 로그인해 주세요.");
+        return;
+      }
       setMessage("network error");
     }
   };
 
   const stop = async () => {
     try {
-      const res = await fetch(paperApiUrl("stop"), {
-        method: "POST",
-        headers: authHeaders(),
-      });
+      const res = await authFetch(backendUrl, paperApiUrl("stop"), { method: "POST" });
       const data = (await res.json()) as { detail?: unknown };
       if (!res.ok) {
         setMessage(typeof data.detail === "string" ? data.detail : "US 세션 중지 실패");
@@ -328,17 +325,18 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
       }
       setMessage("US Paper 세션 중지됨.");
       await refresh();
-    } catch {
+    } catch (e) {
+      if (e instanceof Error && e.message === "SESSION_EXPIRED") {
+        setMessage("세션이 만료되었습니다. 다시 로그인해 주세요.");
+        return;
+      }
       setMessage("network error");
     }
   };
 
   const toggleManualOverride = async () => {
     try {
-      const res = await fetch(paperApiUrl("manual-override-toggle"), {
-        method: "POST",
-        headers: authHeaders(),
-      });
+      const res = await authFetch(backendUrl, paperApiUrl("manual-override-toggle"), { method: "POST" });
       const data = (await res.json()) as { detail?: unknown; manual_override_enabled?: boolean };
       if (!res.ok) {
         setMessage(typeof data.detail === "string" ? data.detail : "수동 재개 토글 실패");
@@ -346,7 +344,11 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
       }
       setMessage(Boolean(data.manual_override_enabled) ? "수동 재개 ON (리스크 차단 우회)." : "수동 재개 OFF (기본 차단 복구).");
       await refresh();
-    } catch {
+    } catch (e) {
+      if (e instanceof Error && e.message === "SESSION_EXPIRED") {
+        setMessage("세션이 만료되었습니다. 다시 로그인해 주세요.");
+        return;
+      }
       setMessage("network error");
     }
   };
@@ -359,12 +361,11 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
       return;
     }
     try {
-      const headers = authHeaders();
       const u = new URL(`${backendUrl}/api/stocks/search-by-symbol`);
       u.searchParams.set("q", q);
       u.searchParams.set("limit", "25");
       u.searchParams.set("market", market);
-      const res = await fetch(u.toString(), { headers });
+      const res = await authFetch(backendUrl, u.toString());
       const data = (await res.json()) as SymbolSearchResponse;
       if (!res.ok) {
         setSearchBanner("미국 종목 검색 API 오류 — 서버 응답을 확인하세요.");
@@ -392,7 +393,11 @@ export default function USTradingScreen({ backendUrl, onOpenDashboard, onOpenPer
       if (matches.length === 0) {
         setSearchBanner("검색 결과 없음.");
       }
-    } catch {
+    } catch (e) {
+      if (e instanceof Error && e.message === "SESSION_EXPIRED") {
+        setMessage("세션이 만료되었습니다. 다시 로그인해 주세요.");
+        return;
+      }
       setMessage("network error");
     }
   };

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Button, SafeAreaView, ScrollView, Switch, Text, TextInput, View } from "react-native";
 
-import { getAuthState } from "../store/authStore";
+import { authFetch } from "../lib/authFetch";
 
 type Props = {
   backendUrl: string;
@@ -33,20 +33,12 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
   const [history, setHistory] = useState<Array<{ ts: string; actor: string; reason: string }>>([]);
   const [msg, setMsg] = useState("");
 
-  const authHeaders = useCallback((): HeadersInit => {
-    const token = getAuthState().accessToken;
-    const h: Record<string, string> = { "Content-Type": "application/json" };
-    if (token) h.Authorization = `Bearer ${token}`;
-    return h;
-  }, []);
-
   const refresh = async () => {
-    const headers = authHeaders();
-    const statusRes = await fetch(`${backendUrl}/api/live-trading/status`, { headers });
+    const statusRes = await authFetch(backendUrl, `/api/live-trading/status`);
     const statusData = await statusRes.json();
     if (statusRes.ok) setStatus(statusData);
 
-    const killRes = await fetch(`${backendUrl}/api/live-trading/kill-switch-status`, { headers });
+    const killRes = await authFetch(backendUrl, `/api/live-trading/kill-switch-status`);
     const killData = await killRes.json();
     if (killRes.ok) {
       setKillMessage(
@@ -56,25 +48,25 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
       );
     }
 
-    const rtRes = await fetch(`${backendUrl}/api/runtime-engine/status`, { headers });
+    const rtRes = await authFetch(backendUrl, `/api/runtime-engine/status`);
     const rtData = await rtRes.json();
     if (rtRes.ok) {
       setRuntimeManualOverride(Boolean(rtData.manual_override_enabled));
     }
 
-    const histRes = await fetch(`${backendUrl}/api/live-trading/settings-history`, { headers });
+    const histRes = await authFetch(backendUrl, `/api/live-trading/settings-history`);
     const histData = await histRes.json();
     if (histRes.ok) setHistory(histData.items ?? []);
   };
 
   useEffect(() => {
     void refresh();
-  }, [backendUrl, authHeaders]);
+  }, [backendUrl]);
 
   const save = async () => {
-    const res = await fetch(`${backendUrl}/api/live-trading/settings`, {
+    const res = await authFetch(backendUrl, `/api/live-trading/settings`, {
       method: "POST",
-      headers: authHeaders(),
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         live_trading_flag: status.live_trading_flag,
         secondary_confirm_flag: status.secondary_confirm_flag,
@@ -94,10 +86,7 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
   };
 
   const toggleRuntimeManualOverride = async () => {
-    const res = await fetch(`${backendUrl}/api/runtime-engine/manual-override-toggle`, {
-      method: "POST",
-      headers: authHeaders(),
-    });
+    const res = await authFetch(backendUrl, `/api/runtime-engine/manual-override-toggle`, { method: "POST" });
     const data = await res.json();
     if (!res.ok) {
       setMsg(typeof data?.detail === "string" ? data.detail : "runtime 수동 재개 토글 실패");

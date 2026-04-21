@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, Button, SafeAreaView, View } from "react-native";
+import { ActivityIndicator, AppState, Button, SafeAreaView, View } from "react-native";
 
 import BrokerSettingsScreen from "./screens/BrokerSettingsScreen";
 import { APP_ENV, BACKEND_URL } from "./config/env";
@@ -18,6 +18,7 @@ import {
   savePersistedAuth,
   validateAccessToken,
 } from "./lib/session";
+import { ensureAuthOnForeground } from "./lib/authFetch";
 import { AuthState, getAuthState, setAuth, subscribeAuth } from "./store/authStore";
 
 type MainTab =
@@ -36,6 +37,15 @@ export default function App() {
 
   useEffect(() => {
     return subscribeAuth(setAuthView);
+  }, []);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (st) => {
+      if (st === "active") {
+        void ensureAuthOnForeground(BACKEND_URL);
+      }
+    });
+    return () => sub.remove();
   }, []);
 
   useEffect(() => {

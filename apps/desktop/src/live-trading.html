@@ -81,11 +81,6 @@
           const t = s && s.accessToken ? s.accessToken : "";
           return Object.assign({ Authorization: "Bearer " + t }, extra || {});
         }
-        async function authFetch(url, options) {
-          const opt = options || {};
-          const h0 = await authHeaders(opt.headers || {});
-          return fetch(url, Object.assign({}, opt, { headers: h0 }));
-        }
 
         const statusPre = document.getElementById("statusPre");
         const runtimePre = document.getElementById("runtimePre");

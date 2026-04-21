@@ -10,7 +10,7 @@ import {
   View,
 } from "react-native";
 
-import { getAuthState } from "../store/authStore";
+import { authFetch } from "../lib/authFetch";
 
 type Props = {
   backendUrl: string;
@@ -60,13 +60,6 @@ export default function BrokerSettingsScreen({ backendUrl, onBack }: Props) {
   const [toast, setToast] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const auth = getAuthState();
-  const authHeader = useMemo(() => {
-    const h: Record<string, string> = {};
-    if (auth.accessToken) h.Authorization = `Bearer ${auth.accessToken}`;
-    return h;
-  }, [auth.accessToken]);
-
   const showToast = useCallback((type: "ok" | "err", text: string) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     setToast({ type, text });
@@ -84,9 +77,7 @@ export default function BrokerSettingsScreen({ backendUrl, onBack }: Props) {
 
   const refreshStatus = useCallback(async () => {
     try {
-      const res = await fetch(`${backendUrl}/api/broker-accounts/me/status`, {
-        headers: authHeader,
-      });
+      const res = await authFetch(backendUrl, `/api/broker-accounts/me/status`);
       if (res.status === 404) {
         setHasSavedAccount(false);
         setConnectionStatus("unknown");
@@ -106,12 +97,12 @@ export default function BrokerSettingsScreen({ backendUrl, onBack }: Props) {
     } catch {
       showToast("err", "네트워크 오류 — 서버 주소와 실행 여부를 확인하세요.");
     }
-  }, [authHeader, backendUrl, showToast]);
+  }, [backendUrl, showToast]);
 
   const loadAccount = useCallback(async () => {
     setLoadingAccount(true);
     try {
-      const res = await fetch(`${backendUrl}/api/broker-accounts/me`, { headers: authHeader });
+      const res = await authFetch(backendUrl, `/api/broker-accounts/me`);
       if (res.status === 404) {
         setHasSavedAccount(false);
         setMaskedHint(null);
@@ -143,7 +134,7 @@ export default function BrokerSettingsScreen({ backendUrl, onBack }: Props) {
     } finally {
       setLoadingAccount(false);
     }
-  }, [authHeader, backendUrl, refreshStatus, showToast]);
+  }, [backendUrl, refreshStatus, showToast]);
 
   useEffect(() => {
     void loadAccount();
@@ -155,9 +146,9 @@ export default function BrokerSettingsScreen({ backendUrl, onBack }: Props) {
       return;
     }
     try {
-      const res = await fetch(`${backendUrl}/api/broker-accounts/me`, {
+      const res = await authFetch(backendUrl, `/api/broker-accounts/me`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeader },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           kis_app_key: form.kis_app_key.trim(),
           kis_app_secret: form.kis_app_secret.trim(),
@@ -174,7 +165,11 @@ export default function BrokerSettingsScreen({ backendUrl, onBack }: Props) {
       setTestBadge("idle");
       showToast("ok", "브로커 정보가 서버에 암호화되어 저장되었습니다.");
       await loadAccount();
-    } catch {
+    } catch (e) {
+      if (e instanceof Error && e.message === "SESSION_EXPIRED") {
+        showToast("err", "세션이 만료되었습니다. 다시 로그인해 주세요.");
+        return;
+      }
       showToast("err", "네트워크 오류");
     }
   };
@@ -182,10 +177,7 @@ export default function BrokerSettingsScreen({ backendUrl, onBack }: Props) {
   const testConnection = async () => {
     setTestBadge("idle");
     try {
-      const res = await fetch(`${backendUrl}/api/broker-accounts/me/test-connection`, {
-        method: "POST",
-        headers: authHeader,
-      });
+      const res = await authFetch(backendUrl, `/api/broker-accounts/me/test-connection`, { method: "POST" });
       const data = await res.json();
       if (!res.ok) {
         setTestBadge("fail");
@@ -197,8 +189,12 @@ export default function BrokerSettingsScreen({ backendUrl, onBack }: Props) {
       setConnectionMessage(data.message ?? "");
       showToast(data.ok ? "ok" : "err", data.message ?? (data.ok ? "연결 성공" : "연결 실패"));
       await refreshStatus();
-    } catch {
+    } catch (e) {
       setTestBadge("fail");
+      if (e instanceof Error && e.message === "SESSION_EXPIRED") {
+        showToast("err", "세션이 만료되었습니다. 다시 로그인해 주세요.");
+        return;
+      }
       showToast("err", "네트워크 오류");
     }
   };
@@ -220,10 +216,7 @@ export default function BrokerSettingsScreen({ backendUrl, onBack }: Props) {
 
   const deleteAccount = async () => {
     try {
-      const res = await fetch(`${backendUrl}/api/broker-accounts/me`, {
-        method: "DELETE",
-        headers: authHeader,
-      });
+      const res = await authFetch(backendUrl, `/api/broker-accounts/me`, { method: "DELETE" });
       if (!res.ok) {
         const data = await res.json();
         showToast("err", parseApiDetail(data?.detail));

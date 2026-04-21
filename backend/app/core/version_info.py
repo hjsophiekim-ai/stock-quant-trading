@@ -20,13 +20,14 @@ def get_backend_git_sha() -> str:
         if v:
             return v
     try:
-        return subprocess.check_output(
+        out = subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
             cwd=str(_repo_root()),
             text=True,
             timeout=3,
             stderr=subprocess.DEVNULL,
-        ).strip()
+        )
+        return str(out or "").strip()
     except (OSError, subprocess.SubprocessError):
         return ""
 

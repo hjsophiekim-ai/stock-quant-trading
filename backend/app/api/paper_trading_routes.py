@@ -9,7 +9,7 @@ from app.clients.kis_client import KISClientError, sanitize_kis_params_for_log
 from app.config import paper_final_betting_diagnostics
 from backend.app.clients.kis_client import build_kis_client_for_paper_user
 from backend.app.engine.runtime_engine import get_runtime_engine
-from backend.app.engine.paper_session_controller import get_paper_session_controller
+from backend.app.engine.paper_session_controller import get_paper_session_controller, normalize_paper_market_param
 
 from .auth_routes import get_current_user_from_auth_header
 from .broker_routes import get_broker_service
@@ -34,6 +34,16 @@ def _optional_pref_user_id(authorization: str | None) -> str | None:
         return get_current_user_from_auth_header(authorization).id
     except (ValueError, HTTPException):
         return None
+
+
+def _has_market_hub(ctrl: object) -> bool:
+    return hasattr(ctrl, "controller_for_market")
+
+
+def _market_ctrl(ctrl: object, market: str | None):
+    if _has_market_hub(ctrl):
+        return ctrl.controller_for_market(market)  # type: ignore[attr-defined]
+    return ctrl
 
 
 def _require_broker_ready_for_start(user_id: str) -> None:
@@ -188,6 +198,7 @@ def start_paper_trading(
     if sid == "live":
         raise HTTPException(status_code=400, detail="strategy_id 'live' 는 사용할 수 없습니다 (live 차단).")
     ctrl = get_paper_session_controller()
+    slot = _market_ctrl(ctrl, payload.market)
     req_strategy_raw = payload.strategy_id.strip()
     mk_raw = (payload.market or "domestic").strip().lower()
     req_market_norm = (
@@ -196,10 +207,10 @@ def start_paper_trading(
         else "domestic"
     )
     try:
-        ctrl.start(user.id, payload.strategy_id.strip(), market=payload.market)
+        ctrl.start(user.id, payload.strategy_id.strip(), market=req_market_norm)
     except ValueError as exc:
         code = str(exc)
-        snap = ctrl.paper_token_ensure_snapshot()
+        snap = slot.paper_token_ensure_snapshot()
         if code == "TOKEN_RATE_LIMIT_WAIT":
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -260,7 +271,7 @@ def start_paper_trading(
                     ),
                     "request_strategy_id": req_strategy_raw,
                     "request_market": payload.market,
-                    "paper_start_diagnostics": ctrl.last_start_diagnostics_snapshot(),
+                    "paper_start_diagnostics": slot.last_start_diagnostics_snapshot(),
                     "strategy_implemented": True,
                     "settings_not_reflected": bool(
                         (fb_diag.get("settings_cache_mismatch") or False)
@@ -285,7 +296,7 @@ def start_paper_trading(
             "strategy_id": req_strategy_raw,
             "market": req_market_norm,
         },
-        **ctrl.status_payload(),
+        **ctrl.status_payload(market=req_market_norm, pref_user_id=user.id),
         "runtime_engine_start": runtime_start,
     }
 
@@ -295,13 +306,16 @@ def stop_paper_trading(
     authorization: str | None = Header(default=None),
     market: str | None = Query(
         default=None,
-        description="모바일에서 domestic | us 로 명시(예약). 현재는 쿼리를 읽기만 하고 동작은 동일.",
+        description="domestic | us",
     ),
 ) -> dict[str, object]:
     user = _paper_user(authorization)
     ctrl = get_paper_session_controller()
     try:
-        ctrl.stop(user.id)
+        if _has_market_hub(ctrl):
+            ctrl.stop(user.id, market=market)  # type: ignore[call-arg]
+        else:
+            ctrl.stop(user.id)  # type: ignore[call-arg]
     except RuntimeError as exc:
         if "NOT_OWNER" in str(exc):
             raise HTTPException(
@@ -310,19 +324,27 @@ def stop_paper_trading(
             ) from exc
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     runtime_stop = get_runtime_engine().stop()
-    return {"ok": True, **ctrl.status_payload(), "runtime_engine_stop": runtime_stop}
+    mk = normalize_paper_market_param(market)
+    if _has_market_hub(ctrl):
+        st = ctrl.status_payload(market=mk, pref_user_id=user.id)  # type: ignore[call-arg]
+    else:
+        st = ctrl.status_payload(pref_user_id=user.id)  # type: ignore[call-arg]
+    return {"ok": True, **st, "runtime_engine_stop": runtime_stop}
 
 
 @router.post("/risk-reset")
 def paper_trading_risk_reset(
     authorization: str | None = Header(default=None),
-    market: str | None = Query(default=None, description="예약: domestic | us"),
+    market: str | None = Query(default=None, description="domestic | us"),
 ) -> dict[str, Any]:
     """paper 세션 risk_off 해제(시작한 사용자만)."""
     user = _paper_user(authorization)
     ctrl = get_paper_session_controller()
     try:
-        out = ctrl.risk_reset(user.id)
+        if _has_market_hub(ctrl):
+            out = ctrl.risk_reset(user.id, market=market)  # type: ignore[call-arg]
+        else:
+            out = ctrl.risk_reset(user.id)  # type: ignore[call-arg]
     except RuntimeError as exc:
         if "NOT_OWNER" in str(exc):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="세션 소유자만 risk-reset 할 수 있습니다.") from exc
@@ -337,11 +359,12 @@ def paper_trading_manual_override_toggle(
     authorization: str | None = Header(default=None),
     market: str | None = Query(default=None),
 ) -> dict[str, object]:
-    _ = market
     user = _paper_user(authorization)
     ctrl = get_paper_session_controller()
     try:
-        return ctrl.toggle_manual_override(user.id)
+        if _has_market_hub(ctrl):
+            return ctrl.toggle_manual_override(user.id, market=market)  # type: ignore[call-arg]
+        return ctrl.toggle_manual_override(user.id)  # type: ignore[call-arg]
     except RuntimeError as exc:
         if "NOT_OWNER" in str(exc):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="세션 소유자만 수동 오버라이드를 변경할 수 있습니다.") from exc
@@ -368,10 +391,15 @@ def get_paper_trading_status(
     authorization: str | None = Header(default=None),
 ) -> dict[str, object]:
     ctrl = get_paper_session_controller()
-    ok_m, req, sess = ctrl.market_request_matches(market)
+    mk = normalize_paper_market_param(market)
+    ok_m, req, sess = _market_ctrl(ctrl, mk).market_request_matches(mk)  # type: ignore[call-arg]
     pref_uid = _optional_pref_user_id(authorization)
+    if _has_market_hub(ctrl):
+        st = ctrl.status_payload(market=mk, pref_user_id=pref_uid)  # type: ignore[call-arg]
+    else:
+        st = ctrl.status_payload(pref_user_id=pref_uid)  # type: ignore[call-arg]
     return {
-        **ctrl.status_payload(pref_user_id=pref_uid),
+        **st,
         "requested_market": req,
         "paper_market_normalized": sess,
         "market_mismatch": not ok_m,
@@ -380,34 +408,49 @@ def get_paper_trading_status(
 
 
 @router.get("/engine/status")
-def paper_engine_status(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+def paper_engine_status(
+    authorization: str | None = Header(default=None),
+    market: str | None = Query(default=None, description="domestic | us"),
+) -> dict[str, Any]:
     """Paper 전용 런타임(사용자 모의 루프) 상태 — `/api/runtime-engine` 과 구분."""
     pref_uid = _optional_pref_user_id(authorization)
-    return get_paper_session_controller().status_payload(pref_user_id=pref_uid)
+    ctrl = get_paper_session_controller()
+    if _has_market_hub(ctrl):
+        return ctrl.status_payload(market=market, pref_user_id=pref_uid)  # type: ignore[call-arg]
+    return ctrl.status_payload(pref_user_id=pref_uid)  # type: ignore[call-arg]
 
 
 @router.get("/positions")
 def get_paper_positions(
     market: str | None = Query(default=None, description="domestic | us"),
 ) -> dict[str, object]:
-    return get_paper_session_controller().get_positions_payload(market=market)
+    ctrl = get_paper_session_controller()
+    if _has_market_hub(ctrl):
+        return ctrl.get_positions_payload(market=market)  # type: ignore[call-arg]
+    return ctrl.get_positions_payload(market=market)  # type: ignore[call-arg]
 
 
 @router.get("/pnl")
 def get_paper_pnl(
     market: str | None = Query(default=None, description="domestic | us"),
 ) -> dict[str, object]:
-    return get_paper_session_controller().pnl_payload(market=market)
+    ctrl = get_paper_session_controller()
+    if _has_market_hub(ctrl):
+        return ctrl.pnl_payload(market=market)  # type: ignore[call-arg]
+    return ctrl.pnl_payload(market=market)  # type: ignore[call-arg]
 
 
 @router.get("/diagnostics")
 def get_paper_diagnostics(
-    market: str | None = Query(default=None, description="예약: domestic | us"),
+    market: str | None = Query(default=None, description="domestic | us"),
     authorization: str | None = Header(default=None),
 ) -> dict[str, object]:
     """Paper 세션 마지막 KIS 실패 맥락·토큰 출처(민감값 제외)."""
     pref_uid = _optional_pref_user_id(authorization)
-    return get_paper_session_controller().diagnostics_payload(pref_user_id=pref_uid)
+    ctrl = get_paper_session_controller()
+    if _has_market_hub(ctrl):
+        return ctrl.diagnostics_payload(market=market, pref_user_id=pref_uid)  # type: ignore[call-arg]
+    return ctrl.diagnostics_payload(pref_user_id=pref_uid)  # type: ignore[call-arg]
 
 
 @router.get("/dashboard-data")
@@ -417,7 +460,10 @@ def get_paper_dashboard_data(
 ) -> dict[str, object]:
     """사용자 Paper 계정 기준 포지션·미체결·체결·틱 리포트(대시보드와 동일 소스)."""
     user = _paper_user(authorization)
-    return get_paper_session_controller().get_dashboard_payload(user.id, market=market)
+    ctrl = get_paper_session_controller()
+    if _has_market_hub(ctrl):
+        return ctrl.get_dashboard_payload(user.id, market=market)  # type: ignore[call-arg]
+    return ctrl.get_dashboard_payload(user.id, market=market)  # type: ignore[call-arg]
 
 
 @router.get("/logs")
@@ -425,7 +471,10 @@ def get_paper_logs(
     market: str | None = Query(default=None, description="domestic | us"),
 ) -> dict[str, object]:
     ctrl = get_paper_session_controller()
-    out = ctrl.logs_payload(market=market)
+    if _has_market_hub(ctrl):
+        out = ctrl.logs_payload(market=market)  # type: ignore[call-arg]
+    else:
+        out = ctrl.logs_payload(market=market)  # type: ignore[call-arg]
     logs = list(out.get("items") or [])
     if not logs:
         logs = [
@@ -451,19 +500,23 @@ class PaperMarketModeBody(BaseModel):
 @router.get("/market-mode")
 def get_paper_market_mode(
     authorization: str | None = Header(default=None),
-    market: str | None = Query(default=None, description="예약: domestic | us"),
+    market: str | None = Query(default=None, description="domestic | us"),
 ) -> dict[str, object]:
-    _ = market
     user = _paper_user(authorization)
-    return get_paper_session_controller().get_paper_market_mode(user.id)
+    ctrl = get_paper_session_controller()
+    if _has_market_hub(ctrl):
+        return ctrl.get_paper_market_mode(user.id, market=market)  # type: ignore[call-arg]
+    return ctrl.get_paper_market_mode(user.id)  # type: ignore[call-arg]
 
 
 @router.post("/market-mode")
 def set_paper_market_mode(
     body: PaperMarketModeBody,
     authorization: str | None = Header(default=None),
-    market: str | None = Query(default=None, description="예약: domestic | us"),
+    market: str | None = Query(default=None, description="domestic | us"),
 ) -> dict[str, object]:
-    _ = market
     user = _paper_user(authorization)
-    return get_paper_session_controller().set_paper_market_mode(user.id, body.manual_market_mode)
+    ctrl = get_paper_session_controller()
+    if _has_market_hub(ctrl):
+        return ctrl.set_paper_market_mode(user.id, body.manual_market_mode, market=market)  # type: ignore[call-arg]
+    return ctrl.set_paper_market_mode(user.id, body.manual_market_mode)  # type: ignore[call-arg]
