@@ -347,7 +347,7 @@ class Settings(BaseSettings):
             "final_betting_enabled",
         ),
     )
-    paper_final_betting_entry_start_hhmm: str = Field(default="151000", alias="PAPER_FINAL_BETTING_ENTRY_START_HHMM")
+    paper_final_betting_entry_start_hhmm: str = Field(default="143000", alias="PAPER_FINAL_BETTING_ENTRY_START_HHMM")
     paper_final_betting_entry_end_hhmm: str = Field(default="151800", alias="PAPER_FINAL_BETTING_ENTRY_END_HHMM")
     paper_final_betting_max_new_positions: int = Field(default=3, ge=1, le=10, alias="PAPER_FINAL_BETTING_MAX_NEW_POSITIONS")
     paper_final_betting_max_capital_per_position_pct: float = Field(

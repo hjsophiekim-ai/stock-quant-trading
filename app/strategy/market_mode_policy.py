@@ -65,31 +65,30 @@ def compose_effective_policy(*, active_mode: MarketMode, cfg: Settings) -> dict[
         "cooldown_scale": 1.0,
     }
     if active_mode == "aggressive":
-        # Meaningfully wider participation vs neutral (not cosmetic): softer index tape gates,
-        # larger rank pool / position budget, easier flow / rebound gates. Strong KOSPI *days*
-        # get an additional overlay in `final_betting_v1_strategy` after same-day KOSPI return is known.
+        # Substantially more aggressive for final_betting_v1: much softer gates, larger budget,
+        # significantly easier entry thresholds while keeping core safety
         fb = {
             **base_fb,
-            "us_night_hard_delta": -0.42,
-            "kospi_hard_delta": -0.45,
-            "us_soft_delta": -0.22,
-            "kospi_soft_delta": -0.28,
-            "rank_pool_delta": 4,
-            "max_new_positions_delta": 2,
-            "rebound_score_delta": -0.14,
-            "weak_rsi_max_delta": 5.0,
-            "late_plunge_pct_delta": 0.55,
-            "auction_instability_delta": 0.35,
-            "day_high_zone_pct_delta": -3.2,
-            "index_kospi_vs_ema5_block_relax": 0.22,
-            "min_hits_weak_flow_delta": -2,
-            "min_hits_tv_spike_delta": -2,
-            "max_spread_pct_floor": 0.68,
-            "min_trade_value_mult": 0.88,
-            "size_mult": 1.12,
-            "min_alloc_pct_delta": -3.0,
-            "max_capital_per_position_pct_delta": 3.0,
-            "cooldown_scale": 0.88,
+            "us_night_hard_delta": -0.58,  # Much softer US night gate (was -0.42)
+            "kospi_hard_delta": -0.65,    # Much softer KOSPI gate (was -0.45)
+            "us_soft_delta": -0.35,        # Softer soft gate (was -0.22)
+            "kospi_soft_delta": -0.42,     # Softer soft gate (was -0.28)
+            "rank_pool_delta": 6,           # Larger ranking pool (was 4)
+            "max_new_positions_delta": 3,    # More positions allowed (was 2)
+            "rebound_score_delta": -0.22,   # Much easier rebound entry (was -0.14)
+            "weak_rsi_max_delta": 8.0,      # Higher RSI tolerance (was 5.0)
+            "late_plunge_pct_delta": 0.75,   # More plunge tolerance (was 0.55)
+            "auction_instability_delta": 0.45, # More auction tolerance (was 0.35)
+            "day_high_zone_pct_delta": -4.5,  # Easier high zone requirement (was -3.2)
+            "index_kospi_vs_ema5_block_relax": 0.35, # More EMA block relaxation (was 0.22)
+            "min_hits_weak_flow_delta": -3,   # Lower hit requirements (was -2)
+            "min_hits_tv_spike_delta": -2,    # Lower TV spike requirements (was -2)
+            "max_spread_pct_floor": 0.75,      # Wider spread tolerance (was 0.68)
+            "min_trade_value_mult": 0.82,     # Lower trade value threshold (was 0.88)
+            "size_mult": 1.18,                 # Larger position sizes (was 1.12)
+            "min_alloc_pct_delta": -4.0,       # Lower minimum allocation (was -3.0)
+            "max_capital_per_position_pct_delta": 4.5, # Larger max per position (was 3.0)
+            "cooldown_scale": 0.82,            # Faster cooldown recovery (was 0.88)
         }
     elif active_mode == "defensive":
         fb = {

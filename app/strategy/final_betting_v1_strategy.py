@@ -672,11 +672,44 @@ class FinalBettingV1Strategy(BaseStrategy):
                 )
 
         # --- entries (당일 종가 직전) ---
+        # Enhanced entry window: 14:30-14:59 early, 15:00-15:18 core, after 15:18 closed
+        early_close_start = time(14, 30)
+        early_close_end = time(14, 59)
+        core_close_start = time(15, 0)
+        core_close_end = time(15, 18)
+        final_auction_start = time(15, 18)
+        
+        current_kst_hhmm = now.strftime("%H%M")
+        entry_window_open = False
+        entry_window_label = "closed"
+        early_close_betting_window = False
+        core_close_betting_window = False
+        final_auction_window = False
+        
+        if sess == "regular":
+            if early_close_start <= now.time() <= early_close_end:
+                entry_window_open = True
+                entry_window_label = "early_close_betting"
+                early_close_betting_window = True
+            elif core_close_start <= now.time() <= core_close_end:
+                entry_window_open = True
+                entry_window_label = "core_close_betting"
+                core_close_betting_window = True
+            elif now.time() >= final_auction_start:
+                entry_window_label = "final_auction_closed"
+                final_auction_window = True
+        
+        # Legacy compatibility: use original entry window logic
         in_entry_window = sess == "regular" and t_entry0 <= now.time() <= t_entry1
-        if not in_entry_window:
-            self.last_intraday_signal_breakdown["entry_window"] = "closed"
-        else:
-            self.last_intraday_signal_breakdown["entry_window"] = "open"
+        
+        # Enhanced diagnostics
+        self.last_intraday_signal_breakdown["entry_window_open"] = entry_window_open
+        self.last_intraday_signal_breakdown["entry_window_label"] = entry_window_label
+        self.last_intraday_signal_breakdown["current_kst_hhmm"] = current_kst_hhmm
+        self.last_intraday_signal_breakdown["early_close_betting_window"] = early_close_betting_window
+        self.last_intraday_signal_breakdown["core_close_betting_window"] = core_close_betting_window
+        self.last_intraday_signal_breakdown["final_auction_window"] = final_auction_window
+        self.last_intraday_signal_breakdown["entry_window"] = "open" if in_entry_window else "closed"
 
         if self.risk_halt_new_entries:
             self.last_intraday_signal_breakdown["blocked"] = "daily_loss_halt"
@@ -685,7 +718,58 @@ class FinalBettingV1Strategy(BaseStrategy):
             self.last_intraday_signal_breakdown["blocked"] = "two_loss_days_rest"
             self.last_intraday_signal_breakdown["rest_until_kst_date"] = rest_until
             return signals
-        if not market_filter_ok_effective:
+        # Enhanced market filter with aggressive mode relaxations
+        market_filter_ok_effective_enhanced = market_filter_ok_effective
+        market_filter_penalty_applied = False
+        reduced_size_due_to_market_filter = False
+        market_filter_override_applied = False
+        
+        if not market_filter_ok_effective and market_filter_ready:
+            market_mode_active = mm_snap.get("market_mode_active", "").lower()
+            if market_mode_active == "aggressive":
+                # In aggressive mode, allow reduced-size entry for borderline market conditions
+                if (soft.market_regime in ("neutral", "mild_bullish", "mild_bearish") and 
+                    us_night_proxy_ret is not None and kospi_day_ret is not None):
+                    # Check if market is not clearly bad
+                    us_margin = (us_night_proxy_ret - us_s) / max(abs(us_s), 0.1)
+                    kp_margin = (kospi_day_ret - kp_s) / max(abs(kp_s), 0.1)
+                    if us_margin >= -0.3 and kp_margin >= -0.5:  # Within 30%/50% of soft thresholds
+                        market_filter_ok_effective_enhanced = True
+                        market_filter_penalty_applied = True
+                        reduced_size_due_to_market_filter = True
+                        market_filter_override_applied = True
+                        self.last_intraday_signal_breakdown["market_filter_override_reason"] = "aggressive_borderline_market"
+        
+        self.last_intraday_signal_breakdown["market_filter_ok_effective_enhanced"] = market_filter_ok_effective_enhanced
+        self.last_intraday_signal_breakdown["market_filter_penalty_applied"] = market_filter_penalty_applied
+        self.last_intraday_signal_breakdown["reduced_size_due_to_market_filter"] = reduced_size_due_to_market_filter
+        self.last_intraday_signal_breakdown["market_filter_override_applied"] = market_filter_override_applied
+        
+        # Add fb_hit_thresholds diagnostics even if blocked early
+        market_mode_active = mm_snap.get("market_mode_active", "").lower()
+        is_aggressive = market_mode_active == "aggressive"
+        min_weak_hits = max(1, 2 + int(fbp.get("min_hits_weak_flow_delta", 0) or 0))
+        min_tv_hits = max(2, 3 + int(fbp.get("min_hits_tv_spike_delta", 0) or 0))
+        effective_min_hits = min_weak_hits
+        if is_aggressive:
+            effective_min_hits = max(1, min_weak_hits - 1)
+        
+        self.last_intraday_signal_breakdown["fb_hit_thresholds"] = {
+            "min_weak_hits": min_weak_hits,
+            "min_tv_spike_hits": min_tv_hits,
+            "weak_rsi_max": _fb_clamp(
+                float(getattr(cfg, "paper_final_betting_weak_close_rsi_max", 74.0))
+                + float(fbp.get("weak_rsi_max_delta", 0.0)),
+                58.0,
+                80.0,
+            ),
+            "effective_min_hits": effective_min_hits,
+            "rebound_core_active": False,
+            "late_recovery_path_active": False,
+            "aggressive_entry_relaxation_applied": is_aggressive,
+        }
+        
+        if not market_filter_ok_effective_enhanced:
             self.last_intraday_signal_breakdown["blocked"] = "market_filter_blocked_1430"
             return signals
         # 신규 진입: soft 국면 entry_allowed + (고변동 레거시는 compute_soft_regime 에서 이미 차단).
@@ -956,7 +1040,10 @@ class FinalBettingV1Strategy(BaseStrategy):
                 )
                 market_cap_ok = market_cap <= 0.0 or market_cap >= 50_000_000_000.0
 
-                # 기존 게이트보다 완화: 요청한 룰 핵심만 남기고 과도한 보조 게이트 제거.
+                # Enhanced aggressive mode: more permissive entry logic
+                market_mode_active = mm_snap.get("market_mode_active", "").lower()
+                is_aggressive = market_mode_active == "aggressive"
+                
                 hits = sum([m_ok, a_ok, close_above, in_high_zone, rel_ok])
                 close_strength = (
                     0.25 * (1.0 if close_above else 0.0)
@@ -964,7 +1051,35 @@ class FinalBettingV1Strategy(BaseStrategy):
                     + 0.25 * min(1.0, max(0.0, (last_close - day_lo) / max(day_hi - day_lo, 1e-9)))
                     + 0.25 * rel_score
                 )
-                hits_eff = int(hits) + (1 if entry_rebound_core and m_ok else 0)
+                
+                # Enhanced rebound and late recovery weighting
+                rebound_core_active = entry_rebound_core and float(rebound_info.get("final_betting_quality_score", 0)) >= rmin
+                late_recovery_path_active = flow_ok and (now.time() >= time(14, 50)) and last_close >= day_vwap_last * 0.995
+                
+                # Base hit calculation
+                hits_eff = int(hits)
+                
+                # Aggressive mode boosters
+                if is_aggressive:
+                    # Rebound core gets more weight in aggressive mode
+                    if rebound_core_active:
+                        hits_eff += 2  # Was +1, now +2
+                    
+                    # Late recovery path gets more weight
+                    if late_recovery_path_active:
+                        hits_eff += 1
+                    
+                    # Strong close reclaim/high-zone reclaim counts more
+                    if close_above and in_high_zone:
+                        hits_eff += 1
+                    
+                    # Controlled bearish-close rebound candidates pass more often
+                    if rebound_core_active and str(rebound_info.get("final_betting_bearish_close_pattern")) == "pattern_B":
+                        hits_eff += 1
+                else:
+                    # Neutral mode logic (original)
+                    hits_eff += (1 if entry_rebound_core and m_ok else 0)
+                
                 blocked = ""
                 tv_sym = float(liq["acml_tr_pbmn"]) if liq else 0.0
                 trade_value_ok = tv_sym >= 10_000_000_000.0
@@ -983,10 +1098,23 @@ class FinalBettingV1Strategy(BaseStrategy):
                 )
                 min_weak_hits = max(1, 2 + int(fbp.get("min_hits_weak_flow_delta", 0) or 0))
                 min_tv_hits = max(2, 3 + int(fbp.get("min_hits_tv_spike_delta", 0) or 0))
+                
+                # Effective minimum hits based on mode (moved after min_weak_hits is defined)
+                effective_min_hits = min_weak_hits
+                if is_aggressive:
+                    effective_min_hits = max(1, min_weak_hits - 1)  # Lower threshold by 1 in aggressive mode
+                    if rebound_core_active or late_recovery_path_active:
+                        effective_min_hits = max(1, effective_min_hits - 1)  # Additional reduction for strong candidates
+                
+                # Enhanced diagnostics for aggressive mode
                 self.last_intraday_signal_breakdown["fb_hit_thresholds"] = {
                     "min_weak_hits": min_weak_hits,
                     "min_tv_spike_hits": min_tv_hits,
                     "weak_rsi_max": weak_rsi_max,
+                    "effective_min_hits": effective_min_hits,
+                    "rebound_core_active": rebound_core_active,
+                    "late_recovery_path_active": late_recovery_path_active,
+                    "aggressive_entry_relaxation_applied": is_aggressive,
                 }
                 net_buy_rank_ok_eff = bool(net_buy_rank_ok) or bool(entry_rebound_core and flow_ok)
                 if rsi14 >= weak_rsi_max and not entry_rebound_core:
@@ -1005,10 +1133,15 @@ class FinalBettingV1Strategy(BaseStrategy):
                     blocked = "day_return_out_of_range"
                 elif not candle_ok:
                     blocked = "candle_pattern_fail"
-                elif hits_eff < min_weak_hits and not flow_ok and not entry_rebound_core:
+                elif hits_eff < effective_min_hits and not flow_ok and not entry_rebound_core:
                     blocked = "signals_weak"
                 elif not tv_spike_ok and hits_eff < min_tv_hits and not entry_rebound_core:
-                    blocked = "trade_value_not_2x_avg5"
+                    # In aggressive mode, slightly relax TV spike requirement for strong candidates
+                    if is_aggressive and (rebound_core_active or late_recovery_path_active) and hits_eff >= effective_min_hits:
+                        # Allow borderline TV spike in aggressive mode for strong candidates
+                        pass
+                    else:
+                        blocked = "trade_value_not_2x_avg5"
                 eff_sl_blk, eff_tp_blk, atr_blend_blk = blend_stop_tp_with_atr(
                     fixed_stop_pct=float(cfg.paper_final_betting_stop_loss_pct),
                     fixed_tp_pct=float(cfg.paper_final_betting_target_pct),
@@ -1184,6 +1317,17 @@ class FinalBettingV1Strategy(BaseStrategy):
             q_risk = int(risk_q)
             q_min = max(1, int((eq * (min_pct / 100.0)) / max(px, 1e-9))) if eq > 0 else 1
             feasible = min(q_risk, q_cap_sh)
+            
+            # Enhanced allocation logic with aggressive mode relaxations
+            size_reduction_factor = 1.0
+            if reduced_size_due_to_market_filter:
+                size_reduction_factor = 0.75  # Reduce size by 25% for market filter penalty
+            elif is_aggressive and market_filter_penalty_applied:
+                size_reduction_factor = 0.85  # Smaller reduction for aggressive mode
+            
+            # Apply size reduction
+            feasible_reduced = int(feasible * size_reduction_factor)
+            
             alloc_diag: dict[str, Any] = {
                 "final_betting_min_allocation_pct": min_pct,
                 "final_betting_max_capital_per_position_pct": max_pct,
@@ -1191,6 +1335,8 @@ class FinalBettingV1Strategy(BaseStrategy):
                 "final_betting_q_risk": int(q_risk),
                 "final_betting_q_cap_shares": int(q_cap_sh),
                 "final_betting_feasible_shares": int(feasible),
+                "final_betting_feasible_reduced_shares": int(feasible_reduced),
+                "size_reduction_factor": round(size_reduction_factor, 3),
             }
             if max_pct + 1e-9 < min_pct:
                 diag = {
@@ -1198,23 +1344,33 @@ class FinalBettingV1Strategy(BaseStrategy):
                     "strategy": "final_betting_v1",
                     "entered": False,
                     "blocked_reason": "config_max_pct_lt_min_allocation",
+                    "final_betting_entry_block_reason": "config_max_pct_lt_min_allocation",
                     **alloc_diag,
                 }
                 self.last_diagnostics.append(diag)
                 continue
-            if feasible < q_min:
+            if feasible_reduced < q_min:
                 diag = {
                     "symbol": sym,
                     "strategy": "final_betting_v1",
                     "entered": False,
                     "blocked_reason": "insufficient_budget_for_min_allocation",
-                    "final_betting_allocation_blocked_reason": "risk_or_cap_below_min_shares",
+                    "final_betting_entry_block_reason": "risk_or_cap_below_min_shares",
+                    "final_betting_position_alloc_pct": round((feasible_reduced * px / eq * 100.0) if eq > 0 else 0.0, 3),
                     **alloc_diag,
                 }
                 self.last_diagnostics.append(diag)
                 continue
-            q = int(feasible)
+            q = int(feasible_reduced)
             notional_pct = (q * px / eq * 100.0) if eq > 0 else 0.0
+            
+            # Enhanced final diagnostics
+            final_betting_entry_block_reason = ""
+            if notional_pct < min_pct:
+                final_betting_entry_block_reason = "allocation_below_minimum"
+            
+            self.last_intraday_signal_breakdown["final_betting_position_alloc_pct"] = round(float(notional_pct), 3)
+            self.last_intraday_signal_breakdown["final_betting_entry_block_reason"] = final_betting_entry_block_reason
             ref_close = last_close
             self.pending_carry_updates[sym] = {
                 "entry_kst_date": now.strftime("%Y%m%d"),
