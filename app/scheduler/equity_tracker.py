@@ -53,7 +53,7 @@ class EquityTracker:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(asdict(self._state), indent=2), encoding="utf-8")
 
-    def pnl_snapshot(self, equity: float) -> tuple[float, float]:
+    def pnl_snapshot(self, equity: float, *, valid: bool = True) -> tuple[float, float]:
         """
         Returns (daily_pnl_pct, total_pnl_pct_vs_baseline).
         Negative values mean loss vs baseline / day open.
@@ -61,6 +61,9 @@ class EquityTracker:
         self.load()
         today = self._today_kst()
         now_iso = datetime.now(_KST).isoformat()
+
+        if not valid:
+            return 0.0, 0.0
 
         if self._state is None:
             self._state = EquityTrackerState(

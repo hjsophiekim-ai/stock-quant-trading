@@ -4,14 +4,16 @@ from dataclasses import dataclass, field
 import logging
 from datetime import datetime, timezone
 
-from app.brokers.base_broker import BaseBroker, Fill, OpenOrder, PositionView
+from app.brokers.base_broker import AccountEquitySnapshot, BaseBroker, Fill, OpenOrder, PositionView
 from app.orders.models import OrderRequest, OrderResult, OrderStatus
 from app.clients.kis_client import KISClient, KISClientError
 from app.clients.kis_mask import format_masked_payload_json
 from app.clients.kis_parsers import (
+    _row_pick,
     fills_from_overseas_ccnl_payload,
     open_orders_from_overseas_nccs_payload,
     overseas_balance_cash_usd,
+    output2_rows,
     positions_from_overseas_balance_payload,
 )
 
@@ -72,6 +74,65 @@ class KisUsPaperBroker(BaseBroker):
             tr_crcy_cd=self.tr_crcy_cd,
         )
         return overseas_balance_cash_usd(payload)
+
+    def get_account_equity_snapshot(self) -> AccountEquitySnapshot:
+        payload = self.kis_client.get_overseas_inquire_balance(
+            account_no=self.account_no,
+            account_product_code=self.account_product_code,
+            ovrs_excg_cd=self.default_ovrs_excg_cd,
+            tr_crcy_cd=self.tr_crcy_cd,
+        )
+
+        def _f(v: object) -> float | None:
+            if v is None or str(v).strip() == "":
+                return None
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        orderable_cash = float(overseas_balance_cash_usd(payload) or 0.0)
+        o2 = output2_rows(payload)
+        row2 = o2[0] if o2 else {}
+        cash_total = _f(_row_pick(row2, "tot_dncl_amt", "TOT_DNCL_AMT"))
+        source = "KIS:tot_dncl_amt" if cash_total is not None and cash_total > 0 else ""
+
+        reserved = 0.0
+        open_buy = 0
+        open_buy_missing_price = 0
+        reserved_method = "skipped"
+        if not source:
+            for o in self.get_open_orders():
+                if o.side != "buy":
+                    continue
+                if o.remaining_quantity <= 0:
+                    continue
+                open_buy += 1
+                if o.price is None or float(o.price) <= 0:
+                    open_buy_missing_price += 1
+                    continue
+                reserved += float(o.remaining_quantity) * float(o.price)
+            reserved_method = "open_orders_limit_price" if open_buy_missing_price == 0 else "open_orders_partial_missing_price"
+        else:
+            reserved_method = "skipped_cash_total_available"
+
+        raw: dict[str, object] = {}
+        for k in ("tot_dncl_amt", "ord_psbl_frcr_amt", "ovrs_ord_psbl_frcr_amt", "frcr_drwg_psbl_amt_1"):
+            v = _row_pick(row2, k, k.upper())
+            if v is not None and str(v).strip() != "":
+                raw[k] = v
+
+        return AccountEquitySnapshot(
+            orderable_cash=orderable_cash,
+            cash_total=float(cash_total) if cash_total is not None and cash_total > 0 else None,
+            reserved_cash_open_buys=float(reserved),
+            positions_market_value=None,
+            source_of_truth=source or "orderable+reserved",
+            open_buy_order_count=int(open_buy),
+            open_buy_order_missing_price_count=int(open_buy_missing_price),
+            reserved_cash_estimation_method=reserved_method,
+            raw_balance_summary={**raw},
+        )
 
     def get_positions(self) -> list[PositionView]:
         payload = self.kis_client.get_overseas_inquire_balance(

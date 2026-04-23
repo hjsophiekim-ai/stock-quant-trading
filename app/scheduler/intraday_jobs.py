@@ -188,7 +188,11 @@ class IntradaySchedulerJobs:
 
         snapshot_gate = self._build_risk_snapshot(universe_tf)
         daily_pct = float(snapshot_gate.daily_pnl_pct)
-        risk_halt = (not self.manual_override_enabled) and (daily_pct <= -float(cfg.paper_intraday_max_daily_loss_pct))
+        risk_halt = (
+            (not self.manual_override_enabled)
+            and bool(getattr(snapshot_gate, "equity_data_ok", True))
+            and (daily_pct <= -float(cfg.paper_intraday_max_daily_loss_pct))
+        )
         self.strategy.intraday_state = state
         self.strategy.quote_by_symbol = quote_by_symbol
         self.strategy.risk_halt_new_entries = risk_halt
@@ -557,15 +561,21 @@ class IntradaySchedulerJobs:
         return rep
 
     def _build_risk_snapshot(self, price_df: pd.DataFrame) -> RiskSnapshot:
-        cash = self.broker.get_cash()
+        eq = self.broker.get_account_equity_snapshot()
+        cash_for_equity = (
+            float(eq.cash_total)
+            if eq.cash_total is not None and float(eq.cash_total) > 0
+            else float(eq.orderable_cash) + float(eq.reserved_cash_open_buys)
+        )
         positions = self.broker.get_positions()
         position_values: dict[str, float] = {}
         for pos in positions:
             latest_price = self._latest_close_safe(price_df, pos.symbol)
             position_values[pos.symbol] = latest_price * pos.quantity
-        equity = cash + sum(position_values.values())
+        equity = cash_for_equity + sum(position_values.values())
+        equity_data_ok = bool(eq.cash_total is not None) or int(eq.open_buy_order_missing_price_count or 0) == 0
         if self.equity_tracker is not None:
-            daily_pnl_pct, total_pnl_pct = self.equity_tracker.pnl_snapshot(equity)
+            daily_pnl_pct, total_pnl_pct = self.equity_tracker.pnl_snapshot(equity, valid=equity_data_ok)
         else:
             daily_pnl_pct = 0.0
             total_pnl_pct = 0.0
@@ -575,6 +585,13 @@ class IntradaySchedulerJobs:
             equity=equity if equity > 0 else 1.0,
             market_filter_ok=True,
             position_values=position_values,
+            equity_basis=str(eq.source_of_truth or ""),
+            equity_diag={
+                "orderable_cash": float(eq.orderable_cash),
+                "cash_total": float(eq.cash_total or 0.0),
+                "reserved_cash_open_buys": float(eq.reserved_cash_open_buys),
+            },
+            equity_data_ok=equity_data_ok,
         )
 
     def _portfolio_df_from_broker(self) -> pd.DataFrame:
@@ -600,10 +617,16 @@ class IntradaySchedulerJobs:
         filtered_orders: list[OrderRequest] | None = None,
     ) -> dict[str, object]:
         _ = filtered_orders
-        cash = self.broker.get_cash()
+        eq = self.broker.get_account_equity_snapshot()
+        cash_for_equity = (
+            float(eq.cash_total)
+            if eq.cash_total is not None and float(eq.cash_total) > 0
+            else float(eq.orderable_cash) + float(eq.reserved_cash_open_buys)
+        )
+        cash = float(eq.orderable_cash)
         positions = self.broker.get_positions()
         market_value = sum(self._latest_close_safe(price_df, p.symbol) * p.quantity for p in positions)
-        equity_now = cash + market_value
+        equity_now = cash_for_equity + market_value
         equity_series = pd.Series([self.broker.initial_cash, equity_now], index=["start", "close"], dtype="float64")
         daily_ret = float(compute_daily_return_pct(equity_series).iloc[-1])
         cumulative_ret = float(compute_cumulative_return_pct(equity_series).iloc[-1])
@@ -616,6 +639,13 @@ class IntradaySchedulerJobs:
             "daily_return_pct": round(daily_ret, 4),
             "cumulative_return_pct": round(cumulative_ret, 4),
             "position_count": len(positions),
+            "risk_equity_basis": str(eq.source_of_truth or ""),
+            "orderable_cash": round(float(eq.orderable_cash), 2),
+            "cash_total": round(float(eq.cash_total or 0.0), 2),
+            "reserved_cash_open_buys": round(float(eq.reserved_cash_open_buys), 2),
+            "open_buy_order_count": int(eq.open_buy_order_count or 0),
+            "open_buy_order_missing_price_count": int(eq.open_buy_order_missing_price_count or 0),
+            "reserved_cash_estimation_method": str(eq.reserved_cash_estimation_method or ""),
         }
 
     def _latest_close_safe(self, price_df: pd.DataFrame, symbol: str) -> float:

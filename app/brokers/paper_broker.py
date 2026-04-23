@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from typing import Callable
 
-from app.brokers.base_broker import BaseBroker, Fill, OpenOrder, PositionView
+from app.brokers.base_broker import AccountEquitySnapshot, BaseBroker, Fill, OpenOrder, PositionView
 from app.orders.models import OrderRequest, OrderResult, OrderStatus
 
 
@@ -22,6 +22,19 @@ class PaperBroker(BaseBroker):
 
     def get_cash(self) -> float:
         return self._cash
+
+    def get_account_equity_snapshot(self) -> AccountEquitySnapshot:
+        return AccountEquitySnapshot(
+            orderable_cash=float(self._cash),
+            cash_total=float(self._cash),
+            reserved_cash_open_buys=0.0,
+            positions_market_value=None,
+            source_of_truth="paper",
+            open_buy_order_count=0,
+            open_buy_order_missing_price_count=0,
+            reserved_cash_estimation_method="none",
+            raw_balance_summary={},
+        )
 
     def get_positions(self) -> list[PositionView]:
         return list(self._positions.values())

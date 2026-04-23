@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 import logging
 from typing import Any
 
-from app.brokers.base_broker import BaseBroker, Fill, OpenOrder, PositionView
+from app.brokers.base_broker import AccountEquitySnapshot, BaseBroker, Fill, OpenOrder, PositionView
 from app.clients.kis_client import KISClient, KISClientError
 from app.clients.kis_parsers import (
     normalized_fills_from_ccld_payload,
@@ -54,6 +54,20 @@ class LiveBroker(BaseBroker):
     def get_cash(self) -> float:
         payload = self.kis_client.get_balance(self.account_no, self.account_product_code)
         return self._extract_cash(payload)
+
+    def get_account_equity_snapshot(self) -> AccountEquitySnapshot:
+        cash = float(self.get_cash() or 0.0)
+        return AccountEquitySnapshot(
+            orderable_cash=cash,
+            cash_total=cash,
+            reserved_cash_open_buys=0.0,
+            positions_market_value=None,
+            source_of_truth="live",
+            open_buy_order_count=0,
+            open_buy_order_missing_price_count=0,
+            reserved_cash_estimation_method="none",
+            raw_balance_summary={},
+        )
 
     def get_positions(self) -> list[PositionView]:
         payload = self.kis_client.get_positions(self.account_no, self.account_product_code)

@@ -24,6 +24,9 @@ class RiskSnapshot:
     todays_new_entries: int = 0
     trading_cooldown_until: datetime | None = None
     cooldown_until: dict[str, datetime] = field(default_factory=dict)
+    equity_basis: str = ""
+    equity_diag: dict[str, float] = field(default_factory=dict)
+    equity_data_ok: bool = True
 
 
 @dataclass(frozen=True)

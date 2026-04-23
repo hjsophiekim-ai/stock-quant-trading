@@ -1,7 +1,7 @@
 ﻿from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from app.orders.models import OrderRequest, OrderResult
 
@@ -35,6 +35,19 @@ class Fill:
     filled_at: datetime
 
 
+@dataclass(frozen=True)
+class AccountEquitySnapshot:
+    orderable_cash: float
+    cash_total: float | None
+    reserved_cash_open_buys: float
+    positions_market_value: float | None
+    source_of_truth: str
+    open_buy_order_count: int
+    open_buy_order_missing_price_count: int
+    reserved_cash_estimation_method: str
+    raw_balance_summary: dict[str, Any]
+
+
 class BaseBroker(ABC):
     @abstractmethod
     def get_cash(self) -> float:
@@ -58,4 +71,7 @@ class BaseBroker(ABC):
 
     @abstractmethod
     def get_fills(self) -> list[Fill]:
+        raise NotImplementedError
+
+    def get_account_equity_snapshot(self) -> AccountEquitySnapshot:
         raise NotImplementedError

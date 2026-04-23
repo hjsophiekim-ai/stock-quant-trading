@@ -98,6 +98,7 @@ $npmCache = Join-Path $env:TEMP "npm-cache-sq-release"
 New-Item -ItemType Directory -Force -Path $npmCache | Out-Null
 
 $setupExe = $null
+$portableDir = $null
 if ($DesktopExePath -and (Test-Path -LiteralPath $DesktopExePath)) {
   $setupExe = Get-Item -LiteralPath $DesktopExePath
   Write-Host "[release] using existing installer: $($setupExe.FullName)" -ForegroundColor Cyan
@@ -119,15 +120,38 @@ if ($DesktopExePath -and (Test-Path -LiteralPath $DesktopExePath)) {
     $env:BACKEND_URL = $BackendUrl
     $env:APP_ENV = $AppEnv
     npm run build:win
-    $candidates = @(Get-ChildItem -Path (Join-Path $work "dist") -Filter "*Setup*.exe" -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike "*uninstall*" })
-    if ($candidates.Count -lt 1) { throw "No *Setup*.exe found under dist after build." }
-    # 임시 작업 폴더 삭제 전에 저장소 dist로 복사 (finally에서 $work 가 지워지면 exe 경로가 무효화됨)
+    $buildExit = $LASTEXITCODE
     $distLocalEarly = Join-Path $root "apps\desktop\dist"
     New-Item -ItemType Directory -Force -Path $distLocalEarly | Out-Null
-    $copiedSetup = Join-Path $distLocalEarly $candidates[0].Name
-    Copy-Item -LiteralPath $candidates[0].FullName -Destination $copiedSetup -Force
-    $setupExe = Get-Item -LiteralPath $copiedSetup
-    Write-Host "[release] saved installer to $($setupExe.FullName)" -ForegroundColor Cyan
+
+    $candidates = @(Get-ChildItem -Path (Join-Path $work "dist") -Filter "*Setup*.exe" -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike "*uninstall*" })
+    $bestSetup = $null
+    if ($candidates.Count -ge 1) {
+      $bestSetup = $candidates | Sort-Object Length -Descending | Select-Object -First 1
+    }
+
+    $minInstallerBytes = 10000000
+    $setupOk = ($buildExit -eq 0) -and ($bestSetup -ne $null) -and ($bestSetup.Length -ge $minInstallerBytes)
+    if ($setupOk) {
+      # 임시 작업 폴더 삭제 전에 저장소 dist로 복사 (finally에서 $work 가 지워지면 exe 경로가 무효화됨)
+      $copiedSetup = Join-Path $distLocalEarly $bestSetup.Name
+      Copy-Item -LiteralPath $bestSetup.FullName -Destination $copiedSetup -Force
+      $setupExe = Get-Item -LiteralPath $copiedSetup
+      Write-Host "[release] saved installer to $($setupExe.FullName)" -ForegroundColor Cyan
+    } else {
+      $portableCandidate = Join-Path $work "dist\\win-unpacked"
+      if (Test-Path -LiteralPath $portableCandidate) {
+        $portableOut = Join-Path $distLocalEarly "win-unpacked"
+        if (Test-Path $portableOut) { Remove-Item -Recurse -Force $portableOut -ErrorAction SilentlyContinue }
+        Copy-Item -LiteralPath $portableCandidate -Destination $portableOut -Recurse -Force
+        $portableDir = Get-Item -LiteralPath $portableOut
+        $diag = ""
+        if ($bestSetup -ne $null) { $diag = " (setup exe bytes=$($bestSetup.Length))" }
+        Write-Warning "[release] NSIS installer build did not produce a valid installer (exit=$buildExit)$diag — packaging portable win-unpacked instead."
+      } else {
+        throw "Desktop build failed and no win-unpacked output found. buildExit=$buildExit"
+      }
+    }
   } finally {
     Pop-Location
     if ($work -and (Test-Path $work)) {
@@ -144,7 +168,9 @@ $codeSignCert = $null
 $signerCer = $null
 try {
   $codeSignCert = Get-RequestedCodeSigningCert
-  if ($codeSignCert) {
+  if (-not $setupExe) {
+    Write-Host "[release] portable build (win-unpacked) — no installer signing step." -ForegroundColor Yellow
+  } elseif ($codeSignCert) {
     Try-SignExecutable -ExePath $setupExe.FullName -Cert $codeSignCert
     $signerCer = Join-Path $deskStage "StockQuantDesktop-Signer.cer"
     Export-Certificate -Cert $codeSignCert -FilePath $signerCer | Out-Null
@@ -161,8 +187,18 @@ try {
   Write-Warning "[release] code signing failed: $($_.Exception.Message)"
 }
 
-Copy-Item -LiteralPath $setupExe.FullName -Destination $deskStage
-$exeName = $setupExe.Name
+$exeName = ""
+$isPortable = $false
+if ($setupExe) {
+  Copy-Item -LiteralPath $setupExe.FullName -Destination $deskStage
+  $exeName = $setupExe.Name
+} else {
+  $isPortable = $true
+  $portableFolder = Join-Path $deskStage "StockQuantDesktop"
+  if (Test-Path $portableFolder) { Remove-Item -Recurse -Force $portableFolder -ErrorAction SilentlyContinue }
+  Copy-Item -LiteralPath $portableDir.FullName -Destination $portableFolder -Recurse -Force
+  $exeName = "StockQuantDesktop\\StockQuantDesktop.exe"
+}
 
 $installBat = @"
 @echo off
@@ -185,7 +221,7 @@ if (Test-Path -LiteralPath ".\UNBLOCK-FILES.ps1") {
   & ".\UNBLOCK-FILES.ps1" | Out-Null
 }
 
-if (Test-Path -LiteralPath ".\StockQuantDesktop-Signer.cer") {
+if ((-not $isPortable) -and (Test-Path -LiteralPath ".\StockQuantDesktop-Signer.cer")) {
   try {
     Write-Host ""
     Write-Host "이 패키지에는 자체 서명 인증서(StockQuantDesktop-Signer.cer)가 포함되어 있습니다." -ForegroundColor Yellow
