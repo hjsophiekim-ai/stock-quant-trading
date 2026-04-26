@@ -16,6 +16,7 @@ from backend.app.core.config import BackendSettings, is_live_order_execution_con
 from backend.app.engine.live_prep_engine import compute_final_betting_exit_orders_live
 from backend.app.risk.audit import append_risk_event
 from backend.app.services.broker_secret_service import BrokerSecretService
+from backend.app.services.live_exec_session_store import LiveExecSessionStore
 from backend.app.services.live_sell_arm_store import SellOnlyArmStore, SellOnlyArmState
 
 logger = logging.getLogger("backend.app.engine.live_sell_only_loop")
@@ -89,18 +90,21 @@ def run_sell_only_tick(
     t1 = parse_krx_hhmm(cfg.live_prep_sell_only_window_end_hhmm)
     if not (t0 <= now.time() <= t1):
         return {"ok": True, "skipped": "outside_window", "now_kst": now.isoformat()}
-    if (cfg.execution_mode or "").strip().lower() != "live_manual_approval":
-        return {"ok": True, "skipped": "not_live_manual_approval", "execution_mode": cfg.execution_mode}
 
     armed = arm_store.list_enabled_for_date(today)
     if not armed:
         return {"ok": True, "skipped": "no_armed_users", "today_kst": today}
 
+    sess_store = LiveExecSessionStore(cfg.live_exec_sessions_store_json)
     max_orders = int(cfg.live_prep_sell_only_max_orders_per_tick)
     processed: list[dict[str, Any]] = []
     for a in armed:
         user_id = str(a.user_id or "")
         if not user_id:
+            continue
+        sess = sess_store.get_active(user_id)
+        if sess is None or (sess.execution_mode or "").strip().lower() != "live_manual_approval" or sess.strategy_id != "final_betting_v1":
+            processed.append({"user_id": user_id, "ok": True, "skipped": "no_active_final_betting_manual_session"})
             continue
         out = compute_final_betting_exit_orders_live(broker_service=broker_service, backend_settings=cfg, user_id=user_id)
         if not out.get("ok"):

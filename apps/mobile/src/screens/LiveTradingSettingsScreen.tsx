@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { Picker } from "@react-native-picker/picker";
 import { Button, SafeAreaView, ScrollView, Switch, Text, TextInput, View } from "react-native";
 
 import { authFetch } from "../lib/authFetch";
+import { DOMESTIC_STRATEGY_OPTIONS, type DomesticStrategyId, type MarketId } from "../types/trading";
 
 type Props = {
   backendUrl: string;
@@ -36,6 +38,46 @@ type LiquidationPlan = {
   items: Array<{ symbol: string; quantity: number; est_price?: number | null }>;
 };
 
+type LiveExecSession = {
+  session_id: string;
+  status: "running" | "stopped";
+  strategy_id: DomesticStrategyId;
+  market: MarketId;
+  execution_mode: "live_shadow" | "live_manual_approval";
+  started_at_utc: string;
+  last_tick_at_utc?: string | null;
+  last_error?: string | null;
+};
+
+type LiveExecStatus = {
+  ok: boolean;
+  session: LiveExecSession | null;
+  session_running: boolean;
+  supported_strategies: string[];
+  blocked?: { start_blockers?: string[]; submit_blockers?: string[] };
+  counts?: { final_betting_candidates?: number; final_betting_pending_approvals?: number };
+};
+
+type LiveCandidateItem = {
+  candidate_id: string;
+  status: string;
+  symbol: string;
+  side: "buy" | "sell";
+  strategy_id: string;
+  score?: number | null;
+  quantity?: number | null;
+  price?: number | null;
+  stop_loss_pct?: number | null;
+  rationale?: string | null;
+};
+
+const SAFE_LIVE_STRATEGIES: Array<DomesticStrategyId> = [
+  "final_betting_v1",
+  "scalp_rsi_flag_hf_v1",
+  "scalp_macd_rsi_3m_v1",
+  "swing_relaxed_v2",
+];
+
 export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
   const [status, setStatus] = useState<SafetyStatus>({
     trading_mode: "paper",
@@ -57,6 +99,11 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
   const [liqUseMarket, setLiqUseMarket] = useState(true);
   const [latestPlan, setLatestPlan] = useState<LiquidationPlan | null>(null);
   const [liqConfirm, setLiqConfirm] = useState("LIQUIDATE_ALL");
+  const [liveStrategyId, setLiveStrategyId] = useState<DomesticStrategyId>("final_betting_v1");
+  const [liveMarket, setLiveMarket] = useState<MarketId>("domestic");
+  const [liveExecMode, setLiveExecMode] = useState<"live_shadow" | "live_manual_approval">("live_shadow");
+  const [liveExecStatus, setLiveExecStatus] = useState<LiveExecStatus | null>(null);
+  const [finalBettingCandidates, setFinalBettingCandidates] = useState<LiveCandidateItem[]>([]);
 
   const refresh = async () => {
     const statusRes = await authFetch(backendUrl, `/api/live-trading/status`);
@@ -97,6 +144,22 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
     if (planRes.ok) {
       const p0 = Array.isArray(planData?.plans) && planData.plans.length ? planData.plans[0] : null;
       setLatestPlan(p0);
+    }
+
+    const execRes = await authFetch(backendUrl, `/api/live-exec/status`);
+    const execData = await execRes.json();
+    if (execRes.ok) {
+      setLiveExecStatus(execData);
+      const sess = execData?.session ?? null;
+      if (sess?.strategy_id) setLiveStrategyId(sess.strategy_id);
+      if (sess?.market) setLiveMarket(sess.market);
+      if (sess?.execution_mode) setLiveExecMode(sess.execution_mode);
+    }
+
+    const candRes = await authFetch(backendUrl, `/api/live-prep/candidates?strategy_id=final_betting_v1&limit=20`);
+    const candData = await candRes.json();
+    if (candRes.ok) {
+      setFinalBettingCandidates(Array.isArray(candData?.items) ? candData.items : []);
     }
   };
 
@@ -202,13 +265,191 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
     await refresh();
   };
 
+  const startLive = async () => {
+    const res = await authFetch(backendUrl, `/api/live-exec/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        strategy_id: liveStrategyId,
+        market: liveMarket,
+        execution_mode: liveExecMode,
+        actor: "mobile-user",
+        reason: reason || "start",
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setMsg(typeof data?.detail === "string" ? data.detail : JSON.stringify(data?.detail ?? data));
+      return;
+    }
+    setMsg("Live session started");
+    await refresh();
+  };
+
+  const stopLive = async () => {
+    const res = await authFetch(backendUrl, `/api/live-exec/stop`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        actor: "mobile-user",
+        reason: reason || "stop",
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setMsg(typeof data?.detail === "string" ? data.detail : JSON.stringify(data?.detail ?? data));
+      return;
+    }
+    setMsg("Live session stopped");
+    await refresh();
+  };
+
+  const tickLive = async () => {
+    const res = await authFetch(backendUrl, `/api/live-exec/tick`, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) {
+      setMsg(typeof data?.detail === "string" ? data.detail : JSON.stringify(data?.detail ?? data));
+      return;
+    }
+    const c = data?.counts ? JSON.stringify(data.counts) : "";
+    setMsg(`Tick OK ${c}`);
+    await refresh();
+  };
+
+  const approveCandidate = async (candidateId: string) => {
+    const res = await authFetch(backendUrl, `/api/live-prep/candidates/${candidateId}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actor: "mobile-user", reason: reason || "approve" }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setMsg(typeof data?.detail === "string" ? data.detail : JSON.stringify(data?.detail ?? data));
+      return;
+    }
+    setMsg("Approved");
+    await refresh();
+  };
+
+  const rejectCandidate = async (candidateId: string) => {
+    const res = await authFetch(backendUrl, `/api/live-prep/candidates/${candidateId}/reject`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actor: "mobile-user", reason: reason || "reject" }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setMsg(typeof data?.detail === "string" ? data.detail : JSON.stringify(data?.detail ?? data));
+      return;
+    }
+    setMsg("Rejected");
+    await refresh();
+  };
+
+  const submitCandidate = async (candidateId: string) => {
+    const res = await authFetch(backendUrl, `/api/live-prep/candidates/${candidateId}/submit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actor: "mobile-user", reason: reason || "submit" }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setMsg(typeof data?.detail === "string" ? data.detail : JSON.stringify(data?.detail ?? data));
+      return;
+    }
+    setMsg("Submitted");
+    await refresh();
+  };
+
   return (
     <SafeAreaView>
       <ScrollView style={{ padding: 12 }}>
-        <Text style={{ fontSize: 20, fontWeight: "bold" }}>Live Trading Settings</Text>
+        <Text style={{ fontSize: 20, fontWeight: "bold" }}>Live Trading</Text>
         <Text style={{ color: "#b91c1c", marginTop: 6 }}>
           경고: 실거래는 고위험입니다. 명시적 다중 승인 없이는 잠금 해제되지 않습니다.
         </Text>
+
+        <Text style={{ marginTop: 14, fontWeight: "bold" }}>실행 콘솔</Text>
+        <Text style={{ color: "#334155" }}>
+          Paper처럼 전략을 선택하고 Start/Stop/Tick으로 운영합니다. 자동 주문 실행 모드는 제공하지 않습니다.
+        </Text>
+        <Text style={{ marginTop: 8 }}>Session running: {liveExecStatus?.session_running ? "YES" : "NO"}</Text>
+        <Text>
+          Pending approvals: {String(liveExecStatus?.counts?.final_betting_pending_approvals ?? 0)} / Candidates:{" "}
+          {String(liveExecStatus?.counts?.final_betting_candidates ?? 0)}
+        </Text>
+        <Text style={{ marginTop: 8, fontWeight: "bold" }}>Strategy</Text>
+        <Picker selectedValue={liveStrategyId} onValueChange={(v) => setLiveStrategyId(v as DomesticStrategyId)}>
+          {DOMESTIC_STRATEGY_OPTIONS.filter((o) => SAFE_LIVE_STRATEGIES.includes(o.id as DomesticStrategyId)).map((o) => (
+            <Picker.Item key={o.id} label={o.label} value={o.id} />
+          ))}
+        </Picker>
+
+        <Text style={{ marginTop: 8, fontWeight: "bold" }}>Execution Mode</Text>
+        <Picker selectedValue={liveExecMode} onValueChange={(v) => setLiveExecMode(v as any)}>
+          <Picker.Item label="live_shadow" value="live_shadow" />
+          <Picker.Item label="live_manual_approval" value="live_manual_approval" />
+        </Picker>
+
+        <Text style={{ marginTop: 8, fontWeight: "bold" }}>Market</Text>
+        <Picker selectedValue={liveMarket} onValueChange={(v) => setLiveMarket(v as MarketId)}>
+          <Picker.Item label="domestic" value="domestic" />
+        </Picker>
+
+        <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
+          <Button title="Start" onPress={startLive} />
+          <Button title="Stop" onPress={stopLive} />
+          <Button title="Tick" onPress={tickLive} />
+        </View>
+        {Array.isArray(liveExecStatus?.blocked?.start_blockers) && liveExecStatus?.blocked?.start_blockers?.length ? (
+          <Text style={{ marginTop: 8, color: "#b91c1c" }}>
+            Start blocked: {"\n"}- {liveExecStatus.blocked.start_blockers.join("\n- ")}
+          </Text>
+        ) : null}
+        {Array.isArray(liveExecStatus?.blocked?.submit_blockers) && liveExecStatus?.blocked?.submit_blockers?.length ? (
+          <Text style={{ marginTop: 8, color: "#b91c1c" }}>
+            Live submit blocked: {"\n"}- {liveExecStatus.blocked.submit_blockers.join("\n- ")}
+          </Text>
+        ) : null}
+
+        {liveStrategyId === "final_betting_v1" ? (
+          <View style={{ marginTop: 16 }}>
+            <Text style={{ fontWeight: "bold" }}>final_betting 후보/승인</Text>
+            <Text style={{ color: "#334155" }}>
+              이 목록은 시스템이 코드 정의된 유니버스에서 계산한 후보입니다. 실주문은 수동 승인 없이는 제출되지 않습니다.
+            </Text>
+            <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
+              <Button title="Refresh Candidates" onPress={refresh} />
+              <Button title="Tick Now" onPress={tickLive} />
+            </View>
+            {finalBettingCandidates.length === 0 ? (
+              <Text style={{ marginTop: 8, color: "#334155" }}>후보 없음</Text>
+            ) : (
+              finalBettingCandidates.map((c) => (
+                <View
+                  key={c.candidate_id}
+                  style={{ borderWidth: 1, borderColor: "#cbd5e1", padding: 10, borderRadius: 8, marginTop: 8 }}
+                >
+                  <Text style={{ fontWeight: "bold" }}>
+                    {c.status} · {c.symbol} · {c.side}
+                  </Text>
+                  <Text style={{ color: "#334155" }}>
+                    qty={String(c.quantity ?? "-")} price={String(c.price ?? "-")} score={String(c.score ?? "-")} sl%=
+                    {String(c.stop_loss_pct ?? "-")}
+                  </Text>
+                  <Text style={{ color: "#334155" }}>{c.rationale ?? ""}</Text>
+                  <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
+                    <Button title="Approve" onPress={() => approveCandidate(c.candidate_id)} />
+                    <Button title="Reject" onPress={() => rejectCandidate(c.candidate_id)} />
+                    <Button title="Submit" onPress={() => submitCandidate(c.candidate_id)} />
+                  </View>
+                </View>
+              ))
+            )}
+          </View>
+        ) : null}
+
+        <Text style={{ marginTop: 16, fontWeight: "bold" }}>안전/잠금 상태</Text>
         <Text style={{ marginTop: 8 }}>Badge: {status.trading_badge.toUpperCase()}</Text>
         <Text>Mode: {status.trading_mode}</Text>
         <Text>Execution: {status.execution_mode ?? "-"}</Text>

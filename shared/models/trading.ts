@@ -90,6 +90,9 @@ export interface LiveTradingStatusResponse {
 export interface RuntimeSafetyValidationResponse {
   ok: boolean;
   blockers: string[];
+  blocker_details?: Array<{ code: string; message: string }>;
+  paper_readiness?: Record<string, unknown>;
+  kill_switch?: KillSwitchStatusResponse;
 }
 
 export interface KillSwitchStatusResponse {
@@ -100,4 +103,58 @@ export interface KillSwitchStatusResponse {
   total_loss_limit_pct: number;
   loss_limit_exceeded: boolean;
   message: string;
+}
+
+export type LiveMarket = "domestic";
+
+export interface LiveExecSession {
+  session_id: string;
+  user_id: string;
+  status: "running" | "stopped";
+  strategy_id: string;
+  market: LiveMarket;
+  execution_mode: "live_shadow" | "live_manual_approval";
+  started_at_utc: string;
+  stopped_at_utc?: string | null;
+  last_tick_at_utc?: string | null;
+  last_tick_summary?: Record<string, unknown>;
+  last_error?: string | null;
+  actor?: string;
+  reason?: string;
+}
+
+export interface LiveExecStartRequest {
+  strategy_id: string;
+  market: LiveMarket;
+  execution_mode: "live_shadow" | "live_manual_approval";
+  actor?: string;
+  reason?: string;
+}
+
+export interface LiveExecStopRequest {
+  actor?: string;
+  reason?: string;
+}
+
+export interface LiveExecStatusResponse {
+  ok: boolean;
+  config?: { trading_mode?: TradingMode; execution_mode_env?: ExecutionMode | string };
+  safety?: RuntimeSafetyValidationResponse;
+  session: LiveExecSession | null;
+  session_running: boolean;
+  supported_strategies: string[];
+  counts?: { final_betting_candidates?: number; final_betting_pending_approvals?: number };
+  blocked?: {
+    start_blockers?: string[];
+    submit_blockers?: string[];
+    submit_blocker_details?: Array<{ code: string; message: string }>;
+  };
+  history?: LiveExecSession[];
+}
+
+export interface LiveExecTickResponse {
+  ok: boolean;
+  session: LiveExecSession;
+  result: Record<string, unknown>;
+  counts?: { final_betting_candidates?: number; final_betting_pending_approvals?: number };
 }

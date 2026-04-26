@@ -111,6 +111,14 @@ class BackendSettings(BaseSettings):
     live_prep_sell_only_window_start_hhmm: str = Field(default="090000", alias="LIVE_PREP_SELL_ONLY_WINDOW_START_HHMM")
     live_prep_sell_only_window_end_hhmm: str = Field(default="110000", alias="LIVE_PREP_SELL_ONLY_WINDOW_END_HHMM")
     live_prep_sell_only_max_orders_per_tick: int = Field(default=4, ge=1, le=50, alias="LIVE_PREP_SELL_ONLY_MAX_ORDERS_PER_TICK")
+    live_exec_sessions_store_json: str = Field(
+        default="backend_data/live_exec/sessions.json",
+        alias="LIVE_EXEC_SESSIONS_STORE_JSON",
+    )
+    live_trading_safety_state_store_json: str = Field(
+        default="backend_data/live_trading/safety_state.json",
+        alias="LIVE_TRADING_SAFETY_STATE_STORE_JSON",
+    )
 
     portfolio_data_dir: str = Field(default="backend_data/portfolio", alias="PORTFOLIO_DATA_DIR")
     portfolio_equity_tracker_path: str = Field(

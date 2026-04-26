@@ -35,6 +35,7 @@ def _ensure_full_stack(app: FastAPI) -> None:
         from .api.auth_routes import router as auth_router
         from .api.live_trading_routes import router as live_trading_router
         from .api.live_prep_routes import router as live_prep_router
+        from .api.live_exec_routes import router as live_exec_router
         from .api.paper_trading_routes import router as paper_trading_router
         from .api.runtime_engine_routes import router as runtime_engine_router
         from .api.screening_routes import router as screening_router
@@ -52,6 +53,7 @@ def _ensure_full_stack(app: FastAPI) -> None:
         app.include_router(broker_router, prefix="/api")
         app.include_router(live_trading_router, prefix="/api")
         app.include_router(live_prep_router, prefix="/api")
+        app.include_router(live_exec_router, prefix="/api")
         app.include_router(paper_trading_router, prefix="/api")
         app.include_router(dashboard_router, prefix="/api")
         app.include_router(trading_router, prefix="/api")

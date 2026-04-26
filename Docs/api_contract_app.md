@@ -121,18 +121,18 @@ Base: `/api/trading`
 
 Base: `/api/live-trading`
 
-- `GET /status`
+- `GET /status` (Authorization: Bearer)
   - res: `LiveTradingStatusResponse`
-- `POST /settings`
+- `POST /settings` (Authorization: Bearer)
   - req: `LiveTradingSettingsUpdateRequest`
   - res: `{ ok: boolean } & LiveTradingStatusResponse`
-- `GET /runtime-safety-validation`
+- `GET /runtime-safety-validation` (Authorization: Bearer)
   - res: `RuntimeSafetyValidationResponse`
-- `GET /kill-switch-status`
+- `GET /kill-switch-status` (Authorization: Bearer)
   - res: `KillSwitchStatusResponse`
-- `GET /settings-history`
+- `GET /settings-history` (Authorization: Bearer)
   - res: `{ items: Array<{ ts: string; actor: string; action: string; reason: string }> }`
-- `POST /emergency-stop`
+- `POST /emergency-stop` (Authorization: Bearer)
   - req: `{ enabled: boolean, reason: string, actor?: string }`
   - res: `{ ok: boolean } & LiveTradingStatusResponse`
 
@@ -142,8 +142,8 @@ Base: `/api/live-prep`
 
 실거래 자동 제출(무인 실행)은 기본 금지입니다. 이 API는 **후보/신호 산출 + 수동 승인 기반 제출**이 기본이며, 별도 `sell-only arm`은 final_betting 포지션의 매도 신호에 한해 제한적으로 사용합니다.
 
-- `GET /status`
-  - res: `{ trading_mode, execution_mode, live_ready_for_submit, blockers }`
+- `GET /status` (Authorization: Bearer)
+  - res: `{ trading_mode, execution_mode, live_ready_for_submit, blockers, blocker_details }`
 - `POST /final-betting/generate?limit=5` (Authorization: Bearer)
   - res: `{ ok: true, items: LiveCandidate[], shadow: object }`
 - `POST /hf-shadow/generate?strategy_id=scalp_rsi_flag_hf_v1` (Authorization: Bearer)
@@ -172,6 +172,23 @@ Base: `/api/live-prep`
 - `POST /candidates/{candidate_id}/submit` (Authorization: Bearer)
   - req: `{ actor?: string, reason?: string }`
   - res: `{ ok: true, candidate: LiveCandidate, broker_result: object }`
+
+## 8c) Live Exec API (Execution Console)
+
+Base: `/api/live-exec`
+
+Paper처럼 Live 세션을 시작/중지하고, Tick을 통해 **수동 실행(무인 자동 실행 금지)** 기반으로 후보/리포트를 갱신합니다.
+
+- `GET /status?include_history=false` (Authorization: Bearer)
+  - res: `{ ok, config, safety, session, session_running, supported_strategies, counts, blocked, history? }`
+- `POST /start` (Authorization: Bearer)
+  - req: `{ strategy_id, market, execution_mode, actor?: string, reason?: string }`
+  - res: `{ ok: true, session: LiveExecSession }`
+- `POST /stop` (Authorization: Bearer)
+  - req: `{ actor?: string, reason?: string }`
+  - res: `{ ok: true, stopped: boolean, session?: LiveExecSession }`
+- `POST /tick` (Authorization: Bearer)
+  - res: `{ ok: true, session: LiveExecSession, result: object, counts }`
 
 ## 9) OpenAPI 자동생성 전환 가이드
 

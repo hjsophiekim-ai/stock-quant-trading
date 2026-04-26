@@ -68,7 +68,11 @@ def test_live_prep_requires_approval_before_submit(monkeypatch, tmp_path: Path) 
     )
     monkeypatch.setattr(live_prep_routes, "get_backend_settings", lambda: cfg)
     monkeypatch.setattr(live_prep_routes, "is_execution_mode_allowed", lambda _cfg: True)
-    monkeypatch.setattr(live_prep_routes, "runtime_safety_validation", lambda: {"ok": True, "blockers": []})
+    monkeypatch.setattr(
+        live_prep_routes,
+        "runtime_safety_validation_for_user_id",
+        lambda _cfg, _uid: {"ok": True, "blockers": [], "blocker_details": []},
+    )
     monkeypatch.setattr(live_prep_routes, "is_live_order_execution_configured", lambda _cfg: True)
     monkeypatch.setattr(live_prep_routes, "get_current_user_from_auth_header", lambda _h: type("U", (), {"id": "u1"})())
 
@@ -127,7 +131,11 @@ def test_live_prep_approval_and_submit_flow_writes_audit(monkeypatch, tmp_path: 
     )
     monkeypatch.setattr(live_prep_routes, "get_backend_settings", lambda: cfg)
     monkeypatch.setattr(live_prep_routes, "is_execution_mode_allowed", lambda _cfg: True)
-    monkeypatch.setattr(live_prep_routes, "runtime_safety_validation", lambda: {"ok": True, "blockers": []})
+    monkeypatch.setattr(
+        live_prep_routes,
+        "runtime_safety_validation_for_user_id",
+        lambda _cfg, _uid: {"ok": True, "blockers": [], "blocker_details": []},
+    )
     monkeypatch.setattr(live_prep_routes, "is_live_order_execution_configured", lambda _cfg: True)
     monkeypatch.setattr(live_prep_routes, "get_current_user_from_auth_header", lambda _h: type("U", (), {"id": "u1"})())
 
@@ -198,7 +206,11 @@ def test_live_prep_emergency_stop_blocks_submit(monkeypatch, tmp_path: Path) -> 
     )
     monkeypatch.setattr(live_prep_routes, "get_backend_settings", lambda: cfg)
     monkeypatch.setattr(live_prep_routes, "is_execution_mode_allowed", lambda _cfg: True)
-    monkeypatch.setattr(live_prep_routes, "runtime_safety_validation", lambda: {"ok": False, "blockers": ["APP emergency stop is enabled"]})
+    monkeypatch.setattr(
+        live_prep_routes,
+        "runtime_safety_validation_for_user_id",
+        lambda _cfg, _uid: {"ok": False, "blockers": ["APP emergency stop is enabled"], "blocker_details": []},
+    )
     monkeypatch.setattr(live_prep_routes, "is_live_order_execution_configured", lambda _cfg: True)
     monkeypatch.setattr(live_prep_routes, "get_current_user_from_auth_header", lambda _h: type("U", (), {"id": "u1"})())
 

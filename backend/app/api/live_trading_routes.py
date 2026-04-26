@@ -1,16 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.app.risk.audit import append_risk_event
 from backend.app.risk.live_unlock_gate import evaluate_paper_readiness, paper_readiness_to_dict
 
-from ..core.config import get_backend_settings
+from ..core.config import BackendSettings, get_backend_settings
+from ..services.live_safety_state_store import LiveSafetyHistoryItem, LiveSafetyState, LiveSafetyStateStore
+
+from .auth_routes import get_current_user_from_auth_header
 
 router = APIRouter(prefix="/live-trading", tags=["live-trading"])
 
@@ -22,66 +24,59 @@ class LiveSettingsUpdateRequest(BaseModel):
     reason: str = Field(min_length=3, max_length=240)
     actor: str = Field(default="user", min_length=1, max_length=64)
 
-
-@dataclass
-class HistoryItem:
-    ts: str
-    actor: str
-    action: str
-    reason: str
+_mock_daily_loss_pct: float = -1.4
+_mock_total_loss_pct: float = -4.7
 
 
-@dataclass
-class LiveSafetyRuntime:
-    live_trading_flag: bool = False
-    secondary_confirm_flag: bool = False
-    extra_approval_flag: bool = False
-    live_emergency_stop: bool = False
-    settings_history: list[HistoryItem] = field(default_factory=list)
-    # Mock metrics for UI and API contract. TODO: wire real risk snapshot.
-    daily_loss_pct: float = -1.4
-    total_loss_pct: float = -4.7
-
-    def update(self, req: LiveSettingsUpdateRequest) -> None:
-        self.live_trading_flag = req.live_trading_flag
-        self.secondary_confirm_flag = req.secondary_confirm_flag
-        self.extra_approval_flag = req.extra_approval_flag
-        self.settings_history.insert(
-            0,
-            HistoryItem(
-                ts=datetime.now(timezone.utc).isoformat(),
-                actor=req.actor,
-                action="update_live_safety_settings",
-                reason=req.reason,
-            ),
-        )
-        self.settings_history = self.settings_history[:100]
+def _store(cfg: BackendSettings) -> LiveSafetyStateStore:
+    return LiveSafetyStateStore(cfg.live_trading_safety_state_store_json)
 
 
-runtime = LiveSafetyRuntime()
+def _current_user(authorization: str | None) -> object:
+    u = get_current_user_from_auth_header(authorization)
+    if not u:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    return u
 
 
-def _status_payload() -> dict[str, object]:
-    cfg = get_backend_settings()
+def _kill_switch_payload() -> dict[str, object]:
+    daily_exceeded = abs(_mock_daily_loss_pct) >= 3.0
+    total_exceeded = abs(_mock_total_loss_pct) >= 10.0
+    exceeded = daily_exceeded or total_exceeded
+    state: Literal["NORMAL", "TRIGGERED", "COOLDOWN"] = "TRIGGERED" if exceeded else "NORMAL"
+    return {
+        "kill_switch_state": state,
+        "daily_loss_pct": _mock_daily_loss_pct,
+        "total_loss_pct": _mock_total_loss_pct,
+        "daily_loss_limit_pct": 3.0,
+        "total_loss_limit_pct": 10.0,
+        "loss_limit_exceeded": exceeded,
+        "message": "손실 제한 초과: LIVE 주문 차단" if exceeded else "정상 범위",
+    }
+
+
+def _status_payload_for_user(cfg: BackendSettings, st: LiveSafetyState) -> dict[str, object]:
     readiness = evaluate_paper_readiness(cfg)
     paper_ok = readiness.ok or readiness.bypassed
+    ks = _kill_switch_payload()
     can_place = (
         cfg.trading_mode == "live"
-        and runtime.live_trading_flag
-        and runtime.secondary_confirm_flag
-        and runtime.extra_approval_flag
-        and (not runtime.live_emergency_stop)
+        and st.live_trading_flag
+        and st.secondary_confirm_flag
+        and st.extra_approval_flag
+        and (not st.live_emergency_stop)
         and cfg.live_trading
         and cfg.live_trading_confirm
         and cfg.live_trading_extra_confirm
         and paper_ok
+        and (not bool(ks.get("loss_limit_exceeded")))
     )
     if not can_place:
         if not (
             cfg.trading_mode == "live"
-            and runtime.live_trading_flag
-            and runtime.secondary_confirm_flag
-            and runtime.extra_approval_flag
+            and st.live_trading_flag
+            and st.secondary_confirm_flag
+            and st.extra_approval_flag
             and cfg.live_trading
             and cfg.live_trading_confirm
             and cfg.live_trading_extra_confirm
@@ -89,6 +84,8 @@ def _status_payload() -> dict[str, object]:
             warning = "LIVE 주문 잠금 상태: 다중 승인·환경 설정이 완료되지 않았습니다."
         elif not paper_ok:
             warning = readiness.user_message_ko
+        elif bool(ks.get("loss_limit_exceeded")):
+            warning = str(ks.get("message") or "손실 제한 초과")
         else:
             warning = "LIVE 주문 잠금 상태"
     else:
@@ -96,10 +93,10 @@ def _status_payload() -> dict[str, object]:
     return {
         "trading_mode": cfg.trading_mode,
         "execution_mode": cfg.execution_mode,
-        "live_trading_flag": runtime.live_trading_flag,
-        "secondary_confirm_flag": runtime.secondary_confirm_flag,
-        "extra_approval_flag": runtime.extra_approval_flag,
-        "live_emergency_stop": runtime.live_emergency_stop,
+        "live_trading_flag": st.live_trading_flag,
+        "secondary_confirm_flag": st.secondary_confirm_flag,
+        "extra_approval_flag": st.extra_approval_flag,
+        "live_emergency_stop": st.live_emergency_stop,
         "paper_readiness_ok": paper_ok,
         "can_place_live_order": can_place,
         "trading_badge": "live" if can_place else "test",
@@ -108,8 +105,11 @@ def _status_payload() -> dict[str, object]:
 
 
 @router.get("/status")
-def live_status() -> dict[str, object]:
-    return _status_payload()
+def live_status(authorization: str | None = Header(default=None)) -> dict[str, object]:
+    cfg = get_backend_settings()
+    user = _current_user(authorization)
+    st = _store(cfg).get(getattr(user, "id"))
+    return _status_payload_for_user(cfg, st)
 
 
 def _attempting_full_app_unlock(req: LiveSettingsUpdateRequest) -> bool:
@@ -117,8 +117,14 @@ def _attempting_full_app_unlock(req: LiveSettingsUpdateRequest) -> bool:
 
 
 @router.post("/settings")
-def update_live_settings(payload: LiveSettingsUpdateRequest) -> dict[str, object]:
+def update_live_settings(
+    payload: LiveSettingsUpdateRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, object]:
     cfg = get_backend_settings()
+    user = _current_user(authorization)
+    store = _store(cfg)
+    st = store.get(getattr(user, "id"))
     if _attempting_full_app_unlock(payload):
         pr = evaluate_paper_readiness(cfg)
         if not pr.ok and not pr.bypassed:
@@ -127,22 +133,25 @@ def update_live_settings(payload: LiveSettingsUpdateRequest) -> dict[str, object
                 {
                     "ts_utc": datetime.now(timezone.utc).isoformat(),
                     "event_type": "LIVE_UNLOCK_DENIED",
-                    "actor": payload.actor,
+                    "actor": getattr(user, "id"),
+                    "app_actor": payload.actor,
                     "reason": payload.reason,
                     "paper_readiness": pr.technical_summary,
                     "user_message_ko": pr.user_message_ko,
                 },
             )
-            runtime.settings_history.insert(
+            st.history.insert(
                 0,
-                HistoryItem(
+                LiveSafetyHistoryItem(
                     ts=datetime.now(timezone.utc).isoformat(),
-                    actor=payload.actor,
+                    actor=str(payload.actor or getattr(user, "id")),
                     action="live_unlock_denied_paper_readiness",
                     reason=f"{payload.reason} | {pr.user_message_ko[:200]}",
                 ),
             )
-            runtime.settings_history = runtime.settings_history[:100]
+            st.history = st.history[:100]
+            st.updated_at_utc = datetime.now(timezone.utc).isoformat()
+            store.upsert(st)
             raise HTTPException(
                 status_code=403,
                 detail={
@@ -156,56 +165,95 @@ def update_live_settings(payload: LiveSettingsUpdateRequest) -> dict[str, object
             {
                 "ts_utc": datetime.now(timezone.utc).isoformat(),
                 "event_type": "LIVE_UNLOCK_APPROVED_CHECKLIST",
-                "actor": payload.actor,
+                "actor": getattr(user, "id"),
+                "app_actor": payload.actor,
                 "reason": payload.reason,
                 "paper_readiness": pr.technical_summary,
             },
         )
-    runtime.update(payload)
-    return {"ok": True, **_status_payload()}
+    st.live_trading_flag = bool(payload.live_trading_flag)
+    st.secondary_confirm_flag = bool(payload.secondary_confirm_flag)
+    st.extra_approval_flag = bool(payload.extra_approval_flag)
+    st.updated_at_utc = datetime.now(timezone.utc).isoformat()
+    st.history.insert(
+        0,
+        LiveSafetyHistoryItem(
+            ts=st.updated_at_utc,
+            actor=str(payload.actor or getattr(user, "id")),
+            action="update_live_safety_settings",
+            reason=str(payload.reason),
+        ),
+    )
+    st.history = st.history[:100]
+    store.upsert(st)
+    return {"ok": True, **_status_payload_for_user(cfg, st)}
 
 
 @router.get("/settings-history")
-def settings_history() -> dict[str, object]:
-    return {"items": [item.__dict__ for item in runtime.settings_history]}
+def settings_history(authorization: str | None = Header(default=None)) -> dict[str, object]:
+    cfg = get_backend_settings()
+    user = _current_user(authorization)
+    st = _store(cfg).get(getattr(user, "id"))
+    return {"items": [item.__dict__ for item in st.history]}
 
 
 @router.get("/paper-readiness")
-def paper_readiness() -> dict[str, object]:
+def paper_readiness(authorization: str | None = Header(default=None)) -> dict[str, object]:
+    _ = _current_user(authorization)
     cfg = get_backend_settings()
     pr = evaluate_paper_readiness(cfg)
     return paper_readiness_to_dict(pr)
 
 
 @router.get("/runtime-safety-validation")
-def runtime_safety_validation() -> dict[str, object]:
-    cfg = get_backend_settings()
+def runtime_safety_validation_for_user_id(cfg: BackendSettings, user_id: str) -> dict[str, object]:
+    st = _store(cfg).get(user_id)
     blockers: list[str] = []
+    blocker_details: list[dict[str, str]] = []
+
+    def _add(code: str, message: str) -> None:
+        blocker_details.append({"code": code, "message": message})
+        blockers.append(message)
+
     if cfg.trading_mode != "live":
-        blockers.append("TRADING_MODE is not live")
+        _add("TRADING_MODE_NOT_LIVE", "TRADING_MODE is not live")
     if not cfg.live_trading:
-        blockers.append("ENV LIVE_TRADING is not true")
+        _add("ENV_LIVE_TRADING_OFF", "ENV LIVE_TRADING is not true")
     if not cfg.live_trading_confirm:
-        blockers.append("ENV LIVE_TRADING_CONFIRM is not true")
+        _add("ENV_LIVE_TRADING_CONFIRM_OFF", "ENV LIVE_TRADING_CONFIRM is not true")
     if not cfg.live_trading_extra_confirm:
-        blockers.append("ENV LIVE_TRADING_EXTRA_CONFIRM is not true")
-    if not runtime.live_trading_flag:
-        blockers.append("APP live trading flag is not enabled")
-    if not runtime.secondary_confirm_flag:
-        blockers.append("APP secondary confirmation is missing")
-    if not runtime.extra_approval_flag:
-        blockers.append("APP extra approval is missing")
-    if runtime.live_emergency_stop:
-        blockers.append("APP emergency stop is enabled")
+        _add("ENV_LIVE_TRADING_EXTRA_CONFIRM_OFF", "ENV LIVE_TRADING_EXTRA_CONFIRM is not true")
+    if not st.live_trading_flag:
+        _add("APP_LIVE_TRADING_FLAG_OFF", "APP live trading flag is not enabled")
+    if not st.secondary_confirm_flag:
+        _add("APP_SECONDARY_CONFIRM_MISSING", "APP secondary confirmation is missing")
+    if not st.extra_approval_flag:
+        _add("APP_EXTRA_APPROVAL_MISSING", "APP extra approval is missing")
+    if st.live_emergency_stop:
+        _add("APP_EMERGENCY_STOP_ON", "APP emergency stop is enabled")
+
+    ks = _kill_switch_payload()
+    if bool(ks.get("loss_limit_exceeded")):
+        _add("KILL_SWITCH_TRIGGERED", str(ks.get("message") or "loss limit exceeded"))
+
     pr = evaluate_paper_readiness(cfg)
     paper = paper_readiness_to_dict(pr)
     if not pr.ok and not pr.bypassed:
-        blockers.append("모의투자 자동 검증 미통과 — /api/live-trading/paper-readiness 참고")
+        _add("PAPER_READINESS_FAILED", "모의투자 자동 검증 미통과 — /api/live-trading/paper-readiness 참고")
     return {
         "ok": len(blockers) == 0,
         "blockers": blockers,
+        "blocker_details": blocker_details,
         "paper_readiness": paper,
+        "kill_switch": ks,
     }
+
+
+@router.get("/runtime-safety-validation")
+def runtime_safety_validation(authorization: str | None = Header(default=None)) -> dict[str, object]:
+    cfg = get_backend_settings()
+    user = _current_user(authorization)
+    return runtime_safety_validation_for_user_id(cfg, getattr(user, "id"))
 
 
 class EmergencyStopRequest(BaseModel):
@@ -215,46 +263,42 @@ class EmergencyStopRequest(BaseModel):
 
 
 @router.post("/emergency-stop")
-def set_emergency_stop(payload: EmergencyStopRequest) -> dict[str, object]:
+def set_emergency_stop(
+    payload: EmergencyStopRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, object]:
     cfg = get_backend_settings()
-    runtime.live_emergency_stop = bool(payload.enabled)
+    user = _current_user(authorization)
+    store = _store(cfg)
+    st = store.get(getattr(user, "id"))
+    st.live_emergency_stop = bool(payload.enabled)
+    st.updated_at_utc = datetime.now(timezone.utc).isoformat()
     append_risk_event(
         cfg.risk_events_jsonl,
         {
             "ts_utc": datetime.now(timezone.utc).isoformat(),
             "event_type": "LIVE_EMERGENCY_STOP_UPDATED",
-            "actor": payload.actor,
+            "actor": getattr(user, "id"),
+            "app_actor": payload.actor,
             "enabled": bool(payload.enabled),
             "reason": payload.reason,
         },
     )
-    runtime.settings_history.insert(
+    st.history.insert(
         0,
-        HistoryItem(
-            ts=datetime.now(timezone.utc).isoformat(),
-            actor=payload.actor,
+        LiveSafetyHistoryItem(
+            ts=st.updated_at_utc,
+            actor=str(payload.actor or getattr(user, "id")),
             action="live_emergency_stop_updated",
             reason=f"{payload.reason} | enabled={bool(payload.enabled)}",
         ),
     )
-    runtime.settings_history = runtime.settings_history[:100]
-    return {"ok": True, **_status_payload()}
+    st.history = st.history[:100]
+    store.upsert(st)
+    return {"ok": True, **_status_payload_for_user(cfg, st)}
 
 
 @router.get("/kill-switch-status")
-def kill_switch_status() -> dict[str, object]:
-    cfg = get_backend_settings()
-    daily_exceeded = abs(runtime.daily_loss_pct) >= 3.0
-    total_exceeded = abs(runtime.total_loss_pct) >= 10.0
-    exceeded = daily_exceeded or total_exceeded
-    state: Literal["NORMAL", "TRIGGERED", "COOLDOWN"] = "TRIGGERED" if exceeded else "NORMAL"
-    return {
-        "kill_switch_state": state,
-        "daily_loss_pct": runtime.daily_loss_pct,
-        "total_loss_pct": runtime.total_loss_pct,
-        "daily_loss_limit_pct": 3.0,
-        "total_loss_limit_pct": 10.0,
-        "loss_limit_exceeded": exceeded,
-        "message": "손실 제한 초과: LIVE 주문 차단" if exceeded else "정상 범위",
-        # TODO: replace mock daily/total loss metrics with real risk engine snapshot.
-    }
+def kill_switch_status(authorization: str | None = Header(default=None)) -> dict[str, object]:
+    _ = _current_user(authorization)
+    return _kill_switch_payload()

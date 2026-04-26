@@ -2,9 +2,12 @@ export type TradingBadge = "test" | "live";
 
 export interface LiveTradingStatusResponse {
   trading_mode: "paper" | "live";
+  execution_mode?: "paper_auto" | "live_shadow" | "live_manual_approval";
   live_trading_flag: boolean;
   secondary_confirm_flag: boolean;
   extra_approval_flag: boolean;
+  live_emergency_stop?: boolean;
+  paper_readiness_ok?: boolean;
   can_place_live_order: boolean;
   trading_badge: TradingBadge;
   warning_message: string;

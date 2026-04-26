@@ -63,7 +63,11 @@ def test_batch_liquidation_prepare_and_execute(monkeypatch, tmp_path: Path) -> N
     )
     monkeypatch.setattr(live_prep_routes, "get_backend_settings", lambda: cfg)
     monkeypatch.setattr(live_prep_routes, "is_execution_mode_allowed", lambda _cfg: True)
-    monkeypatch.setattr(live_prep_routes, "runtime_safety_validation", lambda: {"ok": True, "blockers": []})
+    monkeypatch.setattr(
+        live_prep_routes,
+        "runtime_safety_validation_for_user_id",
+        lambda _cfg, _uid: {"ok": True, "blockers": [], "blocker_details": []},
+    )
     monkeypatch.setattr(live_prep_routes, "is_live_order_execution_configured", lambda _cfg: True)
     monkeypatch.setattr(live_prep_routes, "get_current_user_from_auth_header", lambda _h: type("U", (), {"id": "u1"})())
 
@@ -139,6 +143,7 @@ def test_batch_liquidation_prepare_and_execute(monkeypatch, tmp_path: Path) -> N
 def test_sell_only_tick_calls_submit_when_armed(monkeypatch, tmp_path: Path) -> None:
     from backend.app.engine import live_sell_only_loop as mod
     from backend.app.core.config import BackendSettings
+    from backend.app.services.live_exec_session_store import LiveExecSession, LiveExecSessionStore
     from backend.app.services.live_sell_arm_store import SellOnlyArmStore, SellOnlyArmState
 
     cfg = BackendSettings(
@@ -146,12 +151,26 @@ def test_sell_only_tick_calls_submit_when_armed(monkeypatch, tmp_path: Path) -> 
         execution_mode="live_manual_approval",
         risk_events_jsonl=str(tmp_path / "events.jsonl"),
         live_prep_sell_only_arm_store_json=str(tmp_path / "arm.json"),
+        live_exec_sessions_store_json=str(tmp_path / "sessions.json"),
         live_prep_sell_only_window_start_hhmm="090000",
         live_prep_sell_only_window_end_hhmm="110000",
         live_prep_sell_only_max_orders_per_tick=10,
     )
     store = SellOnlyArmStore(cfg.live_prep_sell_only_arm_store_json)
     store.upsert(SellOnlyArmState(user_id="u1", enabled=True, armed_for_kst_date="20260430"))
+
+    sess_store = LiveExecSessionStore(cfg.live_exec_sessions_store_json)
+    sess_store.upsert(
+        LiveExecSession(
+            session_id=sess_store.new_id(),
+            user_id="u1",
+            status="running",
+            strategy_id="final_betting_v1",
+            market="domestic",
+            execution_mode="live_manual_approval",
+            started_at_utc=datetime(2026, 4, 29, 0, 0, tzinfo=ZoneInfo("UTC")).isoformat(),
+        )
+    )
 
     monkeypatch.setattr(mod, "kst_now", lambda: datetime(2026, 4, 30, 9, 10, tzinfo=_KST))
     monkeypatch.setattr(
