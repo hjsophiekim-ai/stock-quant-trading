@@ -9,12 +9,31 @@ type Props = {
 
 type SafetyStatus = {
   trading_mode: "paper" | "live";
+  execution_mode?: "paper_auto" | "live_shadow" | "live_manual_approval";
   live_trading_flag: boolean;
   secondary_confirm_flag: boolean;
   extra_approval_flag: boolean;
+  live_emergency_stop?: boolean;
   can_place_live_order: boolean;
   trading_badge: "test" | "live";
   warning_message: string;
+};
+
+type SellOnlyArmState = {
+  user_id: string;
+  enabled: boolean;
+  scope: string;
+  armed_for_kst_date: string;
+  updated_at_utc?: string;
+};
+
+type LiquidationPlan = {
+  plan_id: string;
+  status: "prepared" | "executed" | "canceled";
+  scope: string;
+  use_market_order: boolean;
+  created_at_utc: string;
+  items: Array<{ symbol: string; quantity: number; est_price?: number | null }>;
 };
 
 export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
@@ -32,6 +51,12 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
   const [runtimeManualOverride, setRuntimeManualOverride] = useState(false);
   const [history, setHistory] = useState<Array<{ ts: string; actor: string; reason: string }>>([]);
   const [msg, setMsg] = useState("");
+  const [sellOnlyEnabled, setSellOnlyEnabled] = useState(false);
+  const [sellOnlyDate, setSellOnlyDate] = useState("");
+  const [sellOnlyState, setSellOnlyState] = useState<SellOnlyArmState | null>(null);
+  const [liqUseMarket, setLiqUseMarket] = useState(true);
+  const [latestPlan, setLatestPlan] = useState<LiquidationPlan | null>(null);
+  const [liqConfirm, setLiqConfirm] = useState("LIQUIDATE_ALL");
 
   const refresh = async () => {
     const statusRes = await authFetch(backendUrl, `/api/live-trading/status`);
@@ -57,6 +82,22 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
     const histRes = await authFetch(backendUrl, `/api/live-trading/settings-history`);
     const histData = await histRes.json();
     if (histRes.ok) setHistory(histData.items ?? []);
+
+    const armRes = await authFetch(backendUrl, `/api/live-prep/sell-only-arm/status`);
+    const armData = await armRes.json();
+    if (armRes.ok) {
+      const st = armData?.state ?? null;
+      setSellOnlyState(st);
+      setSellOnlyEnabled(Boolean(st?.enabled));
+      setSellOnlyDate(String(st?.armed_for_kst_date ?? ""));
+    }
+
+    const planRes = await authFetch(backendUrl, `/api/live-prep/batch-liquidation/plans?limit=1`);
+    const planData = await planRes.json();
+    if (planRes.ok) {
+      const p0 = Array.isArray(planData?.plans) && planData.plans.length ? planData.plans[0] : null;
+      setLatestPlan(p0);
+    }
   };
 
   useEffect(() => {
@@ -97,6 +138,70 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
     await refresh();
   };
 
+  const saveSellOnlyArm = async () => {
+    const res = await authFetch(backendUrl, `/api/live-prep/sell-only-arm`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled: sellOnlyEnabled,
+        armed_for_kst_date: sellOnlyDate,
+        actor: "mobile-user",
+        reason: reason || "arm",
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setMsg(typeof data?.detail === "string" ? data.detail : "Sell-only arm 저장 실패");
+      return;
+    }
+    setSellOnlyState(data?.state ?? null);
+    setMsg("Sell-only arm 저장 완료");
+    await refresh();
+  };
+
+  const prepareLiquidation = async () => {
+    const res = await authFetch(backendUrl, `/api/live-prep/batch-liquidation/prepare`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        use_market_order: liqUseMarket,
+        actor: "mobile-user",
+        reason: reason || "prepare",
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setMsg(typeof data?.detail === "string" ? data.detail : "전체 청산 준비 실패");
+      return;
+    }
+    setLatestPlan(data?.plan ?? null);
+    setMsg("전체 청산 플랜 준비 완료");
+    await refresh();
+  };
+
+  const executeLiquidation = async () => {
+    if (!latestPlan?.plan_id) {
+      setMsg("실행할 준비된 플랜이 없습니다.");
+      return;
+    }
+    const res = await authFetch(backendUrl, `/api/live-prep/batch-liquidation/${latestPlan.plan_id}/execute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        confirm: liqConfirm,
+        actor: "mobile-user",
+        reason: reason || "execute",
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setMsg(typeof data?.detail === "string" ? data.detail : "전체 청산 실행 실패");
+      return;
+    }
+    setMsg(`전체 청산 실행 완료 (submitted=${Array.isArray(data?.submitted) ? data.submitted.length : 0})`);
+    await refresh();
+  };
+
   return (
     <SafeAreaView>
       <ScrollView style={{ padding: 12 }}>
@@ -106,8 +211,10 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
         </Text>
         <Text style={{ marginTop: 8 }}>Badge: {status.trading_badge.toUpperCase()}</Text>
         <Text>Mode: {status.trading_mode}</Text>
+        <Text>Execution: {status.execution_mode ?? "-"}</Text>
         <Text>Can Place Live Order: {status.can_place_live_order ? "YES" : "NO"}</Text>
         <Text style={{ marginBottom: 8 }}>{status.warning_message}</Text>
+        <Text>Emergency Stop: {status.live_emergency_stop ? "ON" : "OFF"}</Text>
 
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
           <Text>1) Live Enable Flag</Text>
@@ -137,6 +244,38 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
           title={runtimeManualOverride ? "Runtime 수동 재개 토글 OFF" : "Runtime 수동 재개 토글 ON"}
           onPress={toggleRuntimeManualOverride}
         />
+
+        <Text style={{ marginTop: 16, fontWeight: "bold" }}>Sell-Only Arm (final_betting 전용)</Text>
+        <Text style={{ color: "#334155" }}>
+          무장한 날짜 오전 윈도우에서 final_betting 포지션의 매도 신호만 자동 제출됩니다.
+        </Text>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 8 }}>
+          <Text>Enable</Text>
+          <Switch value={sellOnlyEnabled} onValueChange={setSellOnlyEnabled} />
+        </View>
+        <TextInput
+          value={sellOnlyDate}
+          onChangeText={setSellOnlyDate}
+          placeholder="YYYYMMDD (기본: 내일)"
+          style={{ borderWidth: 1, padding: 8, marginTop: 8 }}
+        />
+        <Button title="Save Sell-Only Arm" onPress={saveSellOnlyArm} />
+        <Text style={{ marginTop: 8, color: "#334155" }}>{sellOnlyState ? JSON.stringify(sellOnlyState) : "-"}</Text>
+
+        <Text style={{ marginTop: 16, fontWeight: "bold" }}>전체 청산(1클릭) 준비/실행</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 8 }}>
+          <Text>Market(가격 0)</Text>
+          <Switch value={liqUseMarket} onValueChange={setLiqUseMarket} />
+        </View>
+        <Button title="Prepare Liquidation Plan" onPress={prepareLiquidation} />
+        <Text style={{ marginTop: 8 }}>Latest Plan: {latestPlan?.plan_id ?? "-"}</Text>
+        <TextInput
+          value={liqConfirm}
+          onChangeText={setLiqConfirm}
+          placeholder="LIQUIDATE_ALL"
+          style={{ borderWidth: 1, padding: 8, marginTop: 8 }}
+        />
+        <Button title="Execute Latest Plan" onPress={executeLiquidation} />
 
         <Text style={{ marginTop: 12, fontWeight: "bold" }}>Settings Change History</Text>
         {history.slice(0, 10).map((h, idx) => (

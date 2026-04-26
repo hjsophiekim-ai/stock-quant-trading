@@ -66,8 +66,30 @@ def build_kis_client_for_paper_user(
     )
 
 
+def build_kis_client_for_live_user(
+    *,
+    base_url: str,
+    access_token: str,
+    app_key: str,
+    app_secret: str,
+    live_execution_unlocked: bool,
+) -> KISClient:
+    base = base_url.rstrip("/")
+    t = _kis_timing_from_app_settings()
+    return KISClient(
+        base_url=base,
+        token_provider=lambda: access_token,
+        app_key=app_key,
+        app_secret=app_secret,
+        live_execution_unlocked=bool(live_execution_unlocked),
+        **t,
+    )
+
+
+
 __all__ = [
     "build_kis_client_for_backend",
+    "build_kis_client_for_live_user",
     "build_kis_client_for_paper_user",
     "KISClient",
     "KISClientError",

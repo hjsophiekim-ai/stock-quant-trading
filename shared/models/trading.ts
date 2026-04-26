@@ -1,5 +1,7 @@
 export type TradingMode = "paper" | "live";
 
+export type ExecutionMode = "paper_auto" | "live_shadow" | "live_manual_approval";
+
 export interface TradingModeResponse {
   default_mode: TradingMode;
   live_status: "locked" | "enabled";
@@ -75,9 +77,11 @@ export interface LiveTradingSettingsUpdateRequest {
 
 export interface LiveTradingStatusResponse {
   trading_mode: TradingMode;
+  execution_mode?: ExecutionMode;
   live_trading_flag: boolean;
   secondary_confirm_flag: boolean;
   extra_approval_flag: boolean;
+  live_emergency_stop?: boolean;
   can_place_live_order: boolean;
   trading_badge: "test" | "live";
   warning_message: string;

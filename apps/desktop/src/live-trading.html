@@ -18,6 +18,10 @@
       label { display: block; margin-top: 8px; font-weight: 700; }
       input[type="text"] { width: min(640px, 100%); padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; }
       .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { border-bottom: 1px solid #e2e8f0; padding: 8px; text-align: left; font-size: 0.9rem; }
+      th { background: #f1f5f9; }
+      .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid #cbd5e1; font-size: 0.8rem; }
     </style>
   </head>
   <body>
@@ -57,14 +61,71 @@
             <label><input id="flagLive" type="checkbox" /> Live Enable Flag</label>
             <label><input id="flagConfirm2" type="checkbox" /> Secondary Confirm</label>
             <label><input id="flagExtra" type="checkbox" /> Extra Approval</label>
+            <label><input id="flagEmergency" type="checkbox" /> Emergency Stop</label>
           </div>
           <label for="reasonInput">변경 사유</label>
           <input id="reasonInput" type="text" value="운영자 수동 승인" />
           <div class="row" style="margin-top: 10px">
             <button id="saveBtn" type="button">Save Safety Settings</button>
+            <button id="saveEmergencyBtn" type="button">Save Emergency Stop</button>
             <button id="refreshBtn" type="button">새로고침</button>
           </div>
           <p id="saveMessage" class="muted" style="white-space: pre-line"></p>
+        </div>
+
+        <div class="panel warn">
+          <h3 style="margin-top: 0">Live Prep · 최종 후보(시스템 후보)</h3>
+          <p class="muted">
+            이 목록은 시스템이 코드 정의된 유니버스에서 계산한 후보입니다. 실주문은 수동 승인 없이는 제출되지 않습니다.
+          </p>
+          <div class="row" style="margin: 10px 0">
+            <button id="genFinalBettingBtn" type="button">final_betting_v1 후보 생성</button>
+            <button id="refreshCandidatesBtn" type="button">후보 새로고침</button>
+          </div>
+          <pre id="candidatesMetaPre">(loading)</pre>
+          <div style="overflow: auto; margin-top: 10px">
+            <table>
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Symbol</th>
+                  <th>Qty</th>
+                  <th>Price</th>
+                  <th>SL%</th>
+                  <th>Score</th>
+                  <th>Rationale</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="candidatesTbody"></tbody>
+            </table>
+          </div>
+          <p id="candidateActionMsg" class="muted" style="white-space: pre-line"></p>
+        </div>
+
+        <div class="panel warn">
+          <h3 style="margin-top: 0">Sell-Only Arm (final_betting 전용)</h3>
+          <p class="muted">명시적으로 무장한 날짜의 오전 윈도우에서, final_betting 포지션에 한해 매도 신호가 나올 때만 자동 제출됩니다.</p>
+          <div class="row" style="margin: 10px 0">
+            <label><input id="sellOnlyEnabled" type="checkbox" /> Enable</label>
+            <input id="sellOnlyDate" type="text" placeholder="YYYYMMDD (기본: 내일)" style="max-width: 180px" />
+            <button id="saveSellOnlyArmBtn" type="button">Save Arm</button>
+            <button id="refreshSellOnlyArmBtn" type="button">Refresh Arm</button>
+          </div>
+          <pre id="sellOnlyArmPre">(loading)</pre>
+        </div>
+
+        <div class="panel warn">
+          <h3 style="margin-top: 0">전체 청산(1클릭) · 준비/실행</h3>
+          <p class="muted">다음날 아침 클릭 한 번으로 전체 보유 종목 청산을 실행하기 위해, 미리 청산 플랜을 생성합니다.</p>
+          <div class="row" style="margin: 10px 0">
+            <label><input id="liqUseMarket" type="checkbox" checked /> Market(가격 0)</label>
+            <button id="prepareLiquidationBtn" type="button">Prepare</button>
+            <button id="refreshLiquidationBtn" type="button">Plans</button>
+            <input id="liqConfirm" type="text" value="LIQUIDATE_ALL" style="max-width: 180px" />
+            <button id="executeLiquidationBtn" type="button">Execute Latest</button>
+          </div>
+          <pre id="liquidationPre">(loading)</pre>
         </div>
       </main>
     </div>
@@ -87,6 +148,12 @@
         const paperPre = document.getElementById("paperReadinessPre");
         const saveMessage = document.getElementById("saveMessage");
         const warn = document.getElementById("liveWarnPanel");
+        const candidatesMetaPre = document.getElementById("candidatesMetaPre");
+        const candidatesTbody = document.getElementById("candidatesTbody");
+        const candidateActionMsg = document.getElementById("candidateActionMsg");
+        const sellOnlyArmPre = document.getElementById("sellOnlyArmPre");
+        const liquidationPre = document.getElementById("liquidationPre");
+        let latestPlanId = "";
 
         async function refresh() {
           const [stR, rtR, prR, ksR] = await Promise.all([
@@ -105,10 +172,159 @@
           document.getElementById("flagLive").checked = !!st.live_trading_flag;
           document.getElementById("flagConfirm2").checked = !!st.secondary_confirm_flag;
           document.getElementById("flagExtra").checked = !!st.extra_approval_flag;
+          document.getElementById("flagEmergency").checked = !!st.live_emergency_stop;
           const can = !!st.can_place_live_order;
           warn.className = "panel " + (can ? "ok" : "warn");
           warn.textContent = can ? "LIVE 주문 가능 상태" : (st.warning_message || "LIVE 주문 잠금 상태");
         }
+
+        function fmt(v) {
+          if (v === null || v === undefined) return "";
+          return String(v);
+        }
+
+        async function refreshCandidates() {
+          const r = await authFetch(backendUrl + "/api/live-prep/candidates?limit=50", { headers: await authHeaders() });
+          const d = await r.json().catch(function () { return {}; });
+          if (!r.ok) {
+            candidatesMetaPre.textContent = JSON.stringify(d.detail || d, null, 2);
+            candidatesTbody.innerHTML = "";
+            return;
+          }
+          candidatesMetaPre.textContent = JSON.stringify({ count: d.count, mode: "live_prep" }, null, 2);
+          const items = Array.isArray(d.items) ? d.items : [];
+          candidatesTbody.innerHTML = "";
+          for (const it of items) {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+              <td><span class="pill">${fmt(it.status)}</span></td>
+              <td>${fmt(it.symbol)}</td>
+              <td>${fmt(it.quantity)}</td>
+              <td>${fmt(it.price)}</td>
+              <td>${fmt(it.stop_loss_pct)}</td>
+              <td>${fmt(it.score)}</td>
+              <td>${fmt(it.rationale)}</td>
+              <td>
+                <button data-act="approve" data-id="${fmt(it.candidate_id)}">Approve</button>
+                <button data-act="reject" data-id="${fmt(it.candidate_id)}">Reject</button>
+                <button data-act="submit" data-id="${fmt(it.candidate_id)}">Approve+Submit</button>
+              </td>
+            `;
+            candidatesTbody.appendChild(tr);
+          }
+        }
+
+        async function refreshSellOnlyArm() {
+          const r = await authFetch(backendUrl + "/api/live-prep/sell-only-arm/status", { headers: await authHeaders() });
+          const d = await r.json().catch(function () { return {}; });
+          sellOnlyArmPre.textContent = JSON.stringify(d, null, 2);
+          const st = d && d.state ? d.state : null;
+          document.getElementById("sellOnlyEnabled").checked = !!(st && st.enabled);
+          if (st && st.armed_for_kst_date) document.getElementById("sellOnlyDate").value = String(st.armed_for_kst_date);
+        }
+
+        async function saveSellOnlyArm() {
+          const payload = {
+            enabled: !!document.getElementById("sellOnlyEnabled").checked,
+            armed_for_kst_date: String(document.getElementById("sellOnlyDate").value || ""),
+            actor: "desktop-user",
+            reason: String(document.getElementById("reasonInput").value || "arm"),
+          };
+          const r = await authFetch(backendUrl + "/api/live-prep/sell-only-arm", {
+            method: "POST",
+            headers: await authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify(payload),
+          });
+          const d = await r.json().catch(function () { return {}; });
+          sellOnlyArmPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+          await refreshSellOnlyArm();
+        }
+
+        async function refreshLiquidationPlans() {
+          const r = await authFetch(backendUrl + "/api/live-prep/batch-liquidation/plans?limit=5", { headers: await authHeaders() });
+          const d = await r.json().catch(function () { return {}; });
+          liquidationPre.textContent = JSON.stringify(d, null, 2);
+          const plans = d && Array.isArray(d.plans) ? d.plans : [];
+          latestPlanId = plans.length ? String(plans[0].plan_id || "") : "";
+        }
+
+        async function prepareLiquidation() {
+          const payload = {
+            use_market_order: !!document.getElementById("liqUseMarket").checked,
+            actor: "desktop-user",
+            reason: String(document.getElementById("reasonInput").value || "prepare"),
+          };
+          const r = await authFetch(backendUrl + "/api/live-prep/batch-liquidation/prepare", {
+            method: "POST",
+            headers: await authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify(payload),
+          });
+          const d = await r.json().catch(function () { return {}; });
+          liquidationPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+          const plan = d && d.plan ? d.plan : null;
+          if (plan && plan.plan_id) latestPlanId = String(plan.plan_id);
+        }
+
+        async function executeLatestLiquidation() {
+          if (!latestPlanId) {
+            liquidationPre.textContent = "No prepared plan.";
+            return;
+          }
+          const payload = {
+            confirm: String(document.getElementById("liqConfirm").value || ""),
+            actor: "desktop-user",
+            reason: String(document.getElementById("reasonInput").value || "execute"),
+          };
+          const r = await authFetch(backendUrl + "/api/live-prep/batch-liquidation/" + latestPlanId + "/execute", {
+            method: "POST",
+            headers: await authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify(payload),
+          });
+          const d = await r.json().catch(function () { return {}; });
+          liquidationPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+          await refreshLiquidationPlans();
+          await refresh();
+        }
+
+        async function candidateAction(action, candidateId) {
+          candidateActionMsg.textContent = "(working)";
+          const payload = { actor: "desktop-user", reason: "manual_approval" };
+          async function post(path) {
+            const r = await authFetch(backendUrl + path, {
+              method: "POST",
+              headers: await authHeaders({ "Content-Type": "application/json" }),
+              body: JSON.stringify(payload),
+            });
+            const d = await r.json().catch(function () { return {}; });
+            return { ok: r.ok, data: d };
+          }
+          let result;
+          if (action === "approve") {
+            result = await post("/api/live-prep/candidates/" + candidateId + "/approve");
+          } else if (action === "reject") {
+            result = await post("/api/live-prep/candidates/" + candidateId + "/reject");
+          } else {
+            const a = await post("/api/live-prep/candidates/" + candidateId + "/approve");
+            if (!a.ok && String(a.data || "").indexOf("already_approved") < 0) {
+              candidateActionMsg.textContent = JSON.stringify(a.data.detail || a.data, null, 2);
+              await refreshCandidates();
+              return;
+            }
+            result = await post("/api/live-prep/candidates/" + candidateId + "/submit");
+          }
+          candidateActionMsg.textContent = result.ok ? "OK\n" + JSON.stringify(result.data, null, 2) : JSON.stringify(result.data.detail || result.data, null, 2);
+          await refreshCandidates();
+          await refresh();
+        }
+
+        candidatesTbody.addEventListener("click", function (ev) {
+          const t = ev.target;
+          if (!t || !t.getAttribute) return;
+          const act = t.getAttribute("data-act");
+          const id = t.getAttribute("data-id");
+          if (!act || !id) return;
+          candidateAction(act, id);
+        });
 
         document.getElementById("saveBtn").addEventListener("click", async function () {
           const payload = {
@@ -127,7 +343,35 @@
           saveMessage.textContent = r.ok ? "저장 완료\n" + JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
           await refresh();
         });
+        document.getElementById("saveEmergencyBtn").addEventListener("click", async function () {
+          const payload = {
+            enabled: !!document.getElementById("flagEmergency").checked,
+            reason: String(document.getElementById("reasonInput").value || "운영자 수동 승인"),
+            actor: "desktop-user",
+          };
+          const r = await authFetch(backendUrl + "/api/live-trading/emergency-stop", {
+            method: "POST",
+            headers: await authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify(payload),
+          });
+          const d = await r.json().catch(function () { return {}; });
+          saveMessage.textContent = r.ok ? "저장 완료\n" + JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+          await refresh();
+        });
         document.getElementById("refreshBtn").addEventListener("click", refresh);
+        document.getElementById("refreshCandidatesBtn").addEventListener("click", refreshCandidates);
+        document.getElementById("refreshSellOnlyArmBtn").addEventListener("click", refreshSellOnlyArm);
+        document.getElementById("saveSellOnlyArmBtn").addEventListener("click", saveSellOnlyArm);
+        document.getElementById("prepareLiquidationBtn").addEventListener("click", prepareLiquidation);
+        document.getElementById("refreshLiquidationBtn").addEventListener("click", refreshLiquidationPlans);
+        document.getElementById("executeLiquidationBtn").addEventListener("click", executeLatestLiquidation);
+        document.getElementById("genFinalBettingBtn").addEventListener("click", async function () {
+          candidateActionMsg.textContent = "(generating)";
+          const r = await authFetch(backendUrl + "/api/live-prep/final-betting/generate?limit=5", { method: "POST", headers: await authHeaders() });
+          const d = await r.json().catch(function () { return {}; });
+          candidateActionMsg.textContent = r.ok ? "생성 완료\n" + JSON.stringify(d.shadow || {}, null, 2) : JSON.stringify(d.detail || d, null, 2);
+          await refreshCandidates();
+        });
 
         document.getElementById("dashboardBtn").addEventListener("click", function () { window.location.href = "./dashboard.html"; });
         document.getElementById("domesticPaperBtn").addEventListener("click", function () { window.location.href = "./paper-trading.html"; });
@@ -139,6 +383,9 @@
         document.getElementById("logoutBtn").addEventListener("click", async function () { await clearDesktopSession(); window.location.href = "./login.html"; });
 
         await refresh();
+        await refreshCandidates();
+        await refreshSellOnlyArm();
+        await refreshLiquidationPlans();
       })();
     </script>
   </body>

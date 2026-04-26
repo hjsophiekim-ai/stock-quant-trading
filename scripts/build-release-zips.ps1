@@ -161,7 +161,26 @@ if ($DesktopExePath -and (Test-Path -LiteralPath $DesktopExePath)) {
 }
 
 $deskStage = Join-Path $releaseDir "desktop-zip-staging"
-if (Test-Path $deskStage) { Remove-Item -Recurse -Force $deskStage }
+if (Test-Path $deskStage) {
+  $removed = $false
+  for ($i = 0; $i -lt 3; $i++) {
+    try {
+      Remove-Item -Recurse -Force $deskStage -ErrorAction Stop
+      $removed = $true
+      break
+    } catch {
+      Start-Sleep -Milliseconds 600
+    }
+  }
+  if (-not $removed) {
+    try {
+      $old = Join-Path $releaseDir ("desktop-zip-staging-old-" + [Guid]::NewGuid().ToString("n").Substring(0, 8))
+      Move-Item -LiteralPath $deskStage -Destination $old -Force
+    } catch {
+      throw
+    }
+  }
+}
 New-Item -ItemType Directory -Force -Path $deskStage | Out-Null
 
 $codeSignCert = $null

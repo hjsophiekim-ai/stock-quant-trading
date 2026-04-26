@@ -36,6 +36,7 @@ class LiveSafetyRuntime:
     live_trading_flag: bool = False
     secondary_confirm_flag: bool = False
     extra_approval_flag: bool = False
+    live_emergency_stop: bool = False
     settings_history: list[HistoryItem] = field(default_factory=list)
     # Mock metrics for UI and API contract. TODO: wire real risk snapshot.
     daily_loss_pct: float = -1.4
@@ -69,6 +70,7 @@ def _status_payload() -> dict[str, object]:
         and runtime.live_trading_flag
         and runtime.secondary_confirm_flag
         and runtime.extra_approval_flag
+        and (not runtime.live_emergency_stop)
         and cfg.live_trading
         and cfg.live_trading_confirm
         and cfg.live_trading_extra_confirm
@@ -93,9 +95,11 @@ def _status_payload() -> dict[str, object]:
         warning = "LIVE 주문 가능 상태 (모든 승인·모의 검증 완료)"
     return {
         "trading_mode": cfg.trading_mode,
+        "execution_mode": cfg.execution_mode,
         "live_trading_flag": runtime.live_trading_flag,
         "secondary_confirm_flag": runtime.secondary_confirm_flag,
         "extra_approval_flag": runtime.extra_approval_flag,
+        "live_emergency_stop": runtime.live_emergency_stop,
         "paper_readiness_ok": paper_ok,
         "can_place_live_order": can_place,
         "trading_badge": "live" if can_place else "test",
@@ -191,6 +195,8 @@ def runtime_safety_validation() -> dict[str, object]:
         blockers.append("APP secondary confirmation is missing")
     if not runtime.extra_approval_flag:
         blockers.append("APP extra approval is missing")
+    if runtime.live_emergency_stop:
+        blockers.append("APP emergency stop is enabled")
     pr = evaluate_paper_readiness(cfg)
     paper = paper_readiness_to_dict(pr)
     if not pr.ok and not pr.bypassed:
@@ -200,6 +206,39 @@ def runtime_safety_validation() -> dict[str, object]:
         "blockers": blockers,
         "paper_readiness": paper,
     }
+
+
+class EmergencyStopRequest(BaseModel):
+    enabled: bool
+    reason: str = Field(min_length=3, max_length=240)
+    actor: str = Field(default="user", min_length=1, max_length=64)
+
+
+@router.post("/emergency-stop")
+def set_emergency_stop(payload: EmergencyStopRequest) -> dict[str, object]:
+    cfg = get_backend_settings()
+    runtime.live_emergency_stop = bool(payload.enabled)
+    append_risk_event(
+        cfg.risk_events_jsonl,
+        {
+            "ts_utc": datetime.now(timezone.utc).isoformat(),
+            "event_type": "LIVE_EMERGENCY_STOP_UPDATED",
+            "actor": payload.actor,
+            "enabled": bool(payload.enabled),
+            "reason": payload.reason,
+        },
+    )
+    runtime.settings_history.insert(
+        0,
+        HistoryItem(
+            ts=datetime.now(timezone.utc).isoformat(),
+            actor=payload.actor,
+            action="live_emergency_stop_updated",
+            reason=f"{payload.reason} | enabled={bool(payload.enabled)}",
+        ),
+    )
+    runtime.settings_history = runtime.settings_history[:100]
+    return {"ok": True, **_status_payload()}
 
 
 @router.get("/kill-switch-status")

@@ -370,6 +370,180 @@ def _rank_from_quote(qp: dict[str, Any], keys: tuple[str, ...]) -> int:
     return 9999
 
 
+def _fb_clamp01(v: float) -> float:
+    return _fb_clamp(v, 0.0, 1.0)
+
+
+def _fb_vwap(bars: pd.DataFrame) -> float | None:
+    if bars.empty or "close" not in bars.columns:
+        return None
+    if "volume" not in bars.columns:
+        try:
+            return float(bars["close"].astype("float64").mean())
+        except Exception:
+            return None
+    vols = bars["volume"].astype("float64")
+    v_sum = float(vols.sum())
+    if v_sum <= 0:
+        try:
+            return float(bars["close"].astype("float64").mean())
+        except Exception:
+            return None
+    try:
+        tp = (bars["high"].astype("float64") + bars["low"].astype("float64") + bars["close"].astype("float64")) / 3.0
+    except Exception:
+        tp = bars["close"].astype("float64")
+    return float((tp * vols).sum() / v_sum)
+
+
+def _fb_market_mode_label(mm_snap: dict[str, Any] | None) -> str:
+    mm = mm_snap or {}
+    manual = str(mm.get("manual_market_mode_override") or "").strip().lower()
+    if manual and manual != "auto" and manual in {"aggressive", "neutral", "defensive"}:
+        return manual
+    auto = str(mm.get("auto_market_mode") or "").strip().lower()
+    if auto in {"aggressive", "neutral", "defensive"}:
+        return auto
+    return "neutral"
+
+
+def _fb_followthrough_metrics(
+    morning_bars: pd.DataFrame,
+    *,
+    session_ymd: str,
+    open_px: float,
+    last_px: float,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    vwap = _fb_vwap(morning_bars)
+    out["vwap"] = float(vwap) if vwap is not None else None
+    morning_high = float(morning_bars["high"].max()) if (not morning_bars.empty and "high" in morning_bars.columns) else None
+    out["morning_high"] = morning_high
+    try:
+        open_to_0910 = _bars_between_times(morning_bars, session_ymd, time(9, 0), time(9, 10))
+    except Exception:
+        open_to_0910 = pd.DataFrame()
+    early_low = float(open_to_0910["low"].min()) if (not open_to_0910.empty and "low" in open_to_0910.columns) else None
+    out["early_low"] = early_low
+    try:
+        open_to_0905 = _bars_between_times(morning_bars, session_ymd, time(9, 0), time(9, 5))
+    except Exception:
+        open_to_0905 = pd.DataFrame()
+    or_high = float(open_to_0905["high"].max()) if (not open_to_0905.empty and "high" in open_to_0905.columns) else None
+    out["opening_range_high"] = or_high
+    pb = 0.0
+    if morning_high is not None and morning_high > 0:
+        pb = max(0.0, float(morning_high - last_px) / float(morning_high))
+    out["pullback_from_high_pct"] = float(pb * 100.0)
+    out["last_over_open_pct"] = float(((last_px / open_px) - 1.0) * 100.0) if open_px > 0 else 0.0
+    return out
+
+
+def _fb_followthrough_score(
+    *,
+    metrics: dict[str, Any],
+    open_px: float,
+    last_px: float,
+    gap_pct: float,
+    mode_label: str,
+    health_label: str,
+) -> tuple[float, bool, str]:
+    vwap = metrics.get("vwap")
+    early_low = metrics.get("early_low")
+    pullback = float(metrics.get("pullback_from_high_pct") or 0.0)
+    last_over_open_pct = float(metrics.get("last_over_open_pct") or 0.0)
+    vwap_hold_mult = 0.998
+    if mode_label == "aggressive":
+        vwap_hold_mult = 0.996
+    elif mode_label == "defensive":
+        vwap_hold_mult = 0.999
+    vwap_hold_ok = bool(vwap is not None and last_px >= float(vwap) * float(vwap_hold_mult))
+    early_low_intact = bool(early_low is None or last_px >= float(early_low) * 1.001)
+    gap_strength = _fb_clamp01(float(gap_pct) / 2.2) if gap_pct > 0 else 0.0
+    pb_norm = _fb_clamp01(pullback / 2.2)
+    pullback_score = 1.0 - pb_norm
+    open_hold = 1.0 if (last_over_open_pct >= -0.15) else 0.0
+    vwap_score = 1.0 if vwap_hold_ok else 0.0
+    low_score = 1.0 if early_low_intact else 0.0
+    score = (
+        0.24 * float(vwap_score)
+        + 0.22 * float(low_score)
+        + 0.22 * float(pullback_score)
+        + 0.18 * float(open_hold)
+        + 0.14 * float(gap_strength)
+    )
+    score = _fb_clamp01(score)
+    base_hold = 0.62
+    if mode_label == "aggressive":
+        base_hold -= 0.04
+    if mode_label == "defensive":
+        base_hold += 0.05
+    if health_label == "weak":
+        base_hold += 0.04
+    hold_allowed = bool(score >= base_hold and vwap_hold_ok and early_low_intact and pullback <= 2.25)
+    fail_reason = ""
+    if not vwap_hold_ok:
+        fail_reason = "below_vwap"
+    elif not early_low_intact:
+        fail_reason = "broke_early_low"
+    elif pullback > 2.25:
+        fail_reason = "pullback_too_deep"
+    elif score < base_hold:
+        fail_reason = "score_below_threshold"
+    return float(score), bool(hold_allowed), str(fail_reason)
+
+
+def _fb_profit_capture_profile(mode_label: str, health_label: str) -> str:
+    if mode_label == "defensive":
+        return "defensive_take_profit"
+    if health_label == "weak":
+        return "weak_health_take_profit"
+    if mode_label == "aggressive" and health_label == "strong":
+        return "aggressive_runner"
+    return "balanced_runner"
+
+
+def _fb_gap_up_scaleout_pct(
+    *,
+    gap_pct: float,
+    followthrough_score: float,
+    mode_label: str,
+    profile: str,
+) -> float:
+    gap = float(gap_pct)
+    if gap <= 0:
+        return 1.0
+    if gap < 0.75:
+        base = 0.32
+    elif gap < 1.6:
+        base = 0.46
+    elif gap < 2.8:
+        base = 0.56
+    else:
+        base = 0.68
+
+    score = float(followthrough_score)
+    if score >= 0.78:
+        base -= 0.10
+    elif score >= 0.66:
+        base -= 0.06
+    elif score <= 0.40:
+        base += 0.10
+    elif score <= 0.52:
+        base += 0.05
+
+    if mode_label == "aggressive":
+        base -= 0.04
+    elif mode_label == "defensive":
+        base += 0.05
+
+    if profile in {"defensive_take_profit", "weak_health_take_profit"}:
+        base += 0.04
+    if profile == "aggressive_runner":
+        base -= 0.03
+    return float(_fb_clamp(base, 0.22, 0.92))
+
+
 @dataclass
 class FinalBettingV1Strategy(BaseStrategy):
     """Paper 전용 종가베팅. IntradaySchedulerJobs + 분봉 유니버스에서만 동작."""
@@ -582,6 +756,11 @@ class FinalBettingV1Strategy(BaseStrategy):
         self.last_intraday_signal_breakdown["rest_until_kst_date"] = rest_until
         self.last_intraday_signal_breakdown["fb_performance"] = fb_performance_snapshot(carry)
         _health_lbl, health_mult = fb_health_size_multiplier(carry)
+        mode_label = _fb_market_mode_label(mm_snap)
+        fb_profile = _fb_profit_capture_profile(mode_label, _health_lbl)
+        self.last_intraday_signal_breakdown["fb_performance_snapshot_used"] = True
+        self.last_intraday_signal_breakdown["fb_health_size_multiplier"] = health_mult
+        self.last_intraday_signal_breakdown["fb_profit_capture_profile"] = fb_profile
         self.last_intraday_signal_breakdown["strategy_health"] = _health_lbl
         self.last_intraday_signal_breakdown["health_position_size_mult"] = health_mult
         _meta_fb = carry.get("fb_intraday_meta") or {}
@@ -610,6 +789,31 @@ class FinalBettingV1Strategy(BaseStrategy):
                 open_px = float(morning_bars.sort_values("date")["open"].iloc[0]) if not morning_bars.empty else last_px
                 gap_pct = (open_px / ref_close - 1.0) * 100.0 if ref_close > 0 else 0.0
                 m_atr_pct = _morning_bars_atr_pct(morning_bars, ref_close)
+                ft_metrics = _fb_followthrough_metrics(morning_bars, session_ymd=session_ymd, open_px=open_px, last_px=last_px)
+                ft_score, ft_hold_allowed, ft_fail_reason = _fb_followthrough_score(
+                    metrics=ft_metrics,
+                    open_px=open_px,
+                    last_px=last_px,
+                    gap_pct=gap_pct,
+                    mode_label=mode_label,
+                    health_label=_health_lbl,
+                )
+                gap_quality_score = _fb_clamp01((max(0.0, gap_pct) / 2.2) * (0.55 + 0.45 * ft_score)) if gap_pct > 0 else 0.0
+                vwap_hold_mult_base = 0.998 if mode_label != "defensive" else 0.999
+                if mode_label == "aggressive":
+                    vwap_hold_mult_base = 0.996
+                vwap_hold_ok_base = bool(
+                    ft_metrics.get("vwap") is not None and last_px >= float(ft_metrics.get("vwap") or 0.0) * float(vwap_hold_mult_base)
+                )
+                early_low_intact_base = bool(
+                    ft_metrics.get("early_low") is None
+                    or last_px >= float(ft_metrics.get("early_low") or 0.0) * 1.001
+                )
+
+                meta = dict(meta)
+                scaleout_signaled_day = str(meta.get("gap_up_scaleout_signaled_kst_date") or "")
+                runner_target_qty = int(meta.get("runner_target_qty") or 0)
+                runner_active = bool(partial_done or scaleout_signaled_day == today or runner_target_qty > 0)
                 # 갭 손절: 고정 -0.5%는 휩소에 취약 → ATR 반영 + 장 초반 유예(아주 큰 갭만 즉시)
                 gap_thr = -max(0.68, min(1.22, 0.52 + 0.11 * max(0.0, m_atr_pct)))
                 gap_immediate = gap_pct <= -1.18
@@ -626,11 +830,90 @@ class FinalBettingV1Strategy(BaseStrategy):
                 elif morning_weak:
                     exit_reason = "weak_morning_flush_fast_stop"
                 elif scale_start <= now.time() <= scale_end and gap_pct > 0.0:
-                    exit_reason = "gap_up_take_profit"
+                    if not runner_active:
+                        scaleout_pct = _fb_gap_up_scaleout_pct(
+                            gap_pct=gap_pct,
+                            followthrough_score=ft_score,
+                            mode_label=mode_label,
+                            profile=fb_profile,
+                        )
+                        pb = float(ft_metrics.get("pullback_from_high_pct") or 0.0)
+                        vwap = ft_metrics.get("vwap")
+                        vwap_hold_ok = bool(vwap is not None and last_px >= float(vwap) * (0.996 if mode_label == "aggressive" else 0.998))
+                        full_fade = bool(gap_pct >= 2.8 and ft_score <= 0.34 and pb >= 1.35 and (not vwap_hold_ok))
+                        if full_fade:
+                            exit_qty = qty
+                            exit_reason = "gap_up_take_profit_full_fade"
+                            meta["runner_exit_reason"] = "gap_up_fade_full"
+                            meta["runner_hold_reason"] = ""
+                            meta["runner_target_qty"] = 0
+                        else:
+                            raw_exit = int(round(float(qty) * float(scaleout_pct)))
+                            exit_qty = max(1, min(int(qty) - 1, raw_exit))
+                            runner_qty = int(qty) - int(exit_qty)
+                            exit_reason = "gap_up_take_profit_scaleout"
+                            meta["gap_up_scaleout_signaled_kst_date"] = today
+                            meta["gap_up_scaleout_pct"] = round(float(scaleout_pct), 4)
+                            meta["runner_target_qty"] = int(runner_qty)
+                            meta["runner_hold_reason"] = "followthrough_hold" if ft_hold_allowed else "scaleout_then_watch"
+                            meta["partial_scaleout_done"] = False
+                    else:
+                        meta["runner_hold_reason"] = str(meta.get("runner_hold_reason") or "")
+                elif runner_active and exit_reason is None and now.time() >= time(9, 12) and now.time() < t_exit1:
+                    vwap = ft_metrics.get("vwap")
+                    early_low = ft_metrics.get("early_low")
+                    pullback = float(ft_metrics.get("pullback_from_high_pct") or 0.0)
+                    runner_pullback_thr = 2.45 if mode_label == "aggressive" else (2.05 if mode_label == "defensive" else 2.25)
+                    runner_score_thr = 0.46 if mode_label == "aggressive" else (0.55 if mode_label == "defensive" else 0.50)
+                    vwap_fail_mult = 0.9965 if mode_label == "aggressive" else (0.999 if mode_label == "defensive" else 0.998)
+                    vwap_fail = bool(vwap is not None and now.time() >= time(9, 15) and last_px < float(vwap) * float(vwap_fail_mult))
+                    low_fail = bool(early_low is not None and last_px < float(early_low))
+                    pullback_fail = bool(pullback >= float(runner_pullback_thr))
+                    score_fail = bool(ft_score < float(runner_score_thr) and now.time() >= time(9, 18))
+                    if low_fail or pullback_fail or vwap_fail or score_fail:
+                        exit_reason = "runner_followthrough_fail_exit"
+                        exit_qty = qty
+                        if low_fail:
+                            meta["runner_exit_reason"] = "early_low_break"
+                        elif pullback_fail:
+                            meta["runner_exit_reason"] = "deep_pullback"
+                        elif vwap_fail:
+                            meta["runner_exit_reason"] = "vwap_break"
+                        else:
+                            meta["runner_exit_reason"] = "score_fail"
+                    else:
+                        meta["runner_hold_reason"] = "followthrough_ok"
                 elif now.time() >= time(10, 0) and last_px < avg * 1.01:
-                    exit_reason = "time_value_exit_1000"
+                    vwap = ft_metrics.get("vwap")
+                    allow_hold = bool(
+                        runner_active
+                        and ft_hold_allowed
+                        and ft_score >= 0.72
+                        and vwap is not None
+                        and last_px >= float(vwap)
+                        and mode_label == "aggressive"
+                        and _health_lbl == "strong"
+                    )
+                    if not allow_hold:
+                        exit_reason = "time_value_exit_1000"
+                    else:
+                        meta["runner_hold_reason"] = "time_value_hold"
                 elif exit_reason is None and now.time() >= t_exit1:
                     exit_reason = "hard_exit_1100"
+
+                meta["morning_followthrough_score"] = round(float(ft_score), 4)
+                meta["gap_quality_score"] = round(float(gap_quality_score), 4)
+                meta["followthrough_hold_allowed"] = bool(ft_hold_allowed)
+                meta["followthrough_fail_reason"] = str(ft_fail_reason)
+                meta["vwap_hold_ok"] = bool(vwap_hold_ok_base)
+                meta["early_low_intact"] = bool(early_low_intact_base)
+                if ft_metrics.get("vwap") is not None:
+                    meta["vwap"] = round(float(ft_metrics.get("vwap") or 0.0), 4)
+                if ft_metrics.get("early_low") is not None:
+                    meta["early_low"] = round(float(ft_metrics.get("early_low") or 0.0), 4)
+                meta["pullback_from_high_pct"] = round(float(ft_metrics.get("pullback_from_high_pct") or 0.0), 4)
+                meta["gap_pct"] = round(float(gap_pct), 4)
+                fb_positions[sym] = meta
 
             if exit_reason:
                 self.last_intraday_signal_breakdown["exits_evaluated"] = (
@@ -657,6 +940,21 @@ class FinalBettingV1Strategy(BaseStrategy):
                         "symbol": sym,
                         "final_betting_exit_reason": exit_reason,
                         "final_betting_nextday_gap_mode": "atr_scaled",
+                        "gap_pct": round(float(meta.get("gap_pct") or 0.0), 4),
+                        "gap_up_scaleout_pct": meta.get("gap_up_scaleout_pct"),
+                        "runner_qty": int(meta.get("runner_target_qty") or 0),
+                        "partial_scaleout_done": bool(meta.get("partial_scaleout_done")),
+                        "runner_hold_reason": str(meta.get("runner_hold_reason") or ""),
+                        "runner_exit_reason": str(meta.get("runner_exit_reason") or ""),
+                        "morning_followthrough_score": meta.get("morning_followthrough_score"),
+                        "gap_quality_score": meta.get("gap_quality_score"),
+                        "followthrough_hold_allowed": bool(meta.get("followthrough_hold_allowed")),
+                        "followthrough_fail_reason": str(meta.get("followthrough_fail_reason") or ""),
+                        "vwap_hold_ok": bool(meta.get("vwap_hold_ok")),
+                        "early_low_intact": bool(meta.get("early_low_intact")),
+                        "fb_performance_snapshot_used": True,
+                        "fb_health_size_multiplier": health_mult,
+                        "fb_profit_capture_profile": fb_profile,
                     }
                 )
                 signals.append(
@@ -670,6 +968,8 @@ class FinalBettingV1Strategy(BaseStrategy):
                         strategy_name="final_betting_v1",
                     )
                 )
+
+        carry["positions"] = fb_positions
 
         # --- entries (당일 종가 직전) ---
         # Enhanced entry window: 14:30-14:59 early, 15:00-15:18 core, after 15:18 closed

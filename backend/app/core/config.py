@@ -21,6 +21,7 @@ class BackendSettings(BaseSettings):
     kis_base_url: str = Field(default="https://openapi.koreainvestment.com:9443", alias="KIS_BASE_URL")
     kis_mock_base_url: str = Field(default="https://openapivts.koreainvestment.com:29443", alias="KIS_MOCK_BASE_URL")
     trading_mode: str = Field(default="paper", alias="TRADING_MODE")
+    execution_mode: str = Field(default="paper_auto", alias="EXECUTION_MODE")
     live_trading: bool = Field(default=False, alias="LIVE_TRADING")
     live_trading_enabled: bool = Field(default=False, alias="LIVE_TRADING_ENABLED")
     live_trading_confirm: bool = Field(default=False, alias="LIVE_TRADING_CONFIRM")
@@ -66,6 +67,51 @@ class BackendSettings(BaseSettings):
     order_retry_backoff_sec: float = Field(default=0.6, ge=0.1, alias="ORDER_RETRY_BACKOFF_SEC")
     order_stale_submitted_minutes: float = Field(default=180.0, ge=5.0, alias="ORDER_STALE_SUBMITTED_MINUTES")
 
+    live_prep_candidates_store_json: str = Field(
+        default="backend_data/live_prep/candidates.json",
+        alias="LIVE_PREP_CANDIDATES_STORE_JSON",
+    )
+    live_prep_equity_tracker_path: str = Field(
+        default="backend_data/live_prep/equity_tracker_state.json",
+        alias="LIVE_PREP_EQUITY_TRACKER_PATH",
+    )
+    live_prep_daily_loss_limit_pct: float = Field(
+        default=2.0,
+        ge=0.1,
+        le=20.0,
+        alias="LIVE_PREP_DAILY_LOSS_LIMIT_PCT",
+    )
+    live_prep_total_notional_cap_krw: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1_000_000_000_000.0,
+        alias="LIVE_PREP_TOTAL_NOTIONAL_CAP_KRW",
+    )
+    live_prep_per_order_notional_cap_krw: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=500_000_000_000.0,
+        alias="LIVE_PREP_PER_ORDER_NOTIONAL_CAP_KRW",
+    )
+    live_prep_max_positions: int = Field(default=6, ge=1, le=50, alias="LIVE_PREP_MAX_POSITIONS")
+    live_prep_sell_only_arm_store_json: str = Field(
+        default="backend_data/live_prep/sell_only_arm.json",
+        alias="LIVE_PREP_SELL_ONLY_ARM_STORE_JSON",
+    )
+    live_prep_liquidation_plans_store_json: str = Field(
+        default="backend_data/live_prep/liquidation_plans.json",
+        alias="LIVE_PREP_LIQUIDATION_PLANS_STORE_JSON",
+    )
+    live_prep_sell_only_tick_interval_sec: float = Field(
+        default=15.0,
+        ge=2.0,
+        le=600.0,
+        alias="LIVE_PREP_SELL_ONLY_TICK_INTERVAL_SEC",
+    )
+    live_prep_sell_only_window_start_hhmm: str = Field(default="090000", alias="LIVE_PREP_SELL_ONLY_WINDOW_START_HHMM")
+    live_prep_sell_only_window_end_hhmm: str = Field(default="110000", alias="LIVE_PREP_SELL_ONLY_WINDOW_END_HHMM")
+    live_prep_sell_only_max_orders_per_tick: int = Field(default=4, ge=1, le=50, alias="LIVE_PREP_SELL_ONLY_MAX_ORDERS_PER_TICK")
+
     portfolio_data_dir: str = Field(default="backend_data/portfolio", alias="PORTFOLIO_DATA_DIR")
     portfolio_equity_tracker_path: str = Field(
         default="backend_data/portfolio/equity_tracker_state.json",
@@ -103,3 +149,13 @@ def is_live_order_execution_configured(settings: BackendSettings) -> bool:
         and settings.live_trading_confirm
         and settings.live_trading_extra_confirm
     )
+
+
+def is_execution_mode_allowed(settings: BackendSettings) -> bool:
+    mode = (settings.execution_mode or "").strip().lower()
+    tmode = (settings.trading_mode or "").strip().lower()
+    if tmode == "paper":
+        return mode in {"paper_auto"}
+    if tmode == "live":
+        return mode in {"live_shadow", "live_manual_approval"}
+    return False

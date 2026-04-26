@@ -34,6 +34,7 @@ def _ensure_full_stack(app: FastAPI) -> None:
         from .api.broker_routes import router as broker_router
         from .api.auth_routes import router as auth_router
         from .api.live_trading_routes import router as live_trading_router
+        from .api.live_prep_routes import router as live_prep_router
         from .api.paper_trading_routes import router as paper_trading_router
         from .api.runtime_engine_routes import router as runtime_engine_router
         from .api.screening_routes import router as screening_router
@@ -50,6 +51,7 @@ def _ensure_full_stack(app: FastAPI) -> None:
         app.include_router(auth_router, prefix="/api")
         app.include_router(broker_router, prefix="/api")
         app.include_router(live_trading_router, prefix="/api")
+        app.include_router(live_prep_router, prefix="/api")
         app.include_router(paper_trading_router, prefix="/api")
         app.include_router(dashboard_router, prefix="/api")
         app.include_router(trading_router, prefix="/api")
@@ -71,10 +73,17 @@ def _ensure_full_stack(app: FastAPI) -> None:
         from backend.app.core.version_info import get_backend_version_payload
         from backend.app.portfolio.sync_engine import install_portfolio_sync_background
         from backend.app.risk.service import install_risk_audit_from_settings
+        from backend.app.engine.live_sell_only_loop import install_live_sell_only_background
 
         settings = get_backend_settings()
         install_risk_audit_from_settings()
         install_portfolio_sync_background(settings)
+        try:
+            from backend.app.api.broker_routes import get_broker_service
+
+            install_live_sell_only_background(settings, get_broker_service())
+        except Exception:
+            pass
 
         paths = get_resolved_storage_paths()
         trade_sql = sqlite_trading_db_file_path(settings.database_url)

@@ -132,6 +132,46 @@ Base: `/api/live-trading`
   - res: `KillSwitchStatusResponse`
 - `GET /settings-history`
   - res: `{ items: Array<{ ts: string; actor: string; action: string; reason: string }> }`
+- `POST /emergency-stop`
+  - req: `{ enabled: boolean, reason: string, actor?: string }`
+  - res: `{ ok: boolean } & LiveTradingStatusResponse`
+
+## 8b) Live Prep API (Manual Approval)
+
+Base: `/api/live-prep`
+
+실거래 자동 제출(무인 실행)은 기본 금지입니다. 이 API는 **후보/신호 산출 + 수동 승인 기반 제출**이 기본이며, 별도 `sell-only arm`은 final_betting 포지션의 매도 신호에 한해 제한적으로 사용합니다.
+
+- `GET /status`
+  - res: `{ trading_mode, execution_mode, live_ready_for_submit, blockers }`
+- `POST /final-betting/generate?limit=5` (Authorization: Bearer)
+  - res: `{ ok: true, items: LiveCandidate[], shadow: object }`
+- `POST /hf-shadow/generate?strategy_id=scalp_rsi_flag_hf_v1` (Authorization: Bearer)
+  - res: `{ ok: true, order_allowed: false, generated_orders: object[] }` (신호/가상주문 출력)
+- `GET /sell-only-arm/status` (Authorization: Bearer)
+  - res: `{ ok: true, state: SellOnlyArmState | null }`
+- `POST /sell-only-arm` (Authorization: Bearer)
+  - req: `{ enabled: boolean, armed_for_kst_date?: string, actor?: string, reason?: string }`
+  - res: `{ ok: true, state: SellOnlyArmState }`
+- `POST /batch-liquidation/prepare` (Authorization: Bearer)
+  - req: `{ use_market_order?: boolean, actor?: string, reason?: string }`
+  - res: `{ ok: true, plan: LiquidationPlan }`
+- `GET /batch-liquidation/plans?limit=10` (Authorization: Bearer)
+  - res: `{ ok: true, plans: LiquidationPlan[], count: number }`
+- `POST /batch-liquidation/{plan_id}/execute` (Authorization: Bearer)
+  - req: `{ confirm: "LIQUIDATE_ALL", actor?: string, reason?: string }`
+  - res: `{ ok: true, plan: LiquidationPlan, submitted: object[], skipped: object[] }`
+- `GET /candidates?status_filter=&strategy_id=&symbol=&limit=200` (Authorization: Bearer)
+  - res: `{ items: LiveCandidate[], count: number }`
+- `POST /candidates/{candidate_id}/approve` (Authorization: Bearer)
+  - req: `{ actor?: string, reason?: string }`
+  - res: `{ ok: true, candidate: LiveCandidate }`
+- `POST /candidates/{candidate_id}/reject` (Authorization: Bearer)
+  - req: `{ actor?: string, reason?: string }`
+  - res: `{ ok: true, candidate: LiveCandidate }`
+- `POST /candidates/{candidate_id}/submit` (Authorization: Bearer)
+  - req: `{ actor?: string, reason?: string }`
+  - res: `{ ok: true, candidate: LiveCandidate, broker_result: object }`
 
 ## 9) OpenAPI 자동생성 전환 가이드
 

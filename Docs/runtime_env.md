@@ -44,7 +44,9 @@
   - `DATABASE_URL`, `REDIS_URL`
   - `KIS_APP_KEY`, `KIS_APP_SECRET`
   - `TRADING_MODE` (기본 `paper`)
+  - `EXECUTION_MODE` (기본 `paper_auto`; live에서는 `live_shadow` 또는 `live_manual_approval`)
   - `LIVE_TRADING`, `LIVE_TRADING_ENABLED`, `LIVE_TRADING_CONFIRM`, `LIVE_TRADING_EXTRA_CONFIRM`
+  - `LIVE_PREP_*` (수동 승인 기반 live prep 한도/저장소)
 
 ### live 주문이 열리는 조건
 
@@ -56,6 +58,8 @@
 4. `LIVE_TRADING_CONFIRM=true`
 5. `LIVE_TRADING_EXTRA_CONFIRM=true`
 6. 앱 내부 live 승인 플래그
+7. `EXECUTION_MODE=live_manual_approval`
+8. 앱 내부 Emergency Stop 비활성
 
 즉, 운영 기본값(모두 false)에서는 live가 잠금 상태입니다.
 
