@@ -15,8 +15,16 @@ type SafetyStatus = {
   live_trading_flag: boolean;
   secondary_confirm_flag: boolean;
   extra_approval_flag: boolean;
+  requested_live_trading_flag?: boolean;
+  requested_secondary_confirm_flag?: boolean;
+  requested_extra_approval_flag?: boolean;
   live_emergency_stop?: boolean;
   can_place_live_order: boolean;
+  effective_can_place_live_order?: boolean;
+  unlock_pending_due_to_paper_readiness?: boolean;
+  settings_saved_but_not_effective?: boolean;
+  pending_blockers?: string[];
+  pending_blocker_details?: Array<{ code: string; message: string }>;
   trading_badge: "test" | "live";
   warning_message: string;
 };
@@ -185,7 +193,14 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
       return;
     }
     setStatus(data);
-    setMsg(data.warning_message ?? "저장 완료");
+    const can = Boolean(data?.can_place_live_order);
+    const pending = Boolean(data?.unlock_pending_due_to_paper_readiness);
+    const msg1 = can
+      ? "설정 저장 완료. 현재 LIVE 주문 가능 상태입니다."
+      : pending
+        ? "설정 저장 완료. Paper readiness 통과 후 실거래 제출이 가능합니다."
+        : "설정 저장 완료. 실거래 제출은 아직 잠금 상태입니다.";
+    setMsg(msg1);
     await refresh();
   };
 
@@ -411,6 +426,25 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
             Live submit blocked: {"\n"}- {liveExecStatus.blocked.submit_blockers.join("\n- ")}
           </Text>
         ) : null}
+
+        <Text style={{ marginTop: 16, fontWeight: "bold" }}>Saved operator intent</Text>
+        <Text style={{ marginTop: 6 }}>
+          requested_live_trading_flag: {String(status.requested_live_trading_flag ?? status.live_trading_flag)}
+        </Text>
+        <Text>requested_secondary_confirm_flag: {String(status.requested_secondary_confirm_flag ?? status.secondary_confirm_flag)}</Text>
+        <Text>requested_extra_approval_flag: {String(status.requested_extra_approval_flag ?? status.extra_approval_flag)}</Text>
+        <Text>unlock_pending_due_to_paper_readiness: {String(status.unlock_pending_due_to_paper_readiness ?? false)}</Text>
+        <Text>settings_saved_but_not_effective: {String(status.settings_saved_but_not_effective ?? false)}</Text>
+
+        <Text style={{ marginTop: 16, fontWeight: "bold" }}>Effective live unlock blockers</Text>
+        <Text>effective_can_place_live_order: {String(status.effective_can_place_live_order ?? status.can_place_live_order)}</Text>
+        {Array.isArray(status.pending_blockers) && status.pending_blockers.length ? (
+          <Text style={{ marginTop: 6, color: "#b91c1c" }}>
+            pending_blockers: {"\n"}- {status.pending_blockers.join("\n- ")}
+          </Text>
+        ) : (
+          <Text style={{ marginTop: 6, color: "#334155" }}>pending_blockers: -</Text>
+        )}
 
         {liveStrategyId === "final_betting_v1" ? (
           <View style={{ marginTop: 16 }}>

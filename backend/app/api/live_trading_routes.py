@@ -96,9 +96,16 @@ def _status_payload_for_user(cfg: BackendSettings, st: LiveSafetyState) -> dict[
         "live_trading_flag": st.live_trading_flag,
         "secondary_confirm_flag": st.secondary_confirm_flag,
         "extra_approval_flag": st.extra_approval_flag,
+        "requested_live_trading_flag": st.live_trading_flag,
+        "requested_secondary_confirm_flag": st.secondary_confirm_flag,
+        "requested_extra_approval_flag": st.extra_approval_flag,
         "live_emergency_stop": st.live_emergency_stop,
         "paper_readiness_ok": paper_ok,
         "can_place_live_order": can_place,
+        "effective_can_place_live_order": can_place,
+        "unlock_pending_due_to_paper_readiness": bool(
+            st.live_trading_flag and st.secondary_confirm_flag and st.extra_approval_flag and (not paper_ok)
+        ),
         "trading_badge": "live" if can_place else "test",
         "warning_message": warning,
     }
@@ -109,7 +116,17 @@ def live_status(authorization: str | None = Header(default=None)) -> dict[str, o
     cfg = get_backend_settings()
     user = _current_user(authorization)
     st = _store(cfg).get(getattr(user, "id"))
-    return _status_payload_for_user(cfg, st)
+    status_payload = _status_payload_for_user(cfg, st)
+    safety = runtime_safety_validation_for_user_id(cfg, getattr(user, "id"))
+    settings_saved_but_not_effective = bool(
+        bool(status_payload.get("unlock_pending_due_to_paper_readiness")) and (not bool(status_payload.get("can_place_live_order")))
+    )
+    return {
+        **status_payload,
+        "settings_saved_but_not_effective": settings_saved_but_not_effective,
+        "pending_blockers": list(safety.get("blockers") or []),
+        "pending_blocker_details": list(safety.get("blocker_details") or []),
+    }
 
 
 def _attempting_full_app_unlock(req: LiveSettingsUpdateRequest) -> bool:
@@ -125,52 +142,7 @@ def update_live_settings(
     user = _current_user(authorization)
     store = _store(cfg)
     st = store.get(getattr(user, "id"))
-    if _attempting_full_app_unlock(payload):
-        pr = evaluate_paper_readiness(cfg)
-        if not pr.ok and not pr.bypassed:
-            append_risk_event(
-                cfg.risk_events_jsonl,
-                {
-                    "ts_utc": datetime.now(timezone.utc).isoformat(),
-                    "event_type": "LIVE_UNLOCK_DENIED",
-                    "actor": getattr(user, "id"),
-                    "app_actor": payload.actor,
-                    "reason": payload.reason,
-                    "paper_readiness": pr.technical_summary,
-                    "user_message_ko": pr.user_message_ko,
-                },
-            )
-            st.history.insert(
-                0,
-                LiveSafetyHistoryItem(
-                    ts=datetime.now(timezone.utc).isoformat(),
-                    actor=str(payload.actor or getattr(user, "id")),
-                    action="live_unlock_denied_paper_readiness",
-                    reason=f"{payload.reason} | {pr.user_message_ko[:200]}",
-                ),
-            )
-            st.history = st.history[:100]
-            st.updated_at_utc = datetime.now(timezone.utc).isoformat()
-            store.upsert(st)
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "live_unlock_blocked",
-                    "message_ko": pr.user_message_ko,
-                    "paper_readiness": paper_readiness_to_dict(pr),
-                },
-            )
-        append_risk_event(
-            cfg.risk_events_jsonl,
-            {
-                "ts_utc": datetime.now(timezone.utc).isoformat(),
-                "event_type": "LIVE_UNLOCK_APPROVED_CHECKLIST",
-                "actor": getattr(user, "id"),
-                "app_actor": payload.actor,
-                "reason": payload.reason,
-                "paper_readiness": pr.technical_summary,
-            },
-        )
+    attempting_full = _attempting_full_app_unlock(payload)
     st.live_trading_flag = bool(payload.live_trading_flag)
     st.secondary_confirm_flag = bool(payload.secondary_confirm_flag)
     st.extra_approval_flag = bool(payload.extra_approval_flag)
@@ -186,7 +158,62 @@ def update_live_settings(
     )
     st.history = st.history[:100]
     store.upsert(st)
-    return {"ok": True, **_status_payload_for_user(cfg, st)}
+
+    unlock_pending_due_to_paper_readiness = False
+    if attempting_full:
+        pr = evaluate_paper_readiness(cfg)
+        if not pr.ok and not pr.bypassed:
+            unlock_pending_due_to_paper_readiness = True
+            append_risk_event(
+                cfg.risk_events_jsonl,
+                {
+                    "ts_utc": datetime.now(timezone.utc).isoformat(),
+                    "event_type": "LIVE_UNLOCK_PENDING_PAPER_READINESS",
+                    "actor": getattr(user, "id"),
+                    "app_actor": payload.actor,
+                    "reason": payload.reason,
+                    "paper_readiness": pr.technical_summary,
+                    "user_message_ko": pr.user_message_ko,
+                },
+            )
+            st.history.insert(
+                0,
+                LiveSafetyHistoryItem(
+                    ts=datetime.now(timezone.utc).isoformat(),
+                    actor=str(payload.actor or getattr(user, "id")),
+                    action="live_unlock_pending_paper_readiness",
+                    reason=f"{payload.reason} | {pr.user_message_ko[:200]}",
+                ),
+            )
+            st.history = st.history[:100]
+            st.updated_at_utc = datetime.now(timezone.utc).isoformat()
+            store.upsert(st)
+        else:
+            append_risk_event(
+                cfg.risk_events_jsonl,
+                {
+                    "ts_utc": datetime.now(timezone.utc).isoformat(),
+                    "event_type": "LIVE_UNLOCK_APPROVED_CHECKLIST",
+                    "actor": getattr(user, "id"),
+                    "app_actor": payload.actor,
+                    "reason": payload.reason,
+                    "paper_readiness": pr.technical_summary,
+                },
+            )
+
+    status_payload = _status_payload_for_user(cfg, st)
+    safety = runtime_safety_validation_for_user_id(cfg, getattr(user, "id"))
+    settings_saved_but_not_effective = bool(unlock_pending_due_to_paper_readiness and (not bool(status_payload.get("can_place_live_order"))))
+
+    return {
+        "ok": True,
+        "settings_saved": True,
+        "unlock_pending_due_to_paper_readiness": bool(unlock_pending_due_to_paper_readiness),
+        "settings_saved_but_not_effective": settings_saved_but_not_effective,
+        "pending_blockers": list(safety.get("blockers") or []),
+        "pending_blocker_details": list(safety.get("blocker_details") or []),
+        **status_payload,
+    }
 
 
 @router.get("/settings-history")
@@ -205,7 +232,6 @@ def paper_readiness(authorization: str | None = Header(default=None)) -> dict[st
     return paper_readiness_to_dict(pr)
 
 
-@router.get("/runtime-safety-validation")
 def runtime_safety_validation_for_user_id(cfg: BackendSettings, user_id: str) -> dict[str, object]:
     st = _store(cfg).get(user_id)
     blockers: list[str] = []

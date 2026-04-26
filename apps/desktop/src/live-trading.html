@@ -77,6 +77,11 @@
         </div>
         <div class="panel">
           <h3 style="margin-top: 0">상태 요약</h3>
+          <h4 style="margin: 10px 0 6px 0">Saved operator intent</h4>
+          <pre id="savedIntentPre">(loading)</pre>
+          <h4 style="margin: 10px 0 6px 0">Effective unlock blockers</h4>
+          <pre id="effectiveBlockersPre">(loading)</pre>
+          <h4 style="margin: 10px 0 6px 0">Raw status</h4>
           <pre id="statusPre">(loading)</pre>
         </div>
         <div class="panel">
@@ -176,6 +181,8 @@
         }
 
         const statusPre = document.getElementById("statusPre");
+        const savedIntentPre = document.getElementById("savedIntentPre");
+        const effectiveBlockersPre = document.getElementById("effectiveBlockersPre");
         const runtimePre = document.getElementById("runtimePre");
         const paperPre = document.getElementById("paperReadinessPre");
         const saveMessage = document.getElementById("saveMessage");
@@ -201,6 +208,19 @@
           const pr = await prR.json().catch(function () { return {}; });
           const ks = await ksR.json().catch(function () { return {}; });
           statusPre.textContent = JSON.stringify(st, null, 2);
+          savedIntentPre.textContent = JSON.stringify({
+            requested_live_trading_flag: st.requested_live_trading_flag,
+            requested_secondary_confirm_flag: st.requested_secondary_confirm_flag,
+            requested_extra_approval_flag: st.requested_extra_approval_flag,
+            settings_saved_but_not_effective: st.settings_saved_but_not_effective,
+            unlock_pending_due_to_paper_readiness: st.unlock_pending_due_to_paper_readiness,
+          }, null, 2);
+          effectiveBlockersPre.textContent = JSON.stringify({
+            effective_can_place_live_order: st.effective_can_place_live_order,
+            can_place_live_order: st.can_place_live_order,
+            pending_blockers: st.pending_blockers,
+            pending_blocker_details: st.pending_blocker_details,
+          }, null, 2);
           runtimePre.textContent = JSON.stringify(rt, null, 2);
           paperPre.textContent = JSON.stringify(pr, null, 2) + "\n\nkill_switch:\n" + JSON.stringify(ks, null, 2);
           document.getElementById("flagLive").checked = !!st.live_trading_flag;
@@ -452,7 +472,22 @@
             body: JSON.stringify(payload),
           });
           const d = await r.json().catch(function () { return {}; });
-          saveMessage.textContent = r.ok ? "저장 완료\n" + JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+          if (!r.ok) {
+            saveMessage.textContent = JSON.stringify(d.detail || d, null, 2);
+            await refresh();
+            return;
+          }
+          const can = !!d.can_place_live_order;
+          const pending = !!d.unlock_pending_due_to_paper_readiness;
+          const msg = can
+            ? "설정 저장 완료. 현재 LIVE 주문 가능 상태입니다."
+            : (pending ? "설정 저장 완료. Paper readiness 통과 후 실거래 제출이 가능합니다." : "설정 저장 완료. 실거래 제출은 아직 잠금 상태입니다.");
+          saveMessage.textContent = msg + "\n\n" + JSON.stringify({
+            settings_saved: d.settings_saved,
+            settings_saved_but_not_effective: d.settings_saved_but_not_effective,
+            unlock_pending_due_to_paper_readiness: d.unlock_pending_due_to_paper_readiness,
+            pending_blockers: d.pending_blockers,
+          }, null, 2);
           await refresh();
         });
         document.getElementById("saveEmergencyBtn").addEventListener("click", async function () {

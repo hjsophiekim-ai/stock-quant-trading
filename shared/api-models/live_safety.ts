@@ -6,9 +6,17 @@ export interface LiveTradingStatusResponse {
   live_trading_flag: boolean;
   secondary_confirm_flag: boolean;
   extra_approval_flag: boolean;
+  requested_live_trading_flag?: boolean;
+  requested_secondary_confirm_flag?: boolean;
+  requested_extra_approval_flag?: boolean;
   live_emergency_stop?: boolean;
   paper_readiness_ok?: boolean;
   can_place_live_order: boolean;
+  effective_can_place_live_order?: boolean;
+  unlock_pending_due_to_paper_readiness?: boolean;
+  settings_saved_but_not_effective?: boolean;
+  pending_blockers?: string[];
+  pending_blocker_details?: Array<{ code: string; message: string }>;
   trading_badge: TradingBadge;
   warning_message: string;
 }
