@@ -33,6 +33,7 @@ router = APIRouter(prefix="/live-prep", tags=["live-prep"])
 class CandidateDecisionRequest(BaseModel):
     actor: str = Field(default="user", min_length=1, max_length=64)
     reason: str = Field(default="manual_approval", min_length=1, max_length=240)
+    execution_mode: str | None = Field(default=None, min_length=0, max_length=64)
 
 
 class SellOnlyArmRequest(BaseModel):
@@ -40,18 +41,21 @@ class SellOnlyArmRequest(BaseModel):
     armed_for_kst_date: str | None = Field(default=None, min_length=0, max_length=16)
     actor: str = Field(default="user", min_length=1, max_length=64)
     reason: str = Field(default="arm_sell_only", min_length=1, max_length=240)
+    execution_mode: str | None = Field(default=None, min_length=0, max_length=64)
 
 
 class LiquidationPrepareRequest(BaseModel):
     use_market_order: bool = True
     actor: str = Field(default="user", min_length=1, max_length=64)
     reason: str = Field(default="prepare_liquidation", min_length=1, max_length=240)
+    execution_mode: str | None = Field(default=None, min_length=0, max_length=64)
 
 
 class LiquidationExecuteRequest(BaseModel):
     confirm: str = Field(min_length=3, max_length=80)
     actor: str = Field(default="user", min_length=1, max_length=64)
     reason: str = Field(default="execute_liquidation", min_length=1, max_length=240)
+    execution_mode: str | None = Field(default=None, min_length=0, max_length=64)
 
 
 def _current_user(authorization: str | None):
@@ -100,7 +104,7 @@ def _require_live_prep_enabled() -> None:
         raise HTTPException(status_code=403, detail="EXECUTION_MODE=live_shadow 또는 live_manual_approval 만 허용합니다.")
 
 
-def _effective_execution_mode_for_user(user_id: str) -> str | None:
+def _effective_execution_mode_for_user(user_id: str, hint_execution_mode: str | None = None) -> str | None:
     cfg = get_backend_settings()
     mode = (cfg.execution_mode or "").strip().lower()
     if mode in {"live_shadow", "live_manual_approval"}:
@@ -108,18 +112,20 @@ def _effective_execution_mode_for_user(user_id: str) -> str | None:
     st = LiveExecSessionStore(cfg.live_exec_sessions_store_json)
     sess = st.get_active(user_id) or st.get_latest(user_id)
     if sess is None:
-        return None
+        m2 = (hint_execution_mode or "").strip().lower()
+        return m2 if m2 in {"live_shadow", "live_manual_approval"} else None
     m = (sess.execution_mode or "").strip().lower()
     return m if m in {"live_shadow", "live_manual_approval"} else None
 
 
-def _require_live_prep_enabled_for_user(user_id: str) -> None:
+def _require_live_prep_enabled_for_user(user_id: str, hint_execution_mode: str | None = None) -> str:
     cfg = get_backend_settings()
     if (cfg.trading_mode or "").lower() != "live":
         raise HTTPException(status_code=403, detail="TRADING_MODE=live 에서만 사용할 수 있습니다.")
-    eff = _effective_execution_mode_for_user(user_id)
+    eff = _effective_execution_mode_for_user(user_id, hint_execution_mode=hint_execution_mode)
     if eff not in {"live_shadow", "live_manual_approval"}:
         raise HTTPException(status_code=403, detail="live 실행 모드가 설정되지 않았습니다. (live_shadow / live_manual_approval)")
+    return eff
 
 
 @router.get("/status")
@@ -144,9 +150,12 @@ def live_prep_status(authorization: str | None = Header(default=None)) -> dict[s
 
 
 @router.get("/sell-only-arm/status")
-def sell_only_arm_status(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+def sell_only_arm_status(
+    authorization: str | None = Header(default=None),
+    execution_mode: str | None = Query(default=None),
+) -> dict[str, Any]:
     user = _current_user(authorization)
-    _require_live_prep_enabled_for_user(user.id)
+    _require_live_prep_enabled_for_user(user.id, hint_execution_mode=execution_mode)
     st = _arm_store().get(user.id)
     return {"ok": True, "state": asdict(st) if st is not None else None}
 
@@ -154,7 +163,7 @@ def sell_only_arm_status(authorization: str | None = Header(default=None)) -> di
 @router.post("/sell-only-arm")
 def set_sell_only_arm(payload: SellOnlyArmRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     user = _current_user(authorization)
-    _require_live_prep_enabled_for_user(user.id)
+    _require_live_prep_enabled_for_user(user.id, hint_execution_mode=payload.execution_mode)
     now = kst_now()
     tomorrow = (now.date().toordinal() + 1)
     default_armed_day = datetime.fromordinal(tomorrow).strftime("%Y%m%d")
@@ -183,10 +192,11 @@ def set_sell_only_arm(payload: SellOnlyArmRequest, authorization: str | None = H
 @router.post("/final-betting/generate")
 def generate_final_betting_candidates(
     authorization: str | None = Header(default=None),
+    execution_mode: str | None = Query(default=None),
     limit: int = Query(default=5, ge=1, le=5),
 ) -> dict[str, Any]:
     user = _current_user(authorization)
-    _require_live_prep_enabled_for_user(user.id)
+    _require_live_prep_enabled_for_user(user.id, hint_execution_mode=execution_mode)
     cfg = get_backend_settings()
     svc = get_broker_service()
     out = generate_final_betting_shadow_candidates(
@@ -216,9 +226,10 @@ def generate_final_betting_candidates(
 def generate_hf_shadow(
     strategy_id: str = Query(..., min_length=3, max_length=64),
     authorization: str | None = Header(default=None),
+    execution_mode: str | None = Query(default=None),
 ) -> dict[str, Any]:
     user = _current_user(authorization)
-    _require_live_prep_enabled_for_user(user.id)
+    _require_live_prep_enabled_for_user(user.id, hint_execution_mode=execution_mode)
     cfg = get_backend_settings()
     svc = get_broker_service()
     out = generate_intraday_shadow_report(
@@ -242,10 +253,11 @@ def list_candidates(
     status_filter: Literal["candidate", "approval_pending", "approved", "submitted", "rejected"] | None = Query(default=None),
     strategy_id: str | None = Query(default=None),
     symbol: str | None = Query(default=None),
+    execution_mode: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=500),
 ) -> dict[str, Any]:
     user = _current_user(authorization)
-    _require_live_prep_enabled_for_user(user.id)
+    _require_live_prep_enabled_for_user(user.id, hint_execution_mode=execution_mode)
     st = _store()
     items = st.list_filtered(status=status_filter, strategy_id=strategy_id, symbol=symbol, limit=int(limit))
     return {"items": [asdict(x) for x in items], "count": len(items)}
@@ -257,7 +269,7 @@ def prepare_batch_liquidation(
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     user = _current_user(authorization)
-    _require_live_prep_enabled_for_user(user.id)
+    _require_live_prep_enabled_for_user(user.id, hint_execution_mode=payload.execution_mode)
     cfg = get_backend_settings()
     svc = get_broker_service()
     app_key, app_secret, account_no, product_code, mode = svc.get_plain_credentials(user.id)
@@ -317,10 +329,11 @@ def prepare_batch_liquidation(
 @router.get("/batch-liquidation/plans")
 def list_liquidation_plans(
     authorization: str | None = Header(default=None),
+    execution_mode: str | None = Query(default=None),
     limit: int = Query(default=10, ge=1, le=50),
 ) -> dict[str, Any]:
     user = _current_user(authorization)
-    _require_live_prep_enabled_for_user(user.id)
+    _require_live_prep_enabled_for_user(user.id, hint_execution_mode=execution_mode)
     store = _plan_store()
     plans = store.list_by_user(user.id, limit=int(limit))
     return {"ok": True, "plans": [asdict(p) for p in plans], "count": len(plans)}
@@ -334,8 +347,8 @@ def execute_batch_liquidation(
 ) -> dict[str, Any]:
     user = _current_user(authorization)
     cfg = get_backend_settings()
-    _require_live_prep_enabled_for_user(user.id)
-    if (_effective_execution_mode_for_user(user.id) or "").lower() != "live_manual_approval":
+    _require_live_prep_enabled_for_user(user.id, hint_execution_mode=payload.execution_mode)
+    if (_effective_execution_mode_for_user(user.id, hint_execution_mode=payload.execution_mode) or "").lower() != "live_manual_approval":
         raise HTTPException(status_code=403, detail="EXECUTION_MODE=live_manual_approval 에서만 제출할 수 있습니다.")
     if payload.confirm.strip().upper() != "LIQUIDATE_ALL":
         raise HTTPException(status_code=400, detail="confirm must be LIQUIDATE_ALL")
@@ -422,7 +435,7 @@ def approve_candidate(
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     user = _current_user(authorization)
-    _require_live_prep_enabled_for_user(user.id)
+    _require_live_prep_enabled_for_user(user.id, hint_execution_mode=payload.execution_mode)
     st = _store()
     cand = st.get(candidate_id)
     if cand is None:
@@ -449,7 +462,7 @@ def reject_candidate(
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     user = _current_user(authorization)
-    _require_live_prep_enabled_for_user(user.id)
+    _require_live_prep_enabled_for_user(user.id, hint_execution_mode=payload.execution_mode)
     st = _store()
     cand = st.get(candidate_id)
     if cand is None:
@@ -518,8 +531,8 @@ def submit_candidate_order(
 ) -> dict[str, Any]:
     user = _current_user(authorization)
     cfg = get_backend_settings()
-    _require_live_prep_enabled_for_user(user.id)
-    if (_effective_execution_mode_for_user(user.id) or "").lower() != "live_manual_approval":
+    _require_live_prep_enabled_for_user(user.id, hint_execution_mode=payload.execution_mode)
+    if (_effective_execution_mode_for_user(user.id, hint_execution_mode=payload.execution_mode) or "").lower() != "live_manual_approval":
         raise HTTPException(status_code=403, detail="EXECUTION_MODE=live_manual_approval 에서만 제출할 수 있습니다.")
 
     live_status = runtime_safety_validation_for_user_id(cfg, user.id)

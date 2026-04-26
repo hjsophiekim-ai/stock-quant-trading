@@ -316,7 +316,11 @@
         }
 
         async function refreshCandidates() {
-          const r = await authFetch(backendUrl + "/api/live-prep/candidates?strategy_id=final_betting_v1&limit=50", { headers: await authHeaders() });
+          const execMode = String(document.getElementById("liveExecMode").value || "");
+          const r = await authFetch(
+            backendUrl + "/api/live-prep/candidates?strategy_id=final_betting_v1&limit=50&execution_mode=" + encodeURIComponent(execMode),
+            { headers: await authHeaders() }
+          );
           const d = await r.json().catch(function () { return {}; });
           if (!r.ok) {
             candidatesMetaPre.textContent = JSON.stringify(d.detail || d, null, 2);
@@ -347,7 +351,11 @@
         }
 
         async function refreshSellOnlyArm() {
-          const r = await authFetch(backendUrl + "/api/live-prep/sell-only-arm/status", { headers: await authHeaders() });
+          const execMode = String(document.getElementById("liveExecMode").value || "");
+          const r = await authFetch(
+            backendUrl + "/api/live-prep/sell-only-arm/status?execution_mode=" + encodeURIComponent(execMode),
+            { headers: await authHeaders() }
+          );
           const d = await r.json().catch(function () { return {}; });
           sellOnlyArmPre.textContent = JSON.stringify(d, null, 2);
           const st = d && d.state ? d.state : null;
@@ -361,6 +369,7 @@
             armed_for_kst_date: String(document.getElementById("sellOnlyDate").value || ""),
             actor: "desktop-user",
             reason: String(document.getElementById("reasonInput").value || "arm"),
+            execution_mode: String(document.getElementById("liveExecMode").value || ""),
           };
           const r = await authFetch(backendUrl + "/api/live-prep/sell-only-arm", {
             method: "POST",
@@ -373,7 +382,11 @@
         }
 
         async function refreshLiquidationPlans() {
-          const r = await authFetch(backendUrl + "/api/live-prep/batch-liquidation/plans?limit=5", { headers: await authHeaders() });
+          const execMode = String(document.getElementById("liveExecMode").value || "");
+          const r = await authFetch(
+            backendUrl + "/api/live-prep/batch-liquidation/plans?limit=5&execution_mode=" + encodeURIComponent(execMode),
+            { headers: await authHeaders() }
+          );
           const d = await r.json().catch(function () { return {}; });
           liquidationPre.textContent = JSON.stringify(d, null, 2);
           const plans = d && Array.isArray(d.plans) ? d.plans : [];
@@ -385,6 +398,7 @@
             use_market_order: !!document.getElementById("liqUseMarket").checked,
             actor: "desktop-user",
             reason: String(document.getElementById("reasonInput").value || "prepare"),
+            execution_mode: String(document.getElementById("liveExecMode").value || ""),
           };
           const r = await authFetch(backendUrl + "/api/live-prep/batch-liquidation/prepare", {
             method: "POST",
@@ -406,6 +420,7 @@
             confirm: String(document.getElementById("liqConfirm").value || ""),
             actor: "desktop-user",
             reason: String(document.getElementById("reasonInput").value || "execute"),
+            execution_mode: String(document.getElementById("liveExecMode").value || ""),
           };
           const r = await authFetch(backendUrl + "/api/live-prep/batch-liquidation/" + latestPlanId + "/execute", {
             method: "POST",
@@ -420,7 +435,7 @@
 
         async function candidateAction(action, candidateId) {
           candidateActionMsg.textContent = "(working)";
-          const payload = { actor: "desktop-user", reason: "manual_approval" };
+          const payload = { actor: "desktop-user", reason: "manual_approval", execution_mode: String(document.getElementById("liveExecMode").value || "") };
           async function post(path) {
             const r = await authFetch(backendUrl + path, {
               method: "POST",

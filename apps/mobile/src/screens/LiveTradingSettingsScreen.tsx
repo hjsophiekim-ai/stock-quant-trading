@@ -138,7 +138,7 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
     const histData = await histRes.json();
     if (histRes.ok) setHistory(histData.items ?? []);
 
-    const armRes = await authFetch(backendUrl, `/api/live-prep/sell-only-arm/status`);
+    const armRes = await authFetch(backendUrl, `/api/live-prep/sell-only-arm/status?execution_mode=${encodeURIComponent(liveExecMode)}`);
     const armData = await armRes.json();
     if (armRes.ok) {
       const st = armData?.state ?? null;
@@ -147,7 +147,10 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
       setSellOnlyDate(String(st?.armed_for_kst_date ?? ""));
     }
 
-    const planRes = await authFetch(backendUrl, `/api/live-prep/batch-liquidation/plans?limit=1`);
+    const planRes = await authFetch(
+      backendUrl,
+      `/api/live-prep/batch-liquidation/plans?limit=1&execution_mode=${encodeURIComponent(liveExecMode)}`,
+    );
     const planData = await planRes.json();
     if (planRes.ok) {
       const p0 = Array.isArray(planData?.plans) && planData.plans.length ? planData.plans[0] : null;
@@ -164,7 +167,10 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
       if (sess?.execution_mode) setLiveExecMode(sess.execution_mode);
     }
 
-    const candRes = await authFetch(backendUrl, `/api/live-prep/candidates?strategy_id=final_betting_v1&limit=20`);
+    const candRes = await authFetch(
+      backendUrl,
+      `/api/live-prep/candidates?strategy_id=final_betting_v1&limit=20&execution_mode=${encodeURIComponent(liveExecMode)}`,
+    );
     const candData = await candRes.json();
     if (candRes.ok) {
       setFinalBettingCandidates(Array.isArray(candData?.items) ? candData.items : []);
@@ -225,6 +231,7 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
         armed_for_kst_date: sellOnlyDate,
         actor: "mobile-user",
         reason: reason || "arm",
+        execution_mode: liveExecMode,
       }),
     });
     const data = await res.json();
@@ -245,6 +252,7 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
         use_market_order: liqUseMarket,
         actor: "mobile-user",
         reason: reason || "prepare",
+        execution_mode: liveExecMode,
       }),
     });
     const data = await res.json();
@@ -269,6 +277,7 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
         confirm: liqConfirm,
         actor: "mobile-user",
         reason: reason || "execute",
+        execution_mode: liveExecMode,
       }),
     });
     const data = await res.json();
@@ -335,7 +344,7 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
     const res = await authFetch(backendUrl, `/api/live-prep/candidates/${candidateId}/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ actor: "mobile-user", reason: reason || "approve" }),
+      body: JSON.stringify({ actor: "mobile-user", reason: reason || "approve", execution_mode: liveExecMode }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -350,7 +359,7 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
     const res = await authFetch(backendUrl, `/api/live-prep/candidates/${candidateId}/reject`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ actor: "mobile-user", reason: reason || "reject" }),
+      body: JSON.stringify({ actor: "mobile-user", reason: reason || "reject", execution_mode: liveExecMode }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -365,7 +374,7 @@ export default function LiveTradingSettingsScreen({ backendUrl }: Props) {
     const res = await authFetch(backendUrl, `/api/live-prep/candidates/${candidateId}/submit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ actor: "mobile-user", reason: reason || "submit" }),
+      body: JSON.stringify({ actor: "mobile-user", reason: reason || "submit", execution_mode: liveExecMode }),
     });
     const data = await res.json();
     if (!res.ok) {
