@@ -321,6 +321,51 @@ if ($ApkPath -and (Test-Path -LiteralPath $ApkPath)) {
   Write-Host "[release] no -ApkPath — Android ZIP will contain build instructions only (this PC has no Android SDK / no EAS token)." -ForegroundColor Yellow
 }
 
+$apkDropDir = Join-Path $apkStage "APK"
+New-Item -ItemType Directory -Force -Path $apkDropDir | Out-Null
+$apkDropTxt = @"
+APK가 이 ZIP에 포함되지 않은 경우, 아래 경로에 APK를 넣어두면 설치 스크립트가 자동 탐지합니다:
+
+  $(Split-Path $apkDropDir -Leaf)\your-app.apk
+
+예: APK\StockQuant.apk
+"@
+Write-Utf8BomFile -Path (Join-Path $apkDropDir "PLACE-APK-HERE.txt") -Content $apkDropTxt
+
+$installAndroid = @"
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+Set-Location -LiteralPath $PSScriptRoot
+
+function Find-Apk {
+  $apk = Get-ChildItem -File -Filter "*.apk" -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($apk) { return $apk.FullName }
+  if (Test-Path -LiteralPath ".\APK") {
+    $apk2 = Get-ChildItem -LiteralPath ".\APK" -File -Filter "*.apk" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($apk2) { return $apk2.FullName }
+  }
+  return ""
+}
+
+$apkPath = Find-Apk
+if (-not $apkPath) {
+  Write-Host "APK를 찾지 못했습니다. 이 폴더 또는 .\APK 폴더에 *.apk 를 넣어주세요." -ForegroundColor Yellow
+  exit 2
+}
+
+$adb = Get-Command adb -ErrorAction SilentlyContinue
+if (-not $adb) {
+  Write-Host "adb를 찾지 못했습니다. Android SDK Platform-Tools 설치 후 PATH에 adb를 추가하세요." -ForegroundColor Yellow
+  Write-Host "APK 위치: $apkPath"
+  exit 3
+}
+
+Write-Host "Installing APK via adb: $apkPath" -ForegroundColor Cyan
+& adb devices
+& adb install -r $apkPath
+"@
+Write-Utf8BomFile -Path (Join-Path $apkStage "INSTALL-ANDROID.ps1") -Content $installAndroid
+
 $hint = Read-TemplateText "ANDROID-APK-BUILD-HINT.txt"
 if (-not $hint) { $hint = "See apps/mobile eas.json and npm run build:android:apk (EAS login required)." }
 Write-Utf8BomFile -Path (Join-Path $apkStage "ANDROID-APK-BUILD-HINT.txt") -Content $hint
@@ -356,7 +401,10 @@ Stock Quant Trader — Android
 
 이 PC에서는 APK 파일을 만들 수 없었습니다 (Android SDK 또는 EAS 로그인 필요).
 ANDROID-APK-BUILD-HINT.txt 와 README-ANDROID-PACKAGE-*.txt 를 참고해 APK를 만든 뒤,
-다시 실행하세요:
+이 ZIP에 APK를 넣고 설치하려면:
+
+  1) APK를 ZIP을 푼 폴더의 .\APK\ 아래에 복사
+  2) INSTALL-ANDROID.ps1 실행(ADB 필요) 또는 휴대폰에서 APK 직접 설치
 
   .\scripts\build-release-zips.ps1 -ApkPath "C:\다운로드\your.apk"
 

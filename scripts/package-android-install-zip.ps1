@@ -48,6 +48,51 @@ if ($ApkPath -and (Test-Path -LiteralPath $ApkPath)) {
   Write-Host "[package-android] No APK path given or file missing — creating documentation-only android zip" -ForegroundColor Yellow
 }
 
+$apkDropDir = Join-Path $stage "APK"
+New-Item -ItemType Directory -Force -Path $apkDropDir | Out-Null
+$apkDropTxt = @"
+APK가 이 ZIP에 포함되지 않은 경우, 아래 경로에 APK를 넣어두면 설치 스크립트가 자동 탐지합니다:
+
+  $(Split-Path $apkDropDir -Leaf)\your-app.apk
+
+예: APK\StockQuant.apk
+"@
+Write-Utf8BomFile -Path (Join-Path $apkDropDir "PLACE-APK-HERE.txt") -Content $apkDropTxt
+
+$installAndroid = @"
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+Set-Location -LiteralPath $PSScriptRoot
+
+function Find-Apk {
+  $apk = Get-ChildItem -File -Filter "*.apk" -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($apk) { return $apk.FullName }
+  if (Test-Path -LiteralPath ".\APK") {
+    $apk2 = Get-ChildItem -LiteralPath ".\APK" -File -Filter "*.apk" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($apk2) { return $apk2.FullName }
+  }
+  return ""
+}
+
+$apkPath = Find-Apk
+if (-not $apkPath) {
+  Write-Host "APK를 찾지 못했습니다. 이 폴더 또는 .\APK 폴더에 *.apk 를 넣어주세요." -ForegroundColor Yellow
+  exit 2
+}
+
+$adb = Get-Command adb -ErrorAction SilentlyContinue
+if (-not $adb) {
+  Write-Host "adb를 찾지 못했습니다. Android SDK Platform-Tools 설치 후 PATH에 adb를 추가하세요." -ForegroundColor Yellow
+  Write-Host "APK 위치: $apkPath"
+  exit 3
+}
+
+Write-Host "Installing APK via adb: $apkPath" -ForegroundColor Cyan
+& adb devices
+& adb install -r $apkPath
+"@
+Write-Utf8BomFile -Path (Join-Path $stage "INSTALL-ANDROID.ps1") -Content $installAndroid
+
 $hint = Read-TemplateText "ANDROID-APK-BUILD-HINT.txt"
 Write-Utf8BomFile -Path (Join-Path $stage "ANDROID-APK-BUILD-HINT.txt") -Content $hint
 
