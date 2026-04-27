@@ -88,16 +88,23 @@ def _status_payload_for_user(cfg: BackendSettings, st: LiveSafetyState) -> dict[
         and (not bool(ks.get("loss_limit_exceeded")))
     )
     if not can_place:
-        if not (
-            cfg.trading_mode == "live"
-            and st.live_trading_flag
-            and st.secondary_confirm_flag
-            and st.extra_approval_flag
-            and cfg.live_trading
-            and cfg.live_trading_confirm
-            and cfg.live_trading_extra_confirm
-        ):
-            warning = "LIVE 주문 잠금 상태: 다중 승인·환경 설정이 완료되지 않았습니다."
+        missing: list[str] = []
+        if cfg.trading_mode != "live":
+            missing.append("TRADING_MODE=live")
+        if not bool(cfg.live_trading):
+            missing.append("ENV LIVE_TRADING=true")
+        if not bool(cfg.live_trading_confirm):
+            missing.append("ENV LIVE_TRADING_CONFIRM=true")
+        if not bool(cfg.live_trading_extra_confirm):
+            missing.append("ENV LIVE_TRADING_EXTRA_CONFIRM=true")
+        if not bool(st.live_trading_flag):
+            missing.append("APP live_trading_flag=true")
+        if not bool(st.secondary_confirm_flag):
+            missing.append("APP secondary_confirm_flag=true")
+        if not bool(st.extra_approval_flag):
+            missing.append("APP extra_approval_flag=true")
+        if missing:
+            warning = "LIVE 주문 잠금 상태: 아래 항목이 필요합니다.\n- " + "\n- ".join(missing)
         elif not paper_ok:
             warning = readiness.user_message_ko
         elif bool(ks.get("loss_limit_exceeded")):

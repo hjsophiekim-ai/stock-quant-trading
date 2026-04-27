@@ -396,7 +396,27 @@
           document.getElementById("flagEmergency").checked = !!st.live_emergency_stop;
           const can = !!st.can_place_live_order;
           warn.className = "panel " + (can ? "ok" : "warn");
-          warn.textContent = can ? "LIVE 주문 가능 상태" : (st.warning_message || "LIVE 주문 잠금 상태");
+          if (can) {
+            warn.textContent = "LIVE 주문 가능 상태";
+          } else {
+            const detail = Array.isArray(st.pending_blocker_details) ? st.pending_blocker_details : [];
+            const lines = [];
+            lines.push(st.warning_message || "LIVE 주문 잠금 상태");
+            if (detail.length) {
+              lines.push("");
+              lines.push("Blockers:");
+              for (const d of detail) {
+                const code = d && d.code ? String(d.code) : "";
+                const msg = d && d.message ? String(d.message) : "";
+                lines.push("- " + (code ? (code + ": ") : "") + msg);
+              }
+            }
+            if (!!st.env_live_trading && !!st.env_live_trading_confirm && !!st.env_live_trading_extra_confirm && !st.operator_intent_has_history) {
+              lines.push("");
+              lines.push("ENV는 true 입니다. 아래 체크박스가 자동으로 켜져 보이면 Save를 눌러 APP 승인 플래그를 저장하세요.");
+            }
+            warn.textContent = lines.join("\n");
+          }
         }
 
         async function refreshLiveMarketMode() {
