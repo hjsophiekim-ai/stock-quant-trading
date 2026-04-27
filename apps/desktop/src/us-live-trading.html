@@ -37,6 +37,7 @@
         <div class="panel"><h3 style="margin-top: 0">상태 요약</h3><pre id="statusPre">(loading)</pre></div>
         <div class="panel"><h3 style="margin-top: 0">런타임 안전 검증</h3><pre id="runtimePre">(loading)</pre></div>
         <div class="panel"><h3 style="margin-top: 0">Paper Readiness</h3><pre id="paperReadinessPre">(loading)</pre></div>
+        <div class="panel"><h3 style="margin-top: 0">Readiness 데이터 상태</h3><pre id="readinessHealthPre">(loading)</pre></div>
       </main>
     </div>
     <script src="./runtime-config.js"></script>
@@ -52,19 +53,22 @@
           return Object.assign({ Authorization: "Bearer " + t }, extra || {});
         }
         async function refresh() {
-          const [stR, rtR, prR, ksR] = await Promise.all([
+          const [stR, rtR, prR, ksR, dhR] = await Promise.all([
             authFetch(backendUrl + "/api/live-trading/status"),
             authFetch(backendUrl + "/api/live-trading/runtime-safety-validation"),
             authFetch(backendUrl + "/api/live-trading/paper-readiness"),
             authFetch(backendUrl + "/api/live-trading/kill-switch-status"),
+            authFetch(backendUrl + "/api/live-trading/paper-readiness-diagnostics"),
           ]);
           const st = await stR.json().catch(function () { return {}; });
           const rt = await rtR.json().catch(function () { return {}; });
           const pr = await prR.json().catch(function () { return {}; });
           const ks = await ksR.json().catch(function () { return {}; });
+          const dh = await dhR.json().catch(function () { return {}; });
           document.getElementById("statusPre").textContent = JSON.stringify(st, null, 2);
           document.getElementById("runtimePre").textContent = JSON.stringify(rt, null, 2);
           document.getElementById("paperReadinessPre").textContent = JSON.stringify(pr, null, 2) + "\n\nkill_switch:\n" + JSON.stringify(ks, null, 2);
+          document.getElementById("readinessHealthPre").textContent = JSON.stringify(dh, null, 2);
           const w = document.getElementById("liveWarnPanel");
           const can = !!st.can_place_live_order;
           w.className = "panel " + (can ? "ok" : "warn");

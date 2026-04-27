@@ -165,6 +165,54 @@ def _read_sync_failures(portfolio_dir: Path) -> int:
     return int(data.get("consecutive_failures") or 0)
 
 
+def paper_readiness_data_health(settings: Any) -> dict[str, Any]:
+    cfg = settings
+    root = Path(cfg.portfolio_data_dir)
+    lookback = int(getattr(cfg, "live_unlock_lookback_days", 30) or 30)
+    min_samples = int(getattr(cfg, "live_unlock_min_pnl_samples", 10) or 10)
+
+    pnl_path = root / "pnl_history.jsonl"
+    pnl_rows = _pnl_rows_in_window(root, lookback_days=lookback)
+    last_pnl = pnl_rows[-1] if pnl_rows else None
+    last_pnl_ts = str(last_pnl.get("ts_utc") or "") if isinstance(last_pnl, dict) else ""
+
+    audit_path = Path(cfg.risk_order_audit_jsonl)
+    audit_tail = read_jsonl_tail(audit_path, max_lines=200)
+    last_audit = audit_tail[-1] if audit_tail else None
+    last_audit_ts = str(last_audit.get("ts_utc") or "") if isinstance(last_audit, dict) else ""
+
+    sync_path = root / "sync_failures.json"
+    sync_failures = _read_sync_failures(root)
+    sync_ok = sync_failures <= int(getattr(cfg, "live_unlock_max_sync_failure_streak", 0) or 0)
+
+    equity_ok_n = 0
+    for r in pnl_rows:
+        try:
+            if float(r.get("equity") or 0.0) > 0:
+                equity_ok_n += 1
+        except (TypeError, ValueError):
+            continue
+
+    return {
+        "pnl_history_path": str(pnl_path),
+        "pnl_rows_found": int(len(pnl_rows)),
+        "pnl_equity_rows_found": int(equity_ok_n),
+        "pnl_min_samples_required": int(min_samples),
+        "last_pnl_sample_ts": last_pnl_ts or None,
+        "pnl_data_ok": bool(len(pnl_rows) >= min_samples and equity_ok_n >= min_samples),
+        "risk_order_audit_path": str(audit_path),
+        "audit_rows_found_tail": int(len(audit_tail)),
+        "last_audit_sample_ts": last_audit_ts or None,
+        "audit_data_ok": bool(len(audit_tail) > 0),
+        "sync_failures_path": str(sync_path),
+        "sync_failures_found": int(sync_failures),
+        "sync_data_ok": bool(sync_ok),
+        "overall_data_ok": bool(
+            (len(pnl_rows) >= min_samples and equity_ok_n >= min_samples) and (len(audit_tail) > 0) and sync_ok
+        ),
+    }
+
+
 def evaluate_paper_readiness(settings: Any) -> PaperReadinessResult:
     cfg = settings
     if not cfg.live_unlock_enabled:

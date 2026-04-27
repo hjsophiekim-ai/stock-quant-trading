@@ -7,7 +7,7 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.app.risk.audit import append_risk_event
-from backend.app.risk.live_unlock_gate import evaluate_paper_readiness, paper_readiness_to_dict
+from backend.app.risk.live_unlock_gate import evaluate_paper_readiness, paper_readiness_data_health, paper_readiness_to_dict
 
 from ..core.config import BackendSettings, get_backend_settings
 from ..services.live_safety_state_store import LiveSafetyHistoryItem, LiveSafetyState, LiveSafetyStateStore
@@ -230,6 +230,13 @@ def paper_readiness(authorization: str | None = Header(default=None)) -> dict[st
     cfg = get_backend_settings()
     pr = evaluate_paper_readiness(cfg)
     return paper_readiness_to_dict(pr)
+
+
+@router.get("/paper-readiness-diagnostics")
+def paper_readiness_diagnostics(authorization: str | None = Header(default=None)) -> dict[str, object]:
+    _ = _current_user(authorization)
+    cfg = get_backend_settings()
+    return paper_readiness_data_health(cfg)
 
 
 def runtime_safety_validation_for_user_id(cfg: BackendSettings, user_id: str) -> dict[str, object]:

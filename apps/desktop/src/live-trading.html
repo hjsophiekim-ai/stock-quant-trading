@@ -93,6 +93,10 @@
           <pre id="paperReadinessPre">(loading)</pre>
         </div>
         <div class="panel">
+          <h3 style="margin-top: 0">Readiness 데이터 상태</h3>
+          <pre id="readinessHealthPre">(loading)</pre>
+        </div>
+        <div class="panel">
           <h3 style="margin-top: 0">잠금 해제 토글</h3>
           <div class="row">
             <label><input id="flagLive" type="checkbox" /> Live Enable Flag</label>
@@ -185,6 +189,7 @@
         const effectiveBlockersPre = document.getElementById("effectiveBlockersPre");
         const runtimePre = document.getElementById("runtimePre");
         const paperPre = document.getElementById("paperReadinessPre");
+        const healthPre = document.getElementById("readinessHealthPre");
         const saveMessage = document.getElementById("saveMessage");
         const warn = document.getElementById("liveWarnPanel");
         const candidatesMetaPre = document.getElementById("candidatesMetaPre");
@@ -197,16 +202,18 @@
         let latestPlanId = "";
 
         async function refresh() {
-          const [stR, rtR, prR, ksR] = await Promise.all([
+          const [stR, rtR, prR, ksR, dhR] = await Promise.all([
             authFetch(backendUrl + "/api/live-trading/status"),
             authFetch(backendUrl + "/api/live-trading/runtime-safety-validation"),
             authFetch(backendUrl + "/api/live-trading/paper-readiness"),
             authFetch(backendUrl + "/api/live-trading/kill-switch-status"),
+            authFetch(backendUrl + "/api/live-trading/paper-readiness-diagnostics"),
           ]);
           const st = await stR.json().catch(function () { return {}; });
           const rt = await rtR.json().catch(function () { return {}; });
           const pr = await prR.json().catch(function () { return {}; });
           const ks = await ksR.json().catch(function () { return {}; });
+          const dh = await dhR.json().catch(function () { return {}; });
           statusPre.textContent = JSON.stringify(st, null, 2);
           savedIntentPre.textContent = JSON.stringify({
             requested_live_trading_flag: st.requested_live_trading_flag,
@@ -223,6 +230,7 @@
           }, null, 2);
           runtimePre.textContent = JSON.stringify(rt, null, 2);
           paperPre.textContent = JSON.stringify(pr, null, 2) + "\n\nkill_switch:\n" + JSON.stringify(ks, null, 2);
+          healthPre.textContent = JSON.stringify(dh, null, 2);
           document.getElementById("flagLive").checked = !!st.live_trading_flag;
           document.getElementById("flagConfirm2").checked = !!st.secondary_confirm_flag;
           document.getElementById("flagExtra").checked = !!st.extra_approval_flag;

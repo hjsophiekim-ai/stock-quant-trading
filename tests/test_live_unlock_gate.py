@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-from backend.app.risk.live_unlock_gate import evaluate_paper_readiness
+from backend.app.risk.live_unlock_gate import evaluate_paper_readiness, paper_readiness_data_health
 
 
 def _write_pnl_row(p: Path, ts: datetime, equity: float, daily: float) -> None:
@@ -92,3 +92,12 @@ def test_bypass(tmp_path: Path) -> None:
     cfg = _fake_cfg(tmp_path / "pf", live_unlock_bypass=True)
     r = evaluate_paper_readiness(cfg)
     assert r.ok and r.bypassed
+
+
+def test_readiness_data_health_reports_missing_sources(tmp_path: Path) -> None:
+    root = tmp_path / "pf"
+    cfg = _fake_cfg(root)
+    d = paper_readiness_data_health(cfg)
+    assert d["pnl_rows_found"] == 0
+    assert d["audit_rows_found_tail"] == 0
+    assert d["overall_data_ok"] is False

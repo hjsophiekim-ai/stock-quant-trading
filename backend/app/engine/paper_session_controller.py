@@ -20,6 +20,8 @@ from backend.app.engine.user_paper_loop import UserPaperTradingLoop
 from app.config import get_settings as app_get_settings, paper_final_betting_diagnostics, paper_final_betting_enabled_fresh
 from app.strategy.market_mode_engine import normalize_manual_mode
 from backend.app.portfolio.sync_engine import run_portfolio_sync
+from backend.app.portfolio.pnl_history_writer import append_pnl_history_from_paper_report
+from backend.app.risk.service import install_risk_audit_from_settings
 
 logger = logging.getLogger("backend.app.engine.paper_session_controller")
 
@@ -380,6 +382,7 @@ class PaperSessionController:
 
     def _loop(self) -> None:
         settings = get_backend_settings()
+        install_risk_audit_from_settings(settings)
         while self._run_flag:
             uid = self._user_id
             sid = self._strategy_id
@@ -466,6 +469,17 @@ class PaperSessionController:
                 self._risk_off_reason = None
                 rep = out.get("report")
                 self._last_report = rep if isinstance(rep, dict) else {}
+                if self._last_report:
+                    try:
+                        d = append_pnl_history_from_paper_report(
+                            settings,
+                            report=dict(self._last_report),
+                            strategy_id=str(sid or ""),
+                            paper_market=str(self._paper_market or ""),
+                        )
+                        self._paper_diagnostics["pnl_history_write"] = d
+                    except Exception as wexc:
+                        self._paper_diagnostics["pnl_history_write"] = {"ok": False, "error": str(wexc)}
                 acfg = app_get_settings()
                 now_mono = time.monotonic()
                 pos_iv = float(acfg.paper_positions_refresh_interval_sec)
