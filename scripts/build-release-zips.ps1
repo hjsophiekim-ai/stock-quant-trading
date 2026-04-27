@@ -177,27 +177,7 @@ if ($DesktopExePath -and (Test-Path -LiteralPath $DesktopExePath)) {
   }
 }
 
-$deskStage = Join-Path $releaseDir "desktop-zip-staging"
-if (Test-Path $deskStage) {
-  $removed = $false
-  for ($i = 0; $i -lt 3; $i++) {
-    try {
-      Remove-Item -Recurse -Force $deskStage -ErrorAction Stop
-      $removed = $true
-      break
-    } catch {
-      Start-Sleep -Milliseconds 600
-    }
-  }
-  if (-not $removed) {
-    try {
-      $old = Join-Path $releaseDir ("desktop-zip-staging-old-" + [Guid]::NewGuid().ToString("n").Substring(0, 8))
-      Move-Item -LiteralPath $deskStage -Destination $old -Force
-    } catch {
-      throw
-    }
-  }
-}
+$deskStage = Join-Path $releaseDir ("desktop-zip-staging-" + [Guid]::NewGuid().ToString("n").Substring(0, 8))
 New-Item -ItemType Directory -Force -Path $deskStage | Out-Null
 
 $codeSignCert = $null
@@ -325,8 +305,7 @@ try {
   Write-Warning "[release] could not copy installer to apps/desktop/dist (sync folder?): $($_.Exception.Message)"
 }
 
-$apkStage = Join-Path $releaseDir "android-zip-staging"
-if (Test-Path $apkStage) { Remove-Item -Recurse -Force $apkStage }
+$apkStage = Join-Path $releaseDir ("android-zip-staging-" + [Guid]::NewGuid().ToString("n").Substring(0, 8))
 New-Item -ItemType Directory -Force -Path $apkStage | Out-Null
 
 $hasApk = $false
