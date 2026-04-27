@@ -74,6 +74,23 @@ function Write-Utf8BomFile {
   [System.IO.File]::WriteAllText($Path, $normalized, $enc)
 }
 
+function Try-CompressArchive {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$DestinationPath,
+    [int]$MaxAttempts = 8
+  )
+  for ($i = 0; $i -lt $MaxAttempts; $i++) {
+    try {
+      Compress-Archive -Path $Path -DestinationPath $DestinationPath -Force
+      return
+    } catch {
+      if ($i -ge ($MaxAttempts - 1)) { throw }
+      Start-Sleep -Milliseconds (700 + ($i * 350))
+    }
+  }
+}
+
 function Read-TemplateText {
   param([Parameter(Mandatory = $true)][string]$Name)
   $p = Join-Path $PSScriptRoot "release-templates\$Name"
@@ -293,7 +310,7 @@ Write-Utf8BomFile -Path (Join-Path $deskStage "README-KO.txt") -Content $deskRea
 
 $deskZip = Join-Path $releaseDir "Stock-Quant-Desktop-Windows-$version.zip"
 if (Test-Path $deskZip) { Remove-Item -Force $deskZip }
-Compress-Archive -Path (Join-Path $deskStage "*") -DestinationPath $deskZip -Force
+Try-CompressArchive -Path (Join-Path $deskStage "*") -DestinationPath $deskZip
 Write-Host "[release] created $deskZip" -ForegroundColor Green
 
 $distLocal = Join-Path $root "apps\desktop\dist"
@@ -416,7 +433,7 @@ Write-Utf8BomFile -Path (Join-Path $apkStage "README-PHONE-KO.txt") -Content $ap
 
 $apkZip = Join-Path $releaseDir "Stock-Quant-Android-$version.zip"
 if (Test-Path $apkZip) { Remove-Item -Force $apkZip }
-Compress-Archive -Path (Join-Path $apkStage "*") -DestinationPath $apkZip -Force
+Try-CompressArchive -Path (Join-Path $apkStage "*") -DestinationPath $apkZip
 Write-Host "[release] created $apkZip" -ForegroundColor Green
 
 Write-Host ""
