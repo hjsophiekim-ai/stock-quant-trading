@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class BackendSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore", populate_by_name=True)
 
     app_env: str = Field(default="local", alias="APP_ENV")
     app_secret_key: str = Field(default="", alias="APP_SECRET_KEY")
@@ -118,6 +118,10 @@ class BackendSettings(BaseSettings):
     live_trading_safety_state_store_json: str = Field(
         default="backend_data/live_trading/safety_state.json",
         alias="LIVE_TRADING_SAFETY_STATE_STORE_JSON",
+    )
+    live_market_mode_store_json: str = Field(
+        default="backend_data/live_trading/market_mode_prefs.json",
+        alias="LIVE_MARKET_MODE_STORE_JSON",
     )
 
     portfolio_data_dir: str = Field(default="backend_data/portfolio", alias="PORTFOLIO_DATA_DIR")

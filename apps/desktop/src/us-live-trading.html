@@ -38,6 +38,49 @@
         <div class="panel"><h3 style="margin-top: 0">런타임 안전 검증</h3><pre id="runtimePre">(loading)</pre></div>
         <div class="panel"><h3 style="margin-top: 0">Paper Readiness</h3><pre id="paperReadinessPre">(loading)</pre></div>
         <div class="panel"><h3 style="margin-top: 0">Readiness 데이터 상태</h3><pre id="readinessHealthPre">(loading)</pre></div>
+        <div class="panel">
+          <h3 style="margin-top: 0">Market Mode (Live)</h3>
+          <div class="row" style="margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center">
+            <label style="margin-top: 0; font-weight: 700">Manual override</label>
+            <select id="liveMarketMode" style="padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px">
+              <option value="auto">auto</option>
+              <option value="aggressive">aggressive</option>
+              <option value="neutral">neutral</option>
+              <option value="defensive">passive(defensive)</option>
+            </select>
+            <button id="saveLiveMarketModeBtn" type="button">Save</button>
+            <button id="refreshLiveMarketModeBtn" type="button">Refresh</button>
+          </div>
+          <pre id="liveMarketModePre">(loading)</pre>
+        </div>
+        <div class="panel">
+          <h3 style="margin-top: 0">계정 스냅샷 (Live)</h3>
+          <p class="muted">현재 구현은 국내 KIS 조회 기반 스냅샷만 제공합니다.</p>
+          <div class="row" style="margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center">
+            <button id="refreshLiveDashboardBtn" type="button">Refresh Snapshot</button>
+          </div>
+          <pre id="liveDashboardMetaPre">(loading)</pre>
+          <h4 style="margin: 10px 0 6px 0">보유 포지션</h4>
+          <pre id="livePositionsPre">(loading)</pre>
+          <h4 style="margin: 10px 0 6px 0">미체결 주문</h4>
+          <pre id="liveOpenOrdersPre">(loading)</pre>
+          <h4 style="margin: 10px 0 6px 0">최근 체결</h4>
+          <pre id="liveFillsPre">(loading)</pre>
+        </div>
+        <div class="panel">
+          <h3 style="margin-top: 0">Intraday Shadow · 검토 종목</h3>
+          <p class="muted">현재 구현은 국내 live shadow 계산을 호출해 요약을 표시합니다.</p>
+          <div class="row" style="margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center">
+            <label style="margin-top: 0; font-weight: 700">Strategy</label>
+            <select id="hfStrategyId" style="padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px">
+              <option value="scalp_rsi_flag_hf_v1">scalp_rsi_flag_hf_v1</option>
+              <option value="scalp_macd_rsi_3m_v1">scalp_macd_rsi_3m_v1</option>
+              <option value="scalp_momentum_v1">scalp_momentum_v1</option>
+            </select>
+            <button id="genHfShadowBtn" type="button">Generate Shadow</button>
+          </div>
+          <pre id="hfShadowPre">(loading)</pre>
+        </div>
       </main>
     </div>
     <script src="./runtime-config.js"></script>
@@ -74,6 +117,45 @@
           w.className = "panel " + (can ? "ok" : "warn");
           w.textContent = can ? "LIVE 주문 가능 상태" : (st.warning_message || "LIVE 주문 잠금 상태");
         }
+
+        async function refreshLiveMarketMode() {
+          const r = await authFetch(backendUrl + "/api/live-trading/market-mode?market=us", { headers: await authHeaders() });
+          const d = await r.json().catch(function () { return {}; });
+          document.getElementById("liveMarketModePre").textContent = JSON.stringify(d, null, 2);
+          if (r.ok && d && d.manual_market_mode_override) {
+            document.getElementById("liveMarketMode").value = String(d.manual_market_mode_override);
+          }
+        }
+
+        async function saveLiveMarketMode() {
+          const payload = { manual_market_mode: String(document.getElementById("liveMarketMode").value || "auto") };
+          const r = await authFetch(backendUrl + "/api/live-trading/market-mode?market=us", {
+            method: "POST",
+            headers: await authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify(payload),
+          });
+          const d = await r.json().catch(function () { return {}; });
+          document.getElementById("liveMarketModePre").textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+        }
+
+        async function refreshLiveDashboard() {
+          const r = await authFetch(backendUrl + "/api/live-prep/dashboard-data?execution_mode=live_shadow", { headers: await authHeaders() });
+          const d = await r.json().catch(function () { return {}; });
+          document.getElementById("liveDashboardMetaPre").textContent = r.ok ? JSON.stringify({ asof_utc: d.asof_utc, counts: d.counts }, null, 2) : JSON.stringify(d.detail || d, null, 2);
+          document.getElementById("livePositionsPre").textContent = r.ok ? JSON.stringify(d.positions || [], null, 2) : "";
+          document.getElementById("liveOpenOrdersPre").textContent = r.ok ? JSON.stringify(d.open_orders || [], null, 2) : "";
+          document.getElementById("liveFillsPre").textContent = r.ok ? JSON.stringify(d.recent_fills || [], null, 2) : "";
+        }
+
+        async function refreshHfShadow() {
+          const sid = String(document.getElementById("hfStrategyId").value || "");
+          const r = await authFetch(
+            backendUrl + "/api/live-prep/hf-shadow/generate?strategy_id=" + encodeURIComponent(sid) + "&execution_mode=live_shadow",
+            { method: "POST", headers: await authHeaders() }
+          );
+          const d = await r.json().catch(function () { return {}; });
+          document.getElementById("hfShadowPre").textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+        }
         document.getElementById("dashboardBtn").addEventListener("click", function () { window.location.href = "./dashboard.html"; });
         document.getElementById("domesticPaperBtn").addEventListener("click", function () { window.location.href = "./paper-trading.html"; });
         document.getElementById("usPaperBtn").addEventListener("click", function () { window.location.href = "./us-paper-trading.html"; });
@@ -82,7 +164,14 @@
         document.getElementById("performanceBtn").addEventListener("click", function () { window.location.href = "./performance.html"; });
         document.getElementById("brokerSettingsBtn").addEventListener("click", function () { window.location.href = "./broker-settings.html"; });
         document.getElementById("logoutBtn").addEventListener("click", async function () { await clearDesktopSession(); window.location.href = "./login.html"; });
+        document.getElementById("saveLiveMarketModeBtn").addEventListener("click", async function () { await saveLiveMarketMode(); await refreshLiveMarketMode(); });
+        document.getElementById("refreshLiveMarketModeBtn").addEventListener("click", async function () { await refreshLiveMarketMode(); });
+        document.getElementById("refreshLiveDashboardBtn").addEventListener("click", async function () { await refreshLiveDashboard(); });
+        document.getElementById("genHfShadowBtn").addEventListener("click", async function () { await refreshHfShadow(); });
         await refresh();
+        await refreshLiveMarketMode();
+        await refreshLiveDashboard();
+        await refreshHfShadow();
       })();
     </script>
   </body>

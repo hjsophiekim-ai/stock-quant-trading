@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from backend.app.core.config import BackendSettings, get_backend_settings
 from backend.app.risk.audit import append_risk_event
 from backend.app.services.live_exec_session_store import LiveExecSession, LiveExecSessionStore
+from backend.app.services.live_market_mode_store import LiveMarketModeStore
 
 from .auth_routes import get_current_user_from_auth_header
 from .broker_routes import get_broker_service
@@ -202,6 +203,7 @@ def live_exec_tick(authorization: str | None = Header(default=None)) -> dict[str
     if sess is None:
         raise HTTPException(status_code=409, detail={"error": "not_running"})
 
+    manual_mode = LiveMarketModeStore(cfg.live_market_mode_store_json).get(user.id, market=str(sess.market or "domestic"))
     try:
         svc = get_broker_service()
         if sess.strategy_id == "final_betting_v1":
@@ -210,6 +212,7 @@ def live_exec_tick(authorization: str | None = Header(default=None)) -> dict[str
                 backend_settings=cfg,
                 user_id=user.id,
                 limit=5,
+                manual_market_mode=manual_mode,
             )
         else:
             out = generate_intraday_shadow_report(
@@ -217,6 +220,7 @@ def live_exec_tick(authorization: str | None = Header(default=None)) -> dict[str
                 backend_settings=cfg,
                 user_id=user.id,
                 strategy_id=sess.strategy_id,
+                manual_market_mode=manual_mode,
             )
     except Exception as exc:
         sess.last_error = str(exc)

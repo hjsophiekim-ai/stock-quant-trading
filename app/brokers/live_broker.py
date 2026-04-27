@@ -18,6 +18,7 @@ class LiveBroker(BaseBroker):
     kis_client: KISClient
     account_no: str
     account_product_code: str
+    read_only: bool = False
     live_trading_enabled: bool = False
     live_trading_confirm: bool = False
     live_trading_extra_confirm: bool = False
@@ -45,6 +46,8 @@ class LiveBroker(BaseBroker):
         )
 
     def __post_init__(self) -> None:
+        if self.logger is None:
+            self.logger = logging.getLogger("app.brokers.live_broker")
         ok, reason = self.validate_startup_safety()
         self.startup_safety_passed = ok
         self.startup_safety_reason = reason
@@ -203,6 +206,8 @@ class LiveBroker(BaseBroker):
         return fallback
 
     def _validate_live_order_guard(self) -> OrderResult | None:
+        if self.read_only:
+            return OrderResult(order_id="", accepted=False, message="Live order blocked: broker is read-only")
         if not self.startup_safety_passed:
             return OrderResult(
                 order_id="",
@@ -237,6 +242,12 @@ class LiveBroker(BaseBroker):
         )
 
     def validate_startup_safety(self) -> tuple[bool, str]:
+        if self.read_only:
+            if self.trading_mode not in {"paper", "live"}:
+                return False, "TRADING_MODE must be 'paper' or 'live'"
+            if not self.account_no or not self.account_product_code:
+                return False, "KIS account fields are missing"
+            return True, "Read-only broker startup validation passed"
         if self.trading_mode not in {"paper", "live"}:
             return False, "TRADING_MODE must be 'paper' or 'live'"
         if self.trading_mode != "live":

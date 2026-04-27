@@ -17,6 +17,7 @@ from backend.app.engine.live_prep_engine import compute_final_betting_exit_order
 from backend.app.risk.audit import append_risk_event
 from backend.app.services.broker_secret_service import BrokerSecretService
 from backend.app.services.live_exec_session_store import LiveExecSessionStore
+from backend.app.services.live_market_mode_store import LiveMarketModeStore
 from backend.app.services.live_sell_arm_store import SellOnlyArmStore, SellOnlyArmState
 
 logger = logging.getLogger("backend.app.engine.live_sell_only_loop")
@@ -56,7 +57,17 @@ def _place_live_sell_orders(
 
     from app.brokers.live_broker import LiveBroker
 
-    broker = LiveBroker(kis_client=client, account_no=account_no, account_product_code=product_code, logger=logger)
+    broker = LiveBroker(
+        kis_client=client,
+        account_no=account_no,
+        account_product_code=product_code,
+        live_trading_enabled=bool(cfg.live_trading or cfg.live_trading_enabled),
+        live_trading_confirm=bool(cfg.live_trading_confirm),
+        live_trading_extra_confirm=bool(cfg.live_trading_extra_confirm),
+        trading_mode=str(cfg.trading_mode or "").strip().lower() or "paper",
+        dry_run_log_enabled=True,
+        logger=logger,
+    )
     open_orders = broker.get_open_orders()
     submitted: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -106,7 +117,13 @@ def run_sell_only_tick(
         if sess is None or (sess.execution_mode or "").strip().lower() != "live_manual_approval" or sess.strategy_id != "final_betting_v1":
             processed.append({"user_id": user_id, "ok": True, "skipped": "no_active_final_betting_manual_session"})
             continue
-        out = compute_final_betting_exit_orders_live(broker_service=broker_service, backend_settings=cfg, user_id=user_id)
+        manual_mode = LiveMarketModeStore(cfg.live_market_mode_store_json).get(user_id, market=str(sess.market or "domestic"))
+        out = compute_final_betting_exit_orders_live(
+            broker_service=broker_service,
+            backend_settings=cfg,
+            user_id=user_id,
+            manual_market_mode=manual_mode,
+        )
         if not out.get("ok"):
             processed.append({"user_id": user_id, "ok": False, "error": out.get("error")})
             continue

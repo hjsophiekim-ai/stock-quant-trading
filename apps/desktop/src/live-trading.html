@@ -97,6 +97,75 @@
           <pre id="readinessHealthPre">(loading)</pre>
         </div>
         <div class="panel">
+          <h3 style="margin-top: 0">Market Mode (Live)</h3>
+          <p class="muted">auto / aggressive / neutral / defensive 를 Live shadow 계산에 동일하게 적용합니다.</p>
+          <div class="row" style="margin-top: 8px">
+            <label style="margin-top: 0">Manual override</label>
+            <select id="liveMarketMode" style="padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px">
+              <option value="auto">auto</option>
+              <option value="aggressive">aggressive</option>
+              <option value="neutral">neutral</option>
+              <option value="defensive">passive(defensive)</option>
+            </select>
+            <button id="saveLiveMarketModeBtn" type="button">Save Market Mode</button>
+            <button id="refreshLiveMarketModeBtn" type="button">Refresh Market Mode</button>
+          </div>
+          <pre id="liveMarketModePre">(loading)</pre>
+        </div>
+        <div class="panel">
+          <h3 style="margin-top: 0">계정 스냅샷 (Live)</h3>
+          <p class="muted">최근 체결/미체결/보유 포지션을 KIS 조회 기반으로 표시합니다.</p>
+          <div class="row" style="margin-top: 8px">
+            <button id="refreshLiveDashboardBtn" type="button">Refresh Snapshot</button>
+          </div>
+          <pre id="liveDashboardMetaPre">(loading)</pre>
+          <h4 style="margin: 10px 0 6px 0">보유 포지션</h4>
+          <div style="overflow: auto">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Qty</th>
+                  <th>Avg</th>
+                </tr>
+              </thead>
+              <tbody id="livePositionsBody"></tbody>
+            </table>
+          </div>
+          <h4 style="margin: 10px 0 6px 0">미체결 주문</h4>
+          <div style="overflow: auto">
+            <table>
+              <thead>
+                <tr>
+                  <th>Order</th>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Rem</th>
+                  <th>Price</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody id="liveOpenOrdersBody"></tbody>
+            </table>
+          </div>
+          <h4 style="margin: 10px 0 6px 0">최근 체결</h4>
+          <div style="overflow: auto">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Qty</th>
+                  <th>Price</th>
+                  <th>Order</th>
+                  <th>Filled</th>
+                </tr>
+              </thead>
+              <tbody id="liveFillsBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel">
           <h3 style="margin-top: 0">잠금 해제 토글</h3>
           <div class="row">
             <label><input id="flagLive" type="checkbox" /> Live Enable Flag</label>
@@ -142,6 +211,36 @@
             </table>
           </div>
           <p id="candidateActionMsg" class="muted" style="white-space: pre-line"></p>
+        </div>
+
+        <div class="panel">
+          <h3 style="margin-top: 0">Intraday Shadow · 검토 종목(세션 연동)</h3>
+          <p class="muted">live_shadow 계산 결과에서 “지금 검토되는 매수/매도 후보”를 요약해 보여줍니다. (주문은 발생하지 않습니다)</p>
+          <div class="row" style="margin: 10px 0">
+            <label style="margin-top: 0">Strategy</label>
+            <select id="hfStrategyId" style="padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px">
+              <option value="scalp_rsi_flag_hf_v1">scalp_rsi_flag_hf_v1</option>
+              <option value="scalp_macd_rsi_3m_v1">scalp_macd_rsi_3m_v1</option>
+              <option value="scalp_momentum_v1">scalp_momentum_v1</option>
+            </select>
+            <button id="genHfShadowBtn" type="button">Generate Shadow</button>
+          </div>
+          <pre id="hfShadowMetaPre">(loading)</pre>
+          <div style="overflow: auto; margin-top: 10px">
+            <table>
+              <thead>
+                <tr>
+                  <th>Side</th>
+                  <th>Symbol</th>
+                  <th>Qty</th>
+                  <th>Price</th>
+                  <th>Strategy</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody id="hfShadowTbody"></tbody>
+            </table>
+          </div>
         </div>
 
         <div class="panel warn">
@@ -190,11 +289,18 @@
         const runtimePre = document.getElementById("runtimePre");
         const paperPre = document.getElementById("paperReadinessPre");
         const healthPre = document.getElementById("readinessHealthPre");
+        const marketModePre = document.getElementById("liveMarketModePre");
+        const liveDashMetaPre = document.getElementById("liveDashboardMetaPre");
+        const livePositionsBody = document.getElementById("livePositionsBody");
+        const liveOpenOrdersBody = document.getElementById("liveOpenOrdersBody");
+        const liveFillsBody = document.getElementById("liveFillsBody");
         const saveMessage = document.getElementById("saveMessage");
         const warn = document.getElementById("liveWarnPanel");
         const candidatesMetaPre = document.getElementById("candidatesMetaPre");
         const candidatesTbody = document.getElementById("candidatesTbody");
         const candidateActionMsg = document.getElementById("candidateActionMsg");
+        const hfShadowMetaPre = document.getElementById("hfShadowMetaPre");
+        const hfShadowTbody = document.getElementById("hfShadowTbody");
         const sellOnlyArmPre = document.getElementById("sellOnlyArmPre");
         const liquidationPre = document.getElementById("liquidationPre");
         const liveExecPre = document.getElementById("liveExecPre");
@@ -238,6 +344,65 @@
           const can = !!st.can_place_live_order;
           warn.className = "panel " + (can ? "ok" : "warn");
           warn.textContent = can ? "LIVE 주문 가능 상태" : (st.warning_message || "LIVE 주문 잠금 상태");
+        }
+
+        async function refreshLiveMarketMode() {
+          const r = await authFetch(backendUrl + "/api/live-trading/market-mode", { headers: await authHeaders() });
+          const d = await r.json().catch(function () { return {}; });
+          marketModePre.textContent = JSON.stringify(d, null, 2);
+          if (r.ok && d && d.manual_market_mode_override) {
+            document.getElementById("liveMarketMode").value = String(d.manual_market_mode_override);
+          }
+        }
+
+        async function saveLiveMarketMode() {
+          const payload = { manual_market_mode: String(document.getElementById("liveMarketMode").value || "auto") };
+          const r = await authFetch(backendUrl + "/api/live-trading/market-mode", {
+            method: "POST",
+            headers: await authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify(payload),
+          });
+          const d = await r.json().catch(function () { return {}; });
+          marketModePre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+        }
+
+        function fillTbody(tbody, rowsHtml) {
+          tbody.innerHTML = "";
+          for (const h of rowsHtml) {
+            const tr = document.createElement("tr");
+            tr.innerHTML = h;
+            tbody.appendChild(tr);
+          }
+        }
+
+        async function refreshLiveDashboard() {
+          const execMode = String(document.getElementById("liveExecMode").value || "");
+          const r = await authFetch(backendUrl + "/api/live-prep/dashboard-data?execution_mode=" + encodeURIComponent(execMode), { headers: await authHeaders() });
+          const d = await r.json().catch(function () { return {}; });
+          if (!r.ok) {
+            liveDashMetaPre.textContent = JSON.stringify(d.detail || d, null, 2);
+            fillTbody(livePositionsBody, []);
+            fillTbody(liveOpenOrdersBody, []);
+            fillTbody(liveFillsBody, []);
+            return;
+          }
+          liveDashMetaPre.textContent = JSON.stringify({
+            asof_utc: d.asof_utc,
+            counts: d.counts,
+            manual_market_mode_override: d.manual_market_mode_override,
+          }, null, 2);
+          const pos = Array.isArray(d.positions) ? d.positions : [];
+          fillTbody(livePositionsBody, pos.map(function (p) {
+            return "<td>" + fmt(p.symbol) + "</td><td>" + fmt(p.quantity) + "</td><td>" + fmt(p.average_price) + "</td>";
+          }));
+          const oo = Array.isArray(d.open_orders) ? d.open_orders : [];
+          fillTbody(liveOpenOrdersBody, oo.map(function (o) {
+            return "<td>" + fmt(o.order_id) + "</td><td>" + fmt(o.symbol) + "</td><td>" + fmt(o.side) + "</td><td>" + fmt(o.remaining_quantity) + "</td><td>" + fmt(o.price) + "</td><td>" + fmt(o.created_at) + "</td>";
+          }));
+          const ff = Array.isArray(d.recent_fills) ? d.recent_fills : [];
+          fillTbody(liveFillsBody, ff.map(function (f) {
+            return "<td>" + fmt(f.symbol) + "</td><td>" + fmt(f.side) + "</td><td>" + fmt(f.quantity) + "</td><td>" + fmt(f.fill_price) + "</td><td>" + fmt(f.order_id) + "</td><td>" + fmt(f.filled_at) + "</td>";
+          }));
         }
 
         async function refreshLiveExec() {
@@ -316,6 +481,7 @@
           liveExecMsg.textContent = r.ok ? ("Tick OK\n" + JSON.stringify(d.counts || {}, null, 2)) : JSON.stringify(d.detail || d, null, 2);
           await refreshLiveExec();
           await refreshCandidates();
+          await refreshLiveDashboard();
         }
 
         function fmt(v) {
@@ -355,6 +521,53 @@
               </td>
             `;
             candidatesTbody.appendChild(tr);
+          }
+        }
+
+        async function refreshHfShadow() {
+          const execMode = String(document.getElementById("liveExecMode").value || "");
+          const sid = String(document.getElementById("hfStrategyId").value || "");
+          hfShadowMetaPre.textContent = "(loading)";
+          const r = await authFetch(
+            backendUrl + "/api/live-prep/hf-shadow/generate?strategy_id=" + encodeURIComponent(sid) + "&execution_mode=" + encodeURIComponent(execMode),
+            { method: "POST", headers: await authHeaders() }
+          );
+          const d = await r.json().catch(function () { return {}; });
+          if (!r.ok) {
+            hfShadowMetaPre.textContent = JSON.stringify(d.detail || d, null, 2);
+            hfShadowTbody.innerHTML = "";
+            return;
+          }
+          const mm = d.market_mode ? d.market_mode : {};
+          const orders = Array.isArray(d.generated_orders) ? d.generated_orders : [];
+          const buySyms = [];
+          const sellSyms = [];
+          for (const o of orders) {
+            if (String(o.side) === "buy") buySyms.push(String(o.symbol || ""));
+            if (String(o.side) === "sell") sellSyms.push(String(o.symbol || ""));
+          }
+          hfShadowMetaPre.textContent = JSON.stringify({
+            asof_utc: d.asof_utc,
+            strategy_id: d.strategy_id,
+            generated_order_count: d.generated_order_count,
+            market_mode_active: mm.market_mode_active,
+            manual_market_mode_override: mm.manual_market_mode_override,
+            status_line: mm.status_line,
+            buy_symbols: Array.from(new Set(buySyms)).slice(0, 20),
+            sell_symbols: Array.from(new Set(sellSyms)).slice(0, 20),
+          }, null, 2);
+          hfShadowTbody.innerHTML = "";
+          for (const o of orders.slice(0, 80)) {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+              <td><span class="pill">${fmt(o.side)}</span></td>
+              <td>${fmt(o.symbol)}</td>
+              <td>${fmt(o.quantity)}</td>
+              <td>${fmt(o.price)}</td>
+              <td>${fmt(o.strategy_id)}</td>
+              <td>${fmt(o.signal_reason)}</td>
+            `;
+            hfShadowTbody.appendChild(tr);
           }
         }
 
@@ -528,6 +741,20 @@
           saveMessage.textContent = r.ok ? "저장 완료\n" + JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
           await refresh();
         });
+
+        document.getElementById("saveLiveMarketModeBtn").addEventListener("click", async function () {
+          await saveLiveMarketMode();
+          await refreshLiveMarketMode();
+        });
+        document.getElementById("refreshLiveMarketModeBtn").addEventListener("click", async function () {
+          await refreshLiveMarketMode();
+        });
+        document.getElementById("refreshLiveDashboardBtn").addEventListener("click", async function () {
+          await refreshLiveDashboard();
+        });
+        document.getElementById("genHfShadowBtn").addEventListener("click", async function () {
+          await refreshHfShadow();
+        });
         document.getElementById("refreshBtn").addEventListener("click", refresh);
         document.getElementById("refreshCandidatesBtn").addEventListener("click", refreshCandidates);
         document.getElementById("liveExecRefreshBtn").addEventListener("click", refreshLiveExec);
@@ -553,8 +780,11 @@
         document.getElementById("logoutBtn").addEventListener("click", async function () { await clearDesktopSession(); window.location.href = "./login.html"; });
 
         await refresh();
+        await refreshLiveMarketMode();
         await refreshLiveExec();
         await refreshCandidates();
+        await refreshLiveDashboard();
+        await refreshHfShadow();
         await refreshSellOnlyArm();
         await refreshLiquidationPlans();
       })();

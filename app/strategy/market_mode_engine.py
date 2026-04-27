@@ -19,6 +19,8 @@ MarketModeSource = Literal["auto", "manual_override"]
 
 def normalize_manual_mode(raw: str | None) -> ManualMarketMode:
     s = (raw or "auto").strip().lower()
+    if s == "passive":
+        return "defensive"
     if s in ("auto", "aggressive", "neutral", "defensive"):
         return s  # type: ignore[return-value]
     return "auto"

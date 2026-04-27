@@ -13,11 +13,12 @@ from app.brokers.live_broker import LiveBroker
 from app.config import get_settings as get_app_settings
 from app.scheduler.intraday_jobs import fetch_quotes_throttled
 from app.scheduler.kis_intraday import IntradayChartCache, build_intraday_universe_1m
-from app.scheduler.kis_universe import build_kospi_index_series, build_mock_sp500_proxy_from_kospi
+from app.scheduler.kis_universe import build_kospi_index_series, build_mock_sp500_proxy_from_kospi, build_mock_volatility_series
 from app.strategy.final_betting_v1_strategy import FinalBettingV1Strategy, set_final_betting_debug_now
 from app.strategy.intraday_common import analyze_krx_intraday_session
 from app.strategy.intraday_paper_state import IntradayPaperStateStore
 from app.strategy.base_strategy import StrategyContext
+from app.strategy.market_mode_engine import attach_market_mode_to_strategy
 from app.orders.models import OrderRequest
 
 from backend.app.clients.kis_client import build_kis_client_for_live_user
@@ -151,6 +152,7 @@ def compute_final_betting_exit_orders_live(
     backend_settings: BackendSettings,
     user_id: str,
     debug_now_kst: datetime | None = None,
+    manual_market_mode: str | None = None,
 ) -> dict[str, Any]:
     client, broker, err = _build_live_client_and_broker(
         broker_service=broker_service,
@@ -195,6 +197,7 @@ def compute_final_betting_exit_orders_live(
         lookback = max(int(cfg.paper_kis_chart_lookback_days), 60)
         kospi = build_kospi_index_series(client, lookback_calendar_days=lookback, logger=logger)
         sp500 = build_mock_sp500_proxy_from_kospi(kospi)
+        vol = build_mock_volatility_series(kospi)
         quote_by_symbol = fetch_quotes_throttled(
             client,
             symbols,
@@ -214,6 +217,14 @@ def compute_final_betting_exit_orders_live(
         strategy = FinalBettingV1Strategy()
         strategy.intraday_state = state
         strategy.quote_by_symbol = quote_by_symbol
+        market_mode = attach_market_mode_to_strategy(
+            strategy,
+            manual=manual_market_mode,
+            kospi=kospi,
+            sp500=sp500,
+            volatility=vol,
+            settings=cfg,
+        )
         strategy.intraday_session_context = {
             "krx_session_state": snap.state,
             "fetch_allowed": snap.fetch_allowed,
@@ -239,6 +250,7 @@ def compute_final_betting_exit_orders_live(
             "asof_utc": _utc_now_iso(),
             "strategy_id": "final_betting_v1",
             "order_allowed": False,
+            "market_mode": market_mode,
             "sell_orders": [asdict(o) for o in sell_orders],
             "sell_symbol_count": len({o.symbol for o in sell_orders}),
             "shadow": {
@@ -247,6 +259,7 @@ def compute_final_betting_exit_orders_live(
                 "session_state": snap.state,
                 "fetch_allowed": snap.fetch_allowed,
                 "order_allowed": False,
+                "market_mode": market_mode,
             },
         }
     finally:
@@ -261,6 +274,7 @@ def generate_final_betting_shadow_candidates(
     limit: int = 5,
     symbols_override: list[str] | None = None,
     debug_now_kst: datetime | None = None,
+    manual_market_mode: str | None = None,
 ) -> dict[str, Any]:
     client, broker, err = _build_live_client_and_broker(
         broker_service=broker_service,
@@ -305,6 +319,7 @@ def generate_final_betting_shadow_candidates(
         lookback = max(int(cfg.paper_kis_chart_lookback_days), 60)
         kospi = build_kospi_index_series(client, lookback_calendar_days=lookback, logger=logger)
         sp500 = build_mock_sp500_proxy_from_kospi(kospi)
+        vol = build_mock_volatility_series(kospi)
         quote_by_symbol = fetch_quotes_throttled(
             client,
             symbols,
@@ -324,6 +339,14 @@ def generate_final_betting_shadow_candidates(
         strategy = FinalBettingV1Strategy()
         strategy.intraday_state = state
         strategy.quote_by_symbol = quote_by_symbol
+        market_mode = attach_market_mode_to_strategy(
+            strategy,
+            manual=manual_market_mode,
+            kospi=kospi,
+            sp500=sp500,
+            volatility=vol,
+            settings=cfg,
+        )
         strategy.intraday_session_context = {
             "krx_session_state": snap.state,
             "fetch_allowed": snap.fetch_allowed,
@@ -401,6 +424,7 @@ def generate_final_betting_shadow_candidates(
             "candidate_limit": int(limit),
             "candidate_count": len(candidates),
             "candidates": [asdict(c) for c in candidates],
+            "market_mode": market_mode,
             "shadow": {
                 "generated_buy_symbols": buy_syms,
                 "generated_sell_symbols": sell_syms,
@@ -409,6 +433,7 @@ def generate_final_betting_shadow_candidates(
                 "session_state": snap.state,
                 "fetch_allowed": snap.fetch_allowed,
                 "order_allowed": False,
+                "market_mode": market_mode,
             },
             "equity_estimate_krw": float(equity),
             "token_cache": {
@@ -459,6 +484,7 @@ def generate_intraday_shadow_report(
     user_id: str,
     strategy_id: str,
     symbols_override: list[str] | None = None,
+    manual_market_mode: str | None = None,
 ) -> dict[str, Any]:
     app_key, app_secret, account_no, product_code, mode = broker_service.get_plain_credentials(user_id)
     if (mode or "").strip().lower() != "live":
@@ -510,6 +536,7 @@ def generate_intraday_shadow_report(
     lookback = max(int(cfg.paper_kis_chart_lookback_days), 60)
     kospi = build_kospi_index_series(client, lookback_calendar_days=lookback, logger=logger)
     sp500 = build_mock_sp500_proxy_from_kospi(kospi)
+    vol = build_mock_volatility_series(kospi)
     quote_by_symbol = fetch_quotes_throttled(
         client,
         symbols,
@@ -547,6 +574,14 @@ def generate_intraday_shadow_report(
                 "regular_session_kst": snap.regular_session_kst,
             },
         )
+    market_mode = attach_market_mode_to_strategy(
+        strategy,
+        manual=manual_market_mode,
+        kospi=kospi,
+        sp500=sp500,
+        volatility=vol,
+        settings=cfg,
+    )
 
     context = StrategyContext(
         prices=universe_1m,
@@ -566,6 +601,7 @@ def generate_intraday_shadow_report(
         "order_allowed": False,
         "generated_order_count": len(orders),
         "generated_orders": [_order_to_dict(o) for o in orders],
+        "market_mode": market_mode,
         "last_diagnostics": list(getattr(strategy, "last_diagnostics", []) or [])[-50:],
         "intraday_signal_breakdown": dict(getattr(strategy, "last_intraday_signal_breakdown", {}) or {}),
         "fetch_summary": fetch_summary,

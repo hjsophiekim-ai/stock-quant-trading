@@ -11,6 +11,7 @@ from backend.app.risk.live_unlock_gate import evaluate_paper_readiness, paper_re
 
 from ..core.config import BackendSettings, get_backend_settings
 from ..services.live_safety_state_store import LiveSafetyHistoryItem, LiveSafetyState, LiveSafetyStateStore
+from ..services.live_market_mode_store import LiveMarketModeStore
 
 from .auth_routes import get_current_user_from_auth_header
 
@@ -30,6 +31,10 @@ _mock_total_loss_pct: float = -4.7
 
 def _store(cfg: BackendSettings) -> LiveSafetyStateStore:
     return LiveSafetyStateStore(cfg.live_trading_safety_state_store_json)
+
+
+def _mode_store(cfg: BackendSettings) -> LiveMarketModeStore:
+    return LiveMarketModeStore(cfg.live_market_mode_store_json)
 
 
 def _current_user(authorization: str | None) -> object:
@@ -335,3 +340,59 @@ def set_emergency_stop(
 def kill_switch_status(authorization: str | None = Header(default=None)) -> dict[str, object]:
     _ = _current_user(authorization)
     return _kill_switch_payload()
+
+
+class LiveMarketModeBody(BaseModel):
+    manual_market_mode: str = Field(
+        default="auto",
+        description="auto | aggressive | neutral | defensive",
+        min_length=2,
+        max_length=16,
+    )
+
+
+@router.get("/market-mode")
+def get_live_market_mode(
+    authorization: str | None = Header(default=None),
+    market: str | None = None,
+) -> dict[str, object]:
+    user = _current_user(authorization)
+    cfg = get_backend_settings()
+    slot = str(market or "domestic").strip().lower()
+    slot = "us" if slot == "us" else "domestic"
+    manual = _mode_store(cfg).get(getattr(user, "id"), market=slot)
+    return {
+        "ok": True,
+        "market": slot,
+        "manual_market_mode_override": manual,
+        "allowed": ["auto", "aggressive", "neutral", "defensive"],
+    }
+
+
+@router.post("/market-mode")
+def set_live_market_mode(
+    body: LiveMarketModeBody,
+    authorization: str | None = Header(default=None),
+    market: str | None = None,
+) -> dict[str, object]:
+    user = _current_user(authorization)
+    cfg = get_backend_settings()
+    slot = str(market or "domestic").strip().lower()
+    slot = "us" if slot == "us" else "domestic"
+    manual = _mode_store(cfg).set(getattr(user, "id"), market=slot, manual_market_mode=str(body.manual_market_mode or "auto"))
+    append_risk_event(
+        cfg.risk_events_jsonl,
+        {
+            "ts_utc": datetime.now(timezone.utc).isoformat(),
+            "event_type": "LIVE_MARKET_MODE_UPDATED",
+            "actor": getattr(user, "id"),
+            "market": slot,
+            "manual_market_mode_override": manual,
+        },
+    )
+    return {
+        "ok": True,
+        "market": slot,
+        "manual_market_mode_override": manual,
+        "allowed": ["auto", "aggressive", "neutral", "defensive"],
+    }

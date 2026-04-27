@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime, timezone
+import logging
 from pathlib import Path
 from typing import Any, Literal
 
@@ -18,6 +19,7 @@ from backend.app.core.config import get_backend_settings, is_execution_mode_allo
 from backend.app.engine.live_prep_engine import generate_final_betting_shadow_candidates, generate_intraday_shadow_report
 from backend.app.risk.audit import append_risk_event
 from backend.app.services.live_exec_session_store import LiveExecSessionStore
+from backend.app.services.live_market_mode_store import LiveMarketModeStore
 from backend.app.services.live_liquidation_plan_store import LiquidationItem, LiquidationPlan, LiveLiquidationPlanStore
 from backend.app.services.live_safety_state_store import LiveSafetyStateStore
 from backend.app.services.live_sell_arm_store import SellOnlyArmState, SellOnlyArmStore
@@ -28,6 +30,7 @@ from .live_trading_routes import runtime_safety_validation_for_user_id
 from ..services.live_prep_store import LiveCandidate, LiveCandidateStore
 
 router = APIRouter(prefix="/live-prep", tags=["live-prep"])
+logger = logging.getLogger("backend.app.api.live_prep_routes")
 
 
 class CandidateDecisionRequest(BaseModel):
@@ -128,6 +131,30 @@ def _require_live_prep_enabled_for_user(user_id: str, hint_execution_mode: str |
     return eff
 
 
+def _build_live_broker_for_user(
+    *,
+    cfg: Any,
+    client: Any,
+    account_no: str,
+    product_code: str,
+    read_only: bool = False,
+):
+    from app.brokers.live_broker import LiveBroker
+
+    return LiveBroker(
+        kis_client=client,
+        account_no=account_no,
+        account_product_code=product_code,
+        read_only=bool(read_only),
+        live_trading_enabled=bool(getattr(cfg, "live_trading", False) or getattr(cfg, "live_trading_enabled", False)),
+        live_trading_confirm=bool(getattr(cfg, "live_trading_confirm", False)),
+        live_trading_extra_confirm=bool(getattr(cfg, "live_trading_extra_confirm", False)),
+        trading_mode=str(getattr(cfg, "trading_mode", "")).strip().lower() or "paper",
+        dry_run_log_enabled=bool(getattr(cfg, "live_order_dry_run_log", True)),
+        logger=logger,
+    )
+
+
 @router.get("/status")
 def live_prep_status(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     cfg = get_backend_settings()
@@ -146,6 +173,63 @@ def live_prep_status(authorization: str | None = Header(default=None)) -> dict[s
         "live_ready_for_submit": bool(live_status.get("ok")),
         "blockers": list(live_status.get("blockers") or []),
         "blocker_details": list(live_status.get("blocker_details") or []),
+    }
+
+
+@router.get("/dashboard-data")
+def live_dashboard_data(
+    authorization: str | None = Header(default=None),
+    execution_mode: str | None = Query(default=None),
+) -> dict[str, Any]:
+    user = _current_user(authorization)
+    eff = _require_live_prep_enabled_for_user(user.id, hint_execution_mode=execution_mode)
+    cfg = get_backend_settings()
+    svc = get_broker_service()
+    app_key, app_secret, account_no, product_code, mode = svc.get_plain_credentials(user.id)
+    if (mode or "").strip().lower() != "live":
+        raise HTTPException(status_code=403, detail="broker_account_not_live")
+    tok = svc.ensure_cached_token_for_paper_start(user.id)
+    if not tok.ok or not tok.access_token:
+        raise HTTPException(status_code=503, detail={"error": tok.failure_code or "token_not_ready", "message": tok.message})
+    api_base = svc._resolve_kis_api_base(mode)  # type: ignore[attr-defined]
+    client = build_kis_client_for_live_user(
+        base_url=api_base,
+        access_token=tok.access_token,
+        app_key=app_key,
+        app_secret=app_secret,
+        live_execution_unlocked=False,
+    )
+    broker = _build_live_broker_for_user(cfg=cfg, client=client, account_no=account_no, product_code=product_code, read_only=True)
+    positions = broker.get_positions()
+    open_orders = broker.get_open_orders()
+    fills = broker.get_fills()
+    manual_mode = LiveMarketModeStore(cfg.live_market_mode_store_json).get(user.id, market="domestic")
+    return {
+        "ok": True,
+        "asof_utc": datetime.now(timezone.utc).isoformat(),
+        "execution_mode": eff,
+        "market": "domestic",
+        "manual_market_mode_override": manual_mode,
+        "positions": [asdict(p) for p in positions],
+        "open_orders": [
+            {
+                **asdict(o),
+                "created_at": o.created_at.isoformat() if getattr(o, "created_at", None) is not None else None,
+            }
+            for o in open_orders
+        ],
+        "recent_fills": [
+            {
+                **asdict(f),
+                "filled_at": f.filled_at.isoformat() if getattr(f, "filled_at", None) is not None else None,
+            }
+            for f in fills
+        ],
+        "counts": {
+            "position_count": len(positions),
+            "open_order_count": len(open_orders),
+            "fill_count": len(fills),
+        },
     }
 
 
@@ -199,11 +283,13 @@ def generate_final_betting_candidates(
     _require_live_prep_enabled_for_user(user.id, hint_execution_mode=execution_mode)
     cfg = get_backend_settings()
     svc = get_broker_service()
+    manual_mode = LiveMarketModeStore(cfg.live_market_mode_store_json).get(user.id, market="domestic")
     out = generate_final_betting_shadow_candidates(
         broker_service=svc,
         backend_settings=cfg,
         user_id=user.id,
         limit=int(limit),
+        manual_market_mode=manual_mode,
     )
     if not out.get("ok"):
         raise HTTPException(status_code=503, detail=out)
@@ -232,11 +318,13 @@ def generate_hf_shadow(
     _require_live_prep_enabled_for_user(user.id, hint_execution_mode=execution_mode)
     cfg = get_backend_settings()
     svc = get_broker_service()
+    manual_mode = LiveMarketModeStore(cfg.live_market_mode_store_json).get(user.id, market="domestic")
     out = generate_intraday_shadow_report(
         broker_service=svc,
         backend_settings=cfg,
         user_id=user.id,
         strategy_id=strategy_id,
+        manual_market_mode=manual_mode,
     )
     if not out.get("ok"):
         raise HTTPException(status_code=503, detail=out)
@@ -286,9 +374,7 @@ def prepare_batch_liquidation(
         app_secret=app_secret,
         live_execution_unlocked=False,
     )
-    from app.brokers.live_broker import LiveBroker
-
-    broker = LiveBroker(kis_client=client, account_no=account_no, account_product_code=product_code, logger=None)
+    broker = _build_live_broker_for_user(cfg=cfg, client=client, account_no=account_no, product_code=product_code, read_only=True)
     positions = broker.get_positions()
     items: list[LiquidationItem] = []
     for p in positions:
@@ -387,9 +473,7 @@ def execute_batch_liquidation(
         app_secret=app_secret,
         live_execution_unlocked=True,
     )
-    from app.brokers.live_broker import LiveBroker
-
-    broker = LiveBroker(kis_client=client, account_no=account_no, account_product_code=product_code, logger=None)
+    broker = _build_live_broker_for_user(cfg=cfg, client=client, account_no=account_no, product_code=product_code, read_only=False)
     open_orders = broker.get_open_orders()
     submitted: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -575,9 +659,7 @@ def submit_candidate_order(
 
     broker = None
     try:
-        from app.brokers.live_broker import LiveBroker
-
-        broker = LiveBroker(kis_client=client, account_no=account_no, account_product_code=product_code, logger=None)
+        broker = _build_live_broker_for_user(cfg=cfg, client=client, account_no=account_no, product_code=product_code, read_only=False)
         recent = st.list_filtered(symbol=cand.symbol, limit=500)
         for r in recent:
             if r.candidate_id != cand.candidate_id and r.side == cand.side and r.status == "submitted":
