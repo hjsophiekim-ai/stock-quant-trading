@@ -33,13 +33,14 @@ def test_readiness_builder_status_payload(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(live_trading_routes, "paper_readiness_data_health", lambda _cfg: {"overall_data_ok": False})
 
     c = TestClient(app)
-    r = c.get("/api/live-trading/readiness-builder/status", headers={"Authorization": "Bearer t"})
+    r = c.get("/api/live-trading/readiness-builder/status?market=domestic", headers={"Authorization": "Bearer t"})
     assert r.status_code == 200
     j = r.json()
     assert j.get("ok") is True
     assert "state" in j
     assert "loop" in j
     assert "data_health" in j
+    assert j.get("market") == "domestic"
 
 
 def test_auto_guarded_start_auto_starts_readiness_builder_when_paper_readiness_failed(monkeypatch, tmp_path) -> None:
@@ -140,4 +141,73 @@ def test_readiness_builder_tick_increases_rows_via_injected_warmup(monkeypatch, 
     out = rb.tick_readiness_builder_once(cfg=cfg, broker_service=object(), user_id="u1", warmup_func=warmup)
     assert out.get("ok") is True
     assert wrote["n"] == 1
+
+
+def test_readiness_builder_paper_session_status_payload_requires_market(monkeypatch, tmp_path) -> None:
+    from backend.app.engine import live_readiness_builder as rb
+    from backend.app.engine import paper_session_controller as psc
+    from backend.app.core.config import BackendSettings
+
+    cfg = BackendSettings(
+        trading_mode="live",
+        execution_mode="live_auto_guarded",
+        risk_events_jsonl=str(tmp_path / "events.jsonl"),
+        readiness_builder_state_store_json=str(tmp_path / "rb.json"),
+    )
+
+    calls: dict[str, object] = {}
+
+    class Hub:
+        def status_payload(self, *, market: str | None, pref_user_id: str | None = None):
+            calls["market"] = market
+            calls["pref_user_id"] = pref_user_id
+            return {"user_session_active": False}
+
+        def start(self, user_id: str, strategy_id: str, market: str | None = None):
+            calls["start_market"] = market
+            return {"ok": True}
+
+    monkeypatch.setattr(psc, "get_paper_session_controller", lambda: Hub())
+    ok, msg = rb._maybe_start_paper_session(cfg, broker_service=object(), user_id="u1", market="domestic")
+    assert ok is True
+    assert calls.get("market") == "domestic"
+    assert calls.get("start_market") == "domestic"
+
+
+def test_readiness_builder_tick_api_increments_attempts_and_has_no_last_error(monkeypatch, tmp_path) -> None:
+    from backend.app.api import live_trading_routes
+    from backend.app.api import broker_routes
+    from backend.app.core.config import BackendSettings
+    from backend.app.services.live_readiness_builder_store import LiveReadinessBuilderStore
+
+    _auth_ok(monkeypatch)
+    cfg = BackendSettings(
+        trading_mode="live",
+        execution_mode="live_auto_guarded",
+        risk_events_jsonl=str(tmp_path / "events.jsonl"),
+        readiness_builder_state_store_json=str(tmp_path / "rb.json"),
+        readiness_builder_enabled=True,
+    )
+    monkeypatch.setattr(live_trading_routes, "get_backend_settings", lambda: cfg)
+    monkeypatch.setattr(broker_routes, "get_broker_service", lambda: object())
+
+    def fake_tick(*, cfg, broker_service, user_id, market=None):
+        store = LiveReadinessBuilderStore(cfg.readiness_builder_state_store_json)
+        st = store.get(user_id)
+        st.enabled = True
+        st.attempts = int(st.attempts or 0) + 1
+        st.last_error = None
+        store.upsert(st)
+        return {"ok": True, "state": st.__dict__, "status": "building"}
+
+    monkeypatch.setattr(live_trading_routes, "tick_readiness_builder_once", fake_tick)
+
+    c = TestClient(app)
+    r = c.post("/api/live-trading/readiness-builder/tick?market=domestic", headers={"Authorization": "Bearer t"})
+    assert r.status_code == 200
+    j = r.json()
+    assert j.get("ok") is True
+    st = LiveReadinessBuilderStore(cfg.readiness_builder_state_store_json).get("u1")
+    assert int(st.attempts or 0) == 1
+    assert st.last_error is None
 

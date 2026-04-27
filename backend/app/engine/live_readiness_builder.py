@@ -61,7 +61,13 @@ def get_readiness_builder_loop_status(user_id: str) -> dict[str, Any]:
         return asdict(h.runtime)
 
 
-def _maybe_start_paper_session(cfg: BackendSettings, broker_service: BrokerSecretService, user_id: str) -> tuple[bool, str]:
+def _maybe_start_paper_session(
+    cfg: BackendSettings,
+    broker_service: BrokerSecretService,
+    user_id: str,
+    *,
+    market: str | None,
+) -> tuple[bool, str]:
     if not bool(getattr(cfg, "readiness_builder_try_start_paper_session", True)):
         return False, "paper_session_autostart_disabled"
     try:
@@ -70,12 +76,12 @@ def _maybe_start_paper_session(cfg: BackendSettings, broker_service: BrokerSecre
         return False, "paper_session_controller_unavailable"
 
     ctrl = get_paper_session_controller()
-    st = ctrl.status_payload(pref_user_id=user_id)
+    st = ctrl.status_payload(market=market, pref_user_id=user_id)
     if bool(st.get("user_session_active")):
         return True, "paper_session_already_running"
     sid = str(getattr(cfg, "readiness_builder_paper_strategy_id", "") or "").strip() or "swing_relaxed_v2"
     try:
-        ctrl.start(user_id=user_id, strategy_id=sid, market="domestic")
+        ctrl.start(user_id=user_id, strategy_id=sid, market=market)
         return True, "paper_session_started"
     except Exception as exc:
         return False, f"paper_session_start_failed: {exc}"
@@ -162,6 +168,7 @@ def tick_readiness_builder_once(
     cfg: BackendSettings,
     broker_service: BrokerSecretService,
     user_id: str,
+    market: str | None = None,
     store: LiveReadinessBuilderStore | None = None,
     warmup_func: Callable[[BackendSettings], tuple[int, str]] = _warmup_order_audit,
 ) -> dict[str, Any]:
@@ -188,7 +195,7 @@ def tick_readiness_builder_once(
         s.upsert(st)
         return {"ok": True, "status": "ready", "state": asdict(st), "health": health0}
 
-    paper_ok, paper_msg = _maybe_start_paper_session(cfg, broker_service, uid)
+    paper_ok, paper_msg = _maybe_start_paper_session(cfg, broker_service, uid, market=market)
     st.last_action = paper_msg
     if paper_ok:
         _event(cfg, "READINESS_BUILDER_PAPER_SESSION", {"user_id": uid, "action": paper_msg})
@@ -238,6 +245,7 @@ def start_readiness_builder(
     cfg: BackendSettings,
     broker_service: BrokerSecretService,
     user_id: str,
+    market: str | None = None,
     store: LiveReadinessBuilderStore | None = None,
     tick_func: Callable[..., dict[str, Any]] = tick_readiness_builder_once,
 ) -> dict[str, Any]:
@@ -288,7 +296,7 @@ def start_readiness_builder(
                     break
                 try:
                     runtime.last_tick_at_utc = _utc_now_iso()
-                    out = tick_func(cfg=cfg, broker_service=broker_service, user_id=uid, store=s)
+                    out = tick_func(cfg=cfg, broker_service=broker_service, user_id=uid, market=market, store=s)
                     if out.get("status") == "ready":
                         cur2 = s.get(uid)
                         cur2.enabled = False

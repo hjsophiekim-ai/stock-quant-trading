@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.app.risk.audit import append_risk_event
@@ -71,6 +71,10 @@ def _status_payload_for_user(cfg: BackendSettings, st: LiveSafetyState) -> dict[
     readiness = evaluate_paper_readiness(cfg)
     paper_ok = readiness.ok or readiness.bypassed
     ks = _kill_switch_payload()
+    has_operator_intent = bool(getattr(st, "history", None)) and len(list(getattr(st, "history") or [])) > 0
+    requested_live = st.live_trading_flag if has_operator_intent else bool(cfg.live_trading)
+    requested_confirm = st.secondary_confirm_flag if has_operator_intent else bool(cfg.live_trading_confirm)
+    requested_extra = st.extra_approval_flag if has_operator_intent else bool(cfg.live_trading_extra_confirm)
     can_place = (
         cfg.trading_mode == "live"
         and st.live_trading_flag
@@ -105,12 +109,16 @@ def _status_payload_for_user(cfg: BackendSettings, st: LiveSafetyState) -> dict[
     return {
         "trading_mode": cfg.trading_mode,
         "execution_mode": cfg.execution_mode,
+        "env_live_trading": bool(cfg.live_trading),
+        "env_live_trading_confirm": bool(cfg.live_trading_confirm),
+        "env_live_trading_extra_confirm": bool(cfg.live_trading_extra_confirm),
+        "operator_intent_has_history": bool(has_operator_intent),
         "live_trading_flag": st.live_trading_flag,
         "secondary_confirm_flag": st.secondary_confirm_flag,
         "extra_approval_flag": st.extra_approval_flag,
-        "requested_live_trading_flag": st.live_trading_flag,
-        "requested_secondary_confirm_flag": st.secondary_confirm_flag,
-        "requested_extra_approval_flag": st.extra_approval_flag,
+        "requested_live_trading_flag": bool(requested_live),
+        "requested_secondary_confirm_flag": bool(requested_confirm),
+        "requested_extra_approval_flag": bool(requested_extra),
         "live_emergency_stop": st.live_emergency_stop,
         "paper_readiness_ok": paper_ok,
         "can_place_live_order": can_place,
@@ -259,13 +267,17 @@ def _readiness_store(cfg: BackendSettings) -> LiveReadinessBuilderStore:
 
 
 @router.get("/readiness-builder/status")
-def readiness_builder_status(authorization: str | None = Header(default=None)) -> dict[str, object]:
+def readiness_builder_status(
+    authorization: str | None = Header(default=None),
+    market: str | None = Query(default="domestic"),
+) -> dict[str, object]:
     cfg = get_backend_settings()
     user = _current_user(authorization)
     uid = str(getattr(user, "id"))
     st = _readiness_store(cfg).get(uid)
     return {
         "ok": True,
+        "market": market,
         "state": st.__dict__,
         "loop": get_readiness_builder_loop_status(uid),
         "readiness": paper_readiness_to_dict(evaluate_paper_readiness(cfg)),
@@ -282,13 +294,16 @@ def readiness_builder_status(authorization: str | None = Header(default=None)) -
 
 
 @router.post("/readiness-builder/start")
-def readiness_builder_start(authorization: str | None = Header(default=None)) -> dict[str, object]:
+def readiness_builder_start(
+    authorization: str | None = Header(default=None),
+    market: str | None = Query(default="domestic"),
+) -> dict[str, object]:
     cfg = get_backend_settings()
     user = _current_user(authorization)
     uid = str(getattr(user, "id"))
     from .broker_routes import get_broker_service
 
-    out = start_readiness_builder(cfg=cfg, broker_service=get_broker_service(), user_id=uid)
+    out = start_readiness_builder(cfg=cfg, broker_service=get_broker_service(), user_id=uid, market=market)
     return dict(out)
 
 
@@ -302,13 +317,16 @@ def readiness_builder_stop(authorization: str | None = Header(default=None)) -> 
 
 
 @router.post("/readiness-builder/tick")
-def readiness_builder_tick(authorization: str | None = Header(default=None)) -> dict[str, object]:
+def readiness_builder_tick(
+    authorization: str | None = Header(default=None),
+    market: str | None = Query(default="domestic"),
+) -> dict[str, object]:
     cfg = get_backend_settings()
     user = _current_user(authorization)
     uid = str(getattr(user, "id"))
     from .broker_routes import get_broker_service
 
-    out = tick_readiness_builder_once(cfg=cfg, broker_service=get_broker_service(), user_id=uid)
+    out = tick_readiness_builder_once(cfg=cfg, broker_service=get_broker_service(), user_id=uid, market=market)
     return dict(out)
 
 

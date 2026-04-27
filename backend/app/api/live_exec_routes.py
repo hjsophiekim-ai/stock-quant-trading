@@ -312,6 +312,44 @@ def live_auto_guarded_status(authorization: str | None = Header(default=None)) -
     rb_store = LiveReadinessBuilderStore(getattr(cfg, "readiness_builder_state_store_json"))
     rb_state = rb_store.get(user.id)
     rb_loop = get_readiness_builder_loop_status(user.id)
+    issues: list[dict[str, Any]] = []
+    try:
+        details = list(safety.get("blocker_details") or [])
+    except Exception:
+        details = []
+    for d in details:
+        if not isinstance(d, dict):
+            continue
+        code = str(d.get("code") or "")
+        msg = str(d.get("message") or "")
+        if code.startswith("APP_") or code.startswith("ENV_") or code in {"TRADING_MODE_NOT_LIVE", "PAPER_READINESS_FAILED", "KILL_SWITCH_TRIGGERED"}:
+            issues.append({"type": "safety", "code": code, "message": msg})
+    if rb_loop.get("last_error"):
+        issues.append({"type": "readiness_builder", "code": "READINESS_BUILDER_LAST_ERROR", "message": str(rb_loop.get("last_error"))})
+    if getattr(rb_state, "last_error", None):
+        issues.append({"type": "readiness_builder", "code": "READINESS_BUILDER_STATE_ERROR", "message": str(getattr(rb_state, "last_error") or "")})
+    try:
+        from backend.app.risk.live_unlock_gate import paper_readiness_data_health
+
+        dh = paper_readiness_data_health(cfg)
+        if int(dh.get("pnl_rows_found") or 0) <= 0:
+            issues.append({"type": "paper_readiness", "code": "PNL_ROWS_ZERO", "message": "pnl_history rows = 0"})
+        if int(dh.get("audit_rows_found_tail") or 0) <= 0:
+            issues.append({"type": "paper_readiness", "code": "AUDIT_ROWS_ZERO", "message": "order_audit rows = 0"})
+    except Exception:
+        pass
+    try:
+        from app.strategy.intraday_common import kst_now, parse_krx_hhmm
+
+        now = kst_now()
+        t = now.time()
+        t0 = parse_krx_hhmm("143000")
+        t1 = parse_krx_hhmm("152000")
+        in_window = bool(t0 <= t <= t1)
+        if not in_window:
+            issues.append({"type": "final_betting", "code": "NOT_IN_ENTRY_WINDOW_ESTIMATE", "message": f"now_kst={now.isoformat()} window=14:30~15:20"})
+    except Exception:
+        pass
     return {
         "ok": True,
         "config": {
@@ -345,6 +383,7 @@ def live_auto_guarded_status(authorization: str | None = Header(default=None)) -
         "loop": loop_status,
         "safety": safety,
         "readiness_builder": {"state": rb_state.__dict__, "loop": rb_loop},
+        "issues": issues,
         "can_place_auto_order": bool(can_auto_order and bool(st.enabled)),
         "can_tick": bool((cfg.trading_mode or "").strip().lower() == "live" and (cfg.execution_mode or "").strip().lower() == "live_auto_guarded"),
     }
@@ -373,7 +412,7 @@ def live_auto_guarded_start(payload: LiveAutoGuardedStartRequest, authorization:
         if isinstance(d, dict)
     ):
         try:
-            start_readiness_builder(cfg=cfg, broker_service=get_broker_service(), user_id=user.id)
+            start_readiness_builder(cfg=cfg, broker_service=get_broker_service(), user_id=user.id, market="domestic")
             st.last_decision = "waiting_for_readiness"
             st.last_reason = "paper readiness builder started"
         except Exception:

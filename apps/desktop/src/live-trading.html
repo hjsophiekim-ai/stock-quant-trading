@@ -390,6 +390,9 @@
           document.getElementById("flagLive").checked = !!st.live_trading_flag;
           document.getElementById("flagConfirm2").checked = !!st.secondary_confirm_flag;
           document.getElementById("flagExtra").checked = !!st.extra_approval_flag;
+          if (!!st.env_live_trading && !st.operator_intent_has_history) document.getElementById("flagLive").checked = true;
+          if (!!st.env_live_trading_confirm && !st.operator_intent_has_history) document.getElementById("flagConfirm2").checked = true;
+          if (!!st.env_live_trading_extra_confirm && !st.operator_intent_has_history) document.getElementById("flagExtra").checked = true;
           document.getElementById("flagEmergency").checked = !!st.live_emergency_stop;
           const can = !!st.can_place_live_order;
           warn.className = "panel " + (can ? "ok" : "warn");
@@ -521,13 +524,15 @@
         }
 
         async function refreshReadinessBuilder() {
-          const r = await authFetch(backendUrl + "/api/live-trading/readiness-builder/status", { headers: await authHeaders() });
+          const mk = String(document.getElementById("liveMarket").value || "domestic");
+          const r = await authFetch(backendUrl + "/api/live-trading/readiness-builder/status?market=" + encodeURIComponent(mk), { headers: await authHeaders() });
           const d = await r.json().catch(function () { return {}; });
           readinessBuilderPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
         }
 
         async function startReadinessBuilder() {
-          const r = await authFetch(backendUrl + "/api/live-trading/readiness-builder/start", { method: "POST", headers: await authHeaders() });
+          const mk = String(document.getElementById("liveMarket").value || "domestic");
+          const r = await authFetch(backendUrl + "/api/live-trading/readiness-builder/start?market=" + encodeURIComponent(mk), { method: "POST", headers: await authHeaders() });
           const d = await r.json().catch(function () { return {}; });
           readinessBuilderPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
           await refreshReadinessBuilder();
@@ -541,7 +546,8 @@
         }
 
         async function tickReadinessBuilder() {
-          const r = await authFetch(backendUrl + "/api/live-trading/readiness-builder/tick", { method: "POST", headers: await authHeaders() });
+          const mk = String(document.getElementById("liveMarket").value || "domestic");
+          const r = await authFetch(backendUrl + "/api/live-trading/readiness-builder/tick?market=" + encodeURIComponent(mk), { method: "POST", headers: await authHeaders() });
           const d = await r.json().catch(function () { return {}; });
           readinessBuilderPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
           await refreshReadinessBuilder();
@@ -655,6 +661,15 @@
           const rej = shadow.rejection_reasons_by_symbol || {};
           const mm = out && out.market_mode ? out.market_mode : (shadow.market_mode || {});
           const mmActive = mm && mm.market_mode_active ? String(mm.market_mode_active) : "";
+          const brk = shadow && shadow.strategy_breakdown ? shadow.strategy_breakdown : {};
+          const entryWindow = brk && brk.entry_window ? String(brk.entry_window) : "";
+          const notInEntryWindow = (String(entryWindow).toLowerCase() === "closed") || (String(brk.blocked || "") === "not_in_entry_window");
+          let nowKst = "";
+          try {
+            nowKst = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Seoul" }).replace(" ", "T") + "+09:00";
+          } catch (e) {
+            nowKst = "";
+          }
 
           const counts = _fetchCounts(fs);
           const diagSyms = new Set();
@@ -663,8 +678,11 @@
           }
           candidatesMetaPre.textContent = JSON.stringify(
             {
+              now_kst: nowKst,
               ok: !!(out && out.ok),
               candidate_count: out && out.candidate_count != null ? out.candidate_count : 0,
+              entry_window: entryWindow || undefined,
+              not_in_entry_window: notInEntryWindow,
               searched_symbols: counts.searched_symbols,
               fetch_success_symbols: counts.fetch_success_symbols,
               diagnosed_symbols: diagSyms.size,
@@ -672,7 +690,6 @@
               manual_market_mode_override: mm && mm.manual_market_mode_override ? mm.manual_market_mode_override : undefined,
               token_cache: out && out.token_cache ? out.token_cache : undefined,
               blocked: shadow && shadow.strategy_breakdown ? shadow.strategy_breakdown.blocked : undefined,
-              entry_window: shadow && shadow.strategy_breakdown ? shadow.strategy_breakdown.entry_window : undefined,
             },
             null,
             2
@@ -694,7 +711,7 @@
           const r = await authFetch(backendUrl + "/api/live-exec/tick", { method: "POST", headers: await authHeaders() });
           const d = await r.json().catch(function () { return {}; });
           liveExecMsg.textContent = r.ok ? ("Tick OK\n" + JSON.stringify(d.counts || {}, null, 2)) : JSON.stringify(d.detail || d, null, 2);
-          if (r.ok && d && d.result && d.result.strategy_id === "final_betting_v1") {
+          if (r.ok && d && d.result && d.result.shadow) {
             renderFinalBettingShadowResult(d.result);
             if (d.result && d.result.ok === false && (d.result.message || d.result.error)) {
               candidateErrorBanner.style.display = "block";
@@ -723,7 +740,15 @@
             candidatesTbody.innerHTML = "";
             return;
           }
-          candidatesMetaPre.textContent = JSON.stringify({ count: d.count, mode: "live_prep" }, null, 2);
+          if ((candidatesFetchSummaryPre.textContent || "").indexOf("(loading)") === 0) {
+            candidatesFetchSummaryPre.textContent = "Tick Now(후보 생성) 실행 후 표시됩니다.";
+          }
+          if ((candidatesDiagnosticsPre.textContent || "").indexOf("(loading)") === 0) {
+            candidatesDiagnosticsPre.textContent = "Tick Now(후보 생성) 실행 후 표시됩니다.";
+          }
+          if ((candidatesRejectionsPre.textContent || "").indexOf("(loading)") === 0) {
+            candidatesRejectionsPre.textContent = "Tick Now(후보 생성) 실행 후 표시됩니다.";
+          }
           const items = Array.isArray(d.items) ? d.items : [];
           candidatesTbody.innerHTML = "";
           for (const it of items) {
