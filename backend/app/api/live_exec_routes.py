@@ -11,11 +11,13 @@ from backend.app.core.config import BackendSettings, get_backend_settings
 from backend.app.risk.audit import append_risk_event
 from backend.app.services.live_exec_session_store import LiveExecSession, LiveExecSessionStore
 from backend.app.services.live_market_mode_store import LiveMarketModeStore
+from backend.app.services.live_auto_guarded_store import LiveAutoGuardedStore
 
 from .auth_routes import get_current_user_from_auth_header
 from .broker_routes import get_broker_service
 from .live_trading_routes import runtime_safety_validation_for_user_id
 from ..engine.live_prep_engine import generate_final_betting_shadow_candidates, generate_intraday_shadow_report
+from ..engine.live_auto_guarded_engine import tick_live_auto_guarded
 from ..services.live_prep_store import LiveCandidate, LiveCandidateStore
 
 router = APIRouter(prefix="/live-exec", tags=["live-exec"])
@@ -36,8 +38,21 @@ class LiveExecStopRequest(BaseModel):
     reason: str = Field(default="stop_live_session", min_length=3, max_length=240)
 
 
+class LiveAutoGuardedStartRequest(BaseModel):
+    actor: str = Field(default="user", min_length=1, max_length=64)
+    reason: str = Field(default="start_live_auto_guarded", min_length=3, max_length=240)
+
+
+class LiveAutoGuardedStopRequest(BaseModel):
+    actor: str = Field(default="user", min_length=1, max_length=64)
+    reason: str = Field(default="stop_live_auto_guarded", min_length=3, max_length=240)
+
+
 def _store(cfg: BackendSettings) -> LiveExecSessionStore:
     return LiveExecSessionStore(cfg.live_exec_sessions_store_json)
+
+def _auto_store(cfg: BackendSettings) -> LiveAutoGuardedStore:
+    return LiveAutoGuardedStore(cfg.live_auto_guarded_state_store_json)
 
 
 def _candidate_store(cfg: BackendSettings) -> LiveCandidateStore:
@@ -269,4 +284,115 @@ def live_exec_tick(authorization: str | None = Header(default=None)) -> dict[str
             "final_betting_pending_approvals": len(pending),
         },
     }
+
+
+@router.get("/auto-guarded/status")
+def live_auto_guarded_status(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    cfg = get_backend_settings()
+    user = _current_user(authorization)
+    safety = runtime_safety_validation_for_user_id(cfg, user.id)
+    st = _auto_store(cfg).get(user.id)
+    can_auto_order = (
+        (cfg.trading_mode or "").strip().lower() == "live"
+        and (cfg.execution_mode or "").strip().lower() == "live_auto_guarded"
+        and bool(cfg.live_auto_order)
+        and bool(safety.get("ok"))
+        and bool(getattr(cfg, "live_trading", False) or getattr(cfg, "live_trading_enabled", False))
+        and bool(getattr(cfg, "live_trading_confirm", False))
+        and bool(getattr(cfg, "live_trading_extra_confirm", False))
+    )
+    return {
+        "ok": True,
+        "config": {
+            "trading_mode": cfg.trading_mode,
+            "execution_mode_env": cfg.execution_mode,
+            "live_auto_order": bool(cfg.live_auto_order),
+            "live_auto_buy_enabled": bool(getattr(cfg, "live_auto_buy_enabled", False)),
+            "live_auto_sell_enabled": bool(getattr(cfg, "live_auto_sell_enabled", True)),
+            "live_auto_stop_loss_enabled": bool(getattr(cfg, "live_auto_stop_loss_enabled", True)),
+            "limits": {
+                "max_order_krw": float(getattr(cfg, "live_auto_max_order_krw", 0.0)),
+                "max_daily_buy_count": int(getattr(cfg, "live_auto_max_daily_buy_count", 0)),
+                "max_daily_sell_count": int(getattr(cfg, "live_auto_max_daily_sell_count", 0)),
+                "max_position_count": int(getattr(cfg, "live_auto_max_position_count", 0)),
+                "max_symbol_exposure_krw": float(getattr(cfg, "live_auto_max_symbol_exposure_krw", 0.0)),
+                "max_total_exposure_krw": float(getattr(cfg, "live_auto_max_total_exposure_krw", 0.0)),
+                "daily_loss_limit_pct": float(getattr(cfg, "live_auto_daily_loss_limit_pct", 0.0)),
+                "total_drawdown_limit_pct": float(getattr(cfg, "live_auto_total_drawdown_limit_pct", 0.0)),
+                "min_cash_buffer_krw": float(getattr(cfg, "live_auto_min_cash_buffer_krw", 0.0)),
+                "cooldown_after_loss_minutes": int(getattr(cfg, "live_auto_cooldown_after_loss_minutes", 0)),
+                "cooldown_after_order_seconds": int(getattr(cfg, "live_auto_cooldown_after_order_seconds", 0)),
+                "duplicate_order_block_minutes": int(getattr(cfg, "live_auto_duplicate_order_block_minutes", 0)),
+                "require_market_open": bool(getattr(cfg, "live_auto_require_market_open", True)),
+            },
+        },
+        "state": asdict(st),
+        "safety": safety,
+        "can_place_auto_order": bool(can_auto_order and bool(st.enabled)),
+        "can_tick": bool((cfg.trading_mode or "").strip().lower() == "live" and (cfg.execution_mode or "").strip().lower() == "live_auto_guarded"),
+    }
+
+
+@router.post("/auto-guarded/start")
+def live_auto_guarded_start(payload: LiveAutoGuardedStartRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    cfg = get_backend_settings()
+    user = _current_user(authorization)
+    if (cfg.trading_mode or "").strip().lower() != "live":
+        raise HTTPException(status_code=403, detail="TRADING_MODE=live required")
+    if (cfg.execution_mode or "").strip().lower() != "live_auto_guarded":
+        raise HTTPException(status_code=403, detail="EXECUTION_MODE=live_auto_guarded required")
+    sess = _store(cfg).get_active(user.id)
+    if sess is not None:
+        raise HTTPException(status_code=409, detail="live_exec_session_running")
+    st = _auto_store(cfg).get(user.id)
+    st.enabled = True
+    st.started_at_utc = datetime.now(timezone.utc).isoformat()
+    st.stopped_at_utc = None
+    st.updated_at_utc = datetime.now(timezone.utc).isoformat()
+    _auto_store(cfg).upsert(st)
+    append_risk_event(
+        cfg.risk_events_jsonl,
+        {
+            "ts_utc": datetime.now(timezone.utc).isoformat(),
+            "event_type": "LIVE_AUTO_GUARDED_STARTED",
+            "actor": user.id,
+            "app_actor": payload.actor,
+            "reason": payload.reason,
+        },
+    )
+    return {"ok": True, "state": asdict(st)}
+
+
+@router.post("/auto-guarded/stop")
+def live_auto_guarded_stop(payload: LiveAutoGuardedStopRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    cfg = get_backend_settings()
+    user = _current_user(authorization)
+    st = _auto_store(cfg).get(user.id)
+    st.enabled = False
+    st.stopped_at_utc = datetime.now(timezone.utc).isoformat()
+    st.updated_at_utc = datetime.now(timezone.utc).isoformat()
+    _auto_store(cfg).upsert(st)
+    append_risk_event(
+        cfg.risk_events_jsonl,
+        {
+            "ts_utc": datetime.now(timezone.utc).isoformat(),
+            "event_type": "LIVE_AUTO_GUARDED_STOPPED",
+            "actor": user.id,
+            "app_actor": payload.actor,
+            "reason": payload.reason,
+        },
+    )
+    return {"ok": True, "state": asdict(st)}
+
+
+@router.post("/auto-guarded/tick")
+def live_auto_guarded_tick(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    cfg = get_backend_settings()
+    user = _current_user(authorization)
+    if (cfg.execution_mode or "").strip().lower() != "live_auto_guarded":
+        raise HTTPException(status_code=403, detail="EXECUTION_MODE=live_auto_guarded required")
+    safety = runtime_safety_validation_for_user_id(cfg, user.id)
+    svc = get_broker_service()
+    out = tick_live_auto_guarded(cfg=cfg, broker_service=svc, user_id=user.id, safety=safety)
+    return out
 

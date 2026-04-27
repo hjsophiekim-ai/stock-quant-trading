@@ -27,6 +27,30 @@ class BackendSettings(BaseSettings):
     live_trading_confirm: bool = Field(default=False, alias="LIVE_TRADING_CONFIRM")
     live_trading_extra_confirm: bool = Field(default=False, alias="LIVE_TRADING_EXTRA_CONFIRM")
 
+    live_auto_order: bool = Field(default=False, alias="LIVE_AUTO_ORDER")
+    live_auto_buy_enabled: bool = Field(default=False, alias="LIVE_AUTO_BUY_ENABLED")
+    live_auto_sell_enabled: bool = Field(default=True, alias="LIVE_AUTO_SELL_ENABLED")
+    live_auto_stop_loss_enabled: bool = Field(default=True, alias="LIVE_AUTO_STOP_LOSS_ENABLED")
+    live_auto_max_order_krw: float = Field(default=100_000.0, ge=0.0, le=50_000_000_000.0, alias="LIVE_AUTO_MAX_ORDER_KRW")
+    live_auto_max_daily_buy_count: int = Field(default=3, ge=0, le=500, alias="LIVE_AUTO_MAX_DAILY_BUY_COUNT")
+    live_auto_max_daily_sell_count: int = Field(default=10, ge=0, le=2000, alias="LIVE_AUTO_MAX_DAILY_SELL_COUNT")
+    live_auto_max_position_count: int = Field(default=5, ge=0, le=200, alias="LIVE_AUTO_MAX_POSITION_COUNT")
+    live_auto_max_symbol_exposure_krw: float = Field(
+        default=300_000.0, ge=0.0, le=500_000_000_000.0, alias="LIVE_AUTO_MAX_SYMBOL_EXPOSURE_KRW"
+    )
+    live_auto_max_total_exposure_krw: float = Field(
+        default=1_000_000.0, ge=0.0, le=5_000_000_000_000.0, alias="LIVE_AUTO_MAX_TOTAL_EXPOSURE_KRW"
+    )
+    live_auto_daily_loss_limit_pct: float = Field(default=2.0, ge=0.0, le=50.0, alias="LIVE_AUTO_DAILY_LOSS_LIMIT_PCT")
+    live_auto_total_drawdown_limit_pct: float = Field(default=5.0, ge=0.0, le=80.0, alias="LIVE_AUTO_TOTAL_DRAWDOWN_LIMIT_PCT")
+    live_auto_min_cash_buffer_krw: float = Field(
+        default=100_000.0, ge=0.0, le=500_000_000_000.0, alias="LIVE_AUTO_MIN_CASH_BUFFER_KRW"
+    )
+    live_auto_cooldown_after_loss_minutes: int = Field(default=30, ge=0, le=1440, alias="LIVE_AUTO_COOLDOWN_AFTER_LOSS_MINUTES")
+    live_auto_cooldown_after_order_seconds: int = Field(default=60, ge=0, le=3600, alias="LIVE_AUTO_COOLDOWN_AFTER_ORDER_SECONDS")
+    live_auto_duplicate_order_block_minutes: int = Field(default=30, ge=0, le=1440, alias="LIVE_AUTO_DUPLICATE_ORDER_BLOCK_MINUTES")
+    live_auto_require_market_open: bool = Field(default=True, alias="LIVE_AUTO_REQUIRE_MARKET_OPEN")
+
     # 실거래 잠금 해제 전 모의(paper) 자동 검증 게이트
     live_unlock_enabled: bool = Field(default=True, alias="LIVE_UNLOCK_ENABLED")
     live_unlock_bypass: bool = Field(default=False, alias="LIVE_UNLOCK_BYPASS")
@@ -115,6 +139,14 @@ class BackendSettings(BaseSettings):
         default="backend_data/live_exec/sessions.json",
         alias="LIVE_EXEC_SESSIONS_STORE_JSON",
     )
+    live_auto_guarded_state_store_json: str = Field(
+        default="backend_data/live_auto_guarded/state.json",
+        alias="LIVE_AUTO_GUARDED_STATE_STORE_JSON",
+    )
+    live_auto_guarded_equity_tracker_dir: str = Field(
+        default="backend_data/live_auto_guarded",
+        alias="LIVE_AUTO_GUARDED_EQUITY_TRACKER_DIR",
+    )
     live_trading_safety_state_store_json: str = Field(
         default="backend_data/live_trading/safety_state.json",
         alias="LIVE_TRADING_SAFETY_STATE_STORE_JSON",
@@ -169,5 +201,5 @@ def is_execution_mode_allowed(settings: BackendSettings) -> bool:
     if tmode == "paper":
         return mode in {"paper_auto"}
     if tmode == "live":
-        return mode in {"live_shadow", "live_manual_approval"}
+        return mode in {"live_shadow", "live_manual_approval", "live_auto_guarded"}
     return False

@@ -75,6 +75,19 @@
           <p id="liveExecMsg" class="muted" style="white-space: pre-line"></p>
           <pre id="liveExecPre">(loading)</pre>
         </div>
+        <div class="panel warn">
+          <h3 style="margin-top: 0">Live Auto Guarded</h3>
+          <p class="muted">
+            이 모드에서만 자동 실주문이 가능하며, EXECUTION_MODE=live_auto_guarded + LIVE_AUTO_ORDER=true + LIVE_TRADING 다중 승인 + 런타임 안전 검증을 모두 통과해야 주문이 제출됩니다.
+          </p>
+          <div class="row" style="margin: 10px 0">
+            <button id="autoStatusBtn" type="button">Status</button>
+            <button id="autoStartBtn" type="button">Start</button>
+            <button id="autoStopBtn" type="button">Stop</button>
+            <button id="autoTickBtn" type="button">Tick</button>
+          </div>
+          <pre id="autoGuardedPre">(loading)</pre>
+        </div>
         <div class="panel">
           <h3 style="margin-top: 0">상태 요약</h3>
           <h4 style="margin: 10px 0 6px 0">Saved operator intent</h4>
@@ -305,6 +318,7 @@
         const liquidationPre = document.getElementById("liquidationPre");
         const liveExecPre = document.getElementById("liveExecPre");
         const liveExecMsg = document.getElementById("liveExecMsg");
+        const autoGuardedPre = document.getElementById("autoGuardedPre");
         let latestPlanId = "";
 
         async function refresh() {
@@ -437,6 +451,44 @@
           if (startBlockers && startBlockers.length) lines.push("\nStart blockers:\n- " + startBlockers.join("\n- "));
           if (submitBlockers && submitBlockers.length) lines.push("\nSubmit blockers:\n- " + submitBlockers.join("\n- "));
           liveExecMsg.textContent = lines.join("\n");
+        }
+
+        async function refreshAutoGuarded() {
+          const r = await authFetch(backendUrl + "/api/live-exec/auto-guarded/status", { headers: await authHeaders() });
+          const d = await r.json().catch(function () { return {}; });
+          autoGuardedPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+        }
+
+        async function startAutoGuarded() {
+          const payload = { actor: "desktop-user", reason: String(document.getElementById("reasonInput").value || "start_auto") };
+          const r = await authFetch(backendUrl + "/api/live-exec/auto-guarded/start", {
+            method: "POST",
+            headers: await authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify(payload),
+          });
+          const d = await r.json().catch(function () { return {}; });
+          autoGuardedPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+          await refreshAutoGuarded();
+        }
+
+        async function stopAutoGuarded() {
+          const payload = { actor: "desktop-user", reason: String(document.getElementById("reasonInput").value || "stop_auto") };
+          const r = await authFetch(backendUrl + "/api/live-exec/auto-guarded/stop", {
+            method: "POST",
+            headers: await authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify(payload),
+          });
+          const d = await r.json().catch(function () { return {}; });
+          autoGuardedPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+          await refreshAutoGuarded();
+        }
+
+        async function tickAutoGuarded() {
+          const r = await authFetch(backendUrl + "/api/live-exec/auto-guarded/tick", { method: "POST", headers: await authHeaders() });
+          const d = await r.json().catch(function () { return {}; });
+          autoGuardedPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+          await refreshAutoGuarded();
+          await refreshLiveDashboard();
         }
 
         async function startLiveSession() {
@@ -755,6 +807,10 @@
         document.getElementById("genHfShadowBtn").addEventListener("click", async function () {
           await refreshHfShadow();
         });
+        document.getElementById("autoStatusBtn").addEventListener("click", async function () { await refreshAutoGuarded(); });
+        document.getElementById("autoStartBtn").addEventListener("click", async function () { await startAutoGuarded(); });
+        document.getElementById("autoStopBtn").addEventListener("click", async function () { await stopAutoGuarded(); });
+        document.getElementById("autoTickBtn").addEventListener("click", async function () { await tickAutoGuarded(); });
         document.getElementById("refreshBtn").addEventListener("click", refresh);
         document.getElementById("refreshCandidatesBtn").addEventListener("click", refreshCandidates);
         document.getElementById("liveExecRefreshBtn").addEventListener("click", refreshLiveExec);
@@ -782,6 +838,7 @@
         await refresh();
         await refreshLiveMarketMode();
         await refreshLiveExec();
+        await refreshAutoGuarded();
         await refreshCandidates();
         await refreshLiveDashboard();
         await refreshHfShadow();

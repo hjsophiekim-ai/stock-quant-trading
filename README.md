@@ -78,6 +78,27 @@
   - `paper trading`: 기본 모드, 실행/검증/학습용
   - `live trading`: 명시적 다중 승인 전까지 잠금
 
+### Live 실행 모드(EXECUTION_MODE)
+
+TRADING_MODE=live 인 경우 아래 실행 모드만 허용됩니다.
+
+- `live_shadow`
+  - **절대 주문하지 않습니다.**
+  - 실계좌 데이터를 읽어 전략을 “계산만” 하고, 후보/진단/리포트 확인용으로 사용합니다.
+- `live_manual_approval`
+  - **사용자가 승인한 후보만** 주문 제출이 가능합니다.
+  - 기본적으로 final_betting 후보 승인 플로우를 통해 실주문을 제출합니다.
+- `live_auto_guarded`
+  - **자동 실주문은 이 모드에서만** 허용됩니다.
+  - 추가로 아래 조건을 모두 만족해야 실제 주문이 제출됩니다:
+    - LIVE_TRADING / LIVE_TRADING_CONFIRM / LIVE_TRADING_EXTRA_CONFIRM 모두 true
+    - LIVE_AUTO_ORDER=true
+    - /api/live-trading/runtime-safety-validation 통과(종합 안전 게이트 + emergency stop 포함)
+    - Paper readiness(모의 검증) 통과
+
+Emergency Stop:
+- 앱에서 emergency stop을 켜면 live_auto_guarded의 자동 주문은 즉시 차단됩니다.
+
 ## 앱 첫 실행 (초보자)
 
 모바일/데스크톱 공통으로 아래 순서대로 진행하면 바로 확인 가능합니다.
