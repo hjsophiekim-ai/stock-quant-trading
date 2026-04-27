@@ -42,11 +42,50 @@ def _fake_cfg(root: Path, **over) -> SimpleNamespace:
         live_unlock_max_consecutive_loss_days=5,
         live_unlock_max_order_issue_rate=0.05,
         live_unlock_max_sync_failure_streak=0,
+        backend_data_dir=str(root.parent),
         portfolio_data_dir=str(root),
         risk_order_audit_jsonl=str(root / "audit.jsonl"),
     )
     base.update(over)
     return SimpleNamespace(**base)
+
+
+def test_readiness_honors_backend_data_dir_for_legacy_relative_paths(tmp_path: Path) -> None:
+    base = tmp_path / "data_root"
+    pf = base / "portfolio"
+    risk = base / "risk"
+    pf.mkdir(parents=True, exist_ok=True)
+    risk.mkdir(parents=True, exist_ok=True)
+
+    pnl = pf / "pnl_history.jsonl"
+    t0 = datetime.now(timezone.utc) - timedelta(days=12)
+    for i in range(8):
+        _write_pnl_row(pnl, t0 + timedelta(days=i), 1_000_000.0 * (1.0 + 0.001 * i), 0.1)
+    (risk / "order_audit.jsonl").write_text(
+        "\n".join(
+            json_line(
+                {
+                    "ts_utc": datetime.now(timezone.utc).isoformat(),
+                    "decision": {"approved": True, "reason": "", "reason_code": ""},
+                }
+            )
+            for _ in range(20)
+        ),
+        encoding="utf-8",
+    )
+    (pf / "sync_failures.json").write_text('{"consecutive_failures": 0}', encoding="utf-8")
+
+    cfg = _fake_cfg(
+        tmp_path / "ignored_pf",
+        backend_data_dir=str(base),
+        portfolio_data_dir="backend_data/portfolio",
+        risk_order_audit_jsonl="backend_data/risk/order_audit.jsonl",
+    )
+    health = paper_readiness_data_health(cfg)
+    assert health["pnl_rows_found"] > 0
+    assert health["audit_rows_found_tail"] > 0
+    assert str((base / "portfolio" / "pnl_history.jsonl").resolve()) == str(health["pnl_history_path"])
+    assert str((base / "risk" / "order_audit.jsonl").resolve()) == str(health["risk_order_audit_path"])
 
 
 def test_gate_passes_with_clean_history(tmp_path: Path) -> None:

@@ -383,7 +383,9 @@ def _safe_open_orders() -> tuple[list[dict[str, Any]], str | None]:
 
 def _safe_recent_fills(cfg: BackendSettings, limit: int = 15) -> tuple[list[dict[str, Any]], str | None]:
     try:
-        p = Path(cfg.portfolio_data_dir) / "fills.jsonl"
+        from backend.app.core.storage_paths import resolve_portfolio_data_dir
+
+        p = resolve_portfolio_data_dir(cfg) / "fills.jsonl"
         raw = read_jsonl_tail(p, max_lines=min(500, limit * 5))
         items: list[dict[str, Any]] = []
         for r in reversed(raw):
@@ -426,7 +428,9 @@ def dashboard_summary(authorization: str | None = Header(default=None)) -> dict[
 
     portfolio = load_last_snapshot(cfg)
     portfolio_warnings = list(portfolio.get("warnings") or []) if portfolio else []
-    sync_flag = (Path(cfg.portfolio_data_dir) / "sync_risk_review.flag").is_file()
+    from backend.app.core.storage_paths import resolve_portfolio_data_dir
+
+    sync_flag = (resolve_portfolio_data_dir(cfg) / "sync_risk_review.flag").is_file()
 
     equity = float(portfolio.get("equity") or 0.0) if portfolio else 0.0
     perf_aligned = build_dashboard_performance_block()

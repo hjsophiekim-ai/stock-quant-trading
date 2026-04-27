@@ -48,6 +48,11 @@ class LiveBroker(BaseBroker):
     def __post_init__(self) -> None:
         if self.logger is None:
             self.logger = logging.getLogger("app.brokers.live_broker")
+        if self.read_only:
+            self.startup_safety_passed = True
+            self.startup_safety_reason = "read_only"
+            self.logger.info("[LIVE STARTUP SAFETY] passed=%s reason=%s", True, self.startup_safety_reason)
+            return
         ok, reason = self.validate_startup_safety()
         self.startup_safety_passed = ok
         self.startup_safety_reason = reason

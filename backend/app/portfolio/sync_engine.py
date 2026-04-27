@@ -22,6 +22,7 @@ from app.portfolio.positions import Position, apply_buy_fill, apply_sell_fill
 from app.scheduler.equity_tracker import EquityTracker
 
 from backend.app.core.config import BackendSettings, get_backend_settings
+from backend.app.core.storage_paths import resolve_portfolio_data_dir
 from backend.app.orders import build_kis_mock_execution_engine
 from backend.app.orders.order_store import TrackedOrderRecord, TrackedOrderStore
 from backend.app.risk.audit import append_risk_event
@@ -216,7 +217,7 @@ class PortfolioSyncEngine:
 
     def _paths(self) -> tuple[Path, Path, Path, Path, Path, Path]:
         s = self._settings
-        root = Path(s.portfolio_data_dir)
+        root = resolve_portfolio_data_dir(s)
         return (
             root / "sync_state.json",
             root / "fills.jsonl",
@@ -497,7 +498,7 @@ def run_portfolio_sync(*, backfill_days: int = 7, settings: BackendSettings | No
 
 def load_last_snapshot(settings: BackendSettings | None = None) -> dict[str, Any] | None:
     s = settings or get_backend_settings()
-    p = Path(s.portfolio_data_dir) / "sync_state.json"
+    p = resolve_portfolio_data_dir(s) / "sync_state.json"
     if not p.is_file():
         return None
     data = _read_json(p)

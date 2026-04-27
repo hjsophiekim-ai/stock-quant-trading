@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.app.risk.audit import read_jsonl_tail
+from backend.app.core.storage_paths import resolve_portfolio_data_dir, resolve_risk_order_audit_jsonl, resolve_storage_paths
 
 
 def _read_jsonl_all(path: Path) -> list[dict[str, Any]]:
@@ -167,7 +168,8 @@ def _read_sync_failures(portfolio_dir: Path) -> int:
 
 def paper_readiness_data_health(settings: Any) -> dict[str, Any]:
     cfg = settings
-    root = Path(cfg.portfolio_data_dir)
+    base_paths = resolve_storage_paths(cfg)
+    root = resolve_portfolio_data_dir(cfg)
     lookback = int(getattr(cfg, "live_unlock_lookback_days", 30) or 30)
     min_samples = int(getattr(cfg, "live_unlock_min_pnl_samples", 10) or 10)
 
@@ -176,7 +178,7 @@ def paper_readiness_data_health(settings: Any) -> dict[str, Any]:
     last_pnl = pnl_rows[-1] if pnl_rows else None
     last_pnl_ts = str(last_pnl.get("ts_utc") or "") if isinstance(last_pnl, dict) else ""
 
-    audit_path = Path(cfg.risk_order_audit_jsonl)
+    audit_path = resolve_risk_order_audit_jsonl(cfg)
     audit_tail = read_jsonl_tail(audit_path, max_lines=200)
     last_audit = audit_tail[-1] if audit_tail else None
     last_audit_ts = str(last_audit.get("ts_utc") or "") if isinstance(last_audit, dict) else ""
@@ -193,23 +195,55 @@ def paper_readiness_data_health(settings: Any) -> dict[str, Any]:
         except (TypeError, ValueError):
             continue
 
+    missing_bits: list[str] = []
+    if len(pnl_rows) < min_samples or equity_ok_n < min_samples:
+        missing_bits.append("pnl_history")
+    if len(audit_tail) == 0:
+        missing_bits.append("order_audit")
+    if not sync_ok:
+        missing_bits.append("portfolio_sync")
+    if missing_bits:
+        next_steps = (
+            "데이터가 부족합니다. 다음 중 하나를 실행해 데이터를 누적하세요:\n"
+            "- 모의투자 시작: POST /api/paper-trading/start (전략 선택)\n"
+            "- 포트폴리오 동기화 실행: POST /api/portfolio/sync\n"
+            "- 모의 주문 평가가 돌아가야 order_audit.jsonl 이 쌓입니다(모의 세션 틱/전략 평가가 필요)."
+        )
+    else:
+        next_steps = "데이터가 충분합니다."
+
     return {
-        "pnl_history_path": str(pnl_path),
+        "paths": {
+            "backend_data_dir": {
+                "raw": str(getattr(cfg, "backend_data_dir", "") or ""),
+                "resolved": str(base_paths.backend_data_dir),
+            },
+            "portfolio_data_dir": {
+                "raw": str(getattr(cfg, "portfolio_data_dir", "") or ""),
+                "resolved": str(root),
+            },
+            "risk_order_audit_jsonl": {
+                "raw": str(getattr(cfg, "risk_order_audit_jsonl", "") or ""),
+                "resolved": str(audit_path),
+            },
+        },
+        "pnl_history_path": str(pnl_path.resolve()),
         "pnl_rows_found": int(len(pnl_rows)),
         "pnl_equity_rows_found": int(equity_ok_n),
         "pnl_min_samples_required": int(min_samples),
         "last_pnl_sample_ts": last_pnl_ts or None,
         "pnl_data_ok": bool(len(pnl_rows) >= min_samples and equity_ok_n >= min_samples),
-        "risk_order_audit_path": str(audit_path),
+        "risk_order_audit_path": str(audit_path.resolve()),
         "audit_rows_found_tail": int(len(audit_tail)),
         "last_audit_sample_ts": last_audit_ts or None,
         "audit_data_ok": bool(len(audit_tail) > 0),
-        "sync_failures_path": str(sync_path),
+        "sync_failures_path": str(sync_path.resolve()),
         "sync_failures_found": int(sync_failures),
         "sync_data_ok": bool(sync_ok),
         "overall_data_ok": bool(
             (len(pnl_rows) >= min_samples and equity_ok_n >= min_samples) and (len(audit_tail) > 0) and sync_ok
         ),
+        "next_steps_message_ko": next_steps,
     }
 
 
@@ -231,7 +265,7 @@ def evaluate_paper_readiness(settings: Any) -> PaperReadinessResult:
             technical_summary="LIVE_UNLOCK_BYPASS=true",
         )
 
-    root = Path(cfg.portfolio_data_dir)
+    root = resolve_portfolio_data_dir(cfg)
     lookback = cfg.live_unlock_lookback_days
     min_samples = cfg.live_unlock_min_pnl_samples
 
@@ -292,7 +326,8 @@ def evaluate_paper_readiness(settings: Any) -> PaperReadinessResult:
         )
     )
 
-    rate, tech_n, tot_n = _order_audit_issue_rate(cfg.risk_order_audit_jsonl)
+    audit_path = resolve_risk_order_audit_jsonl(cfg)
+    rate, tech_n, tot_n = _order_audit_issue_rate(audit_path)
     if rate is None:
         audit_ok = False
         obs: str | float = "데이터 없음"

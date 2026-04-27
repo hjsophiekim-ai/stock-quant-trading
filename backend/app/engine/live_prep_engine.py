@@ -116,23 +116,53 @@ def _candidate_from_diag(diag: dict[str, Any]) -> tuple[str, float | None, list[
     return sym, score, flags, rationale
 
 
+def _token_cache_meta(tok: Any) -> dict[str, Any] | None:
+    if tok is None:
+        return None
+    return {
+        "ok": bool(getattr(tok, "ok", False)),
+        "hit": bool(getattr(tok, "token_cache_hit", False)),
+        "source": str(getattr(tok, "token_cache_source", "") or ""),
+        "persisted": bool(getattr(tok, "token_cache_persisted", False)),
+        "failure_code": (str(getattr(tok, "failure_code", "") or "") or None),
+    }
+
+
+def _build_live_read_only_broker(
+    *,
+    client: Any,
+    account_no: str,
+    product_code: str,
+    backend_settings: BackendSettings,
+) -> LiveBroker:
+    return LiveBroker(
+        kis_client=client,
+        account_no=account_no,
+        account_product_code=product_code,
+        read_only=True,
+        trading_mode="live",
+        dry_run_log_enabled=False,
+        logger=logger,
+    )
+
+
 def _build_live_client_and_broker(
     *,
     broker_service: BrokerSecretService,
     backend_settings: BackendSettings,
     user_id: str,
     live_execution_unlocked: bool,
-) -> tuple[Any, LiveBroker, str] | tuple[None, None, str]:  # type: ignore[valid-type]
+) -> tuple[Any, LiveBroker, dict[str, Any] | None, str] | tuple[None, None, None, str]:  # type: ignore[valid-type]
     try:
         app_key, app_secret, account_no, product_code, mode = broker_service.get_plain_credentials(user_id)
     except Exception:
-        return (None, None, "broker_credentials_missing")  # type: ignore[return-value]
+        return (None, None, None, "broker_credentials_missing")  # type: ignore[return-value]
     if (mode or "").strip().lower() != "live":
-        return (None, None, "broker_account_not_live")  # type: ignore[return-value]
+        return (None, None, None, "broker_account_not_live")  # type: ignore[return-value]
 
     tok = broker_service.ensure_cached_token_for_paper_start(user_id)
     if not tok.ok or not tok.access_token:
-        return (None, None, tok.failure_code or "token_not_ready")  # type: ignore[return-value]
+        return (None, None, _token_cache_meta(tok), tok.failure_code or "token_not_ready")  # type: ignore[return-value]
 
     api_base = broker_service._resolve_kis_api_base(mode)  # type: ignore[attr-defined]
     client = build_kis_client_for_live_user(
@@ -142,8 +172,13 @@ def _build_live_client_and_broker(
         app_secret=app_secret,
         live_execution_unlocked=bool(live_execution_unlocked),
     )
-    broker = LiveBroker(kis_client=client, account_no=account_no, account_product_code=product_code, logger=logger)
-    return client, broker, ""
+    broker = _build_live_read_only_broker(
+        client=client,
+        account_no=account_no,
+        product_code=product_code,
+        backend_settings=backend_settings,
+    )
+    return client, broker, _token_cache_meta(tok), ""
 
 
 def compute_final_betting_exit_orders_live(
@@ -154,14 +189,14 @@ def compute_final_betting_exit_orders_live(
     debug_now_kst: datetime | None = None,
     manual_market_mode: str | None = None,
 ) -> dict[str, Any]:
-    client, broker, err = _build_live_client_and_broker(
+    client, broker, token_cache, err = _build_live_client_and_broker(
         broker_service=broker_service,
         backend_settings=backend_settings,
         user_id=user_id,
         live_execution_unlocked=False,
     )
     if client is None or broker is None:
-        return {"ok": False, "error": err, "message": err}
+        return {"ok": False, "error": err, "message": err, "token_cache": token_cache}
 
     cfg = get_app_settings()
     symbols = cfg.resolved_final_betting_symbol_list()
@@ -261,6 +296,7 @@ def compute_final_betting_exit_orders_live(
                 "order_allowed": False,
                 "market_mode": market_mode,
             },
+            "token_cache": token_cache,
         }
     finally:
         set_final_betting_debug_now(None)
@@ -276,14 +312,23 @@ def generate_final_betting_shadow_candidates(
     debug_now_kst: datetime | None = None,
     manual_market_mode: str | None = None,
 ) -> dict[str, Any]:
-    client, broker, err = _build_live_client_and_broker(
+    client, broker, token_cache, err = _build_live_client_and_broker(
         broker_service=broker_service,
         backend_settings=backend_settings,
         user_id=user_id,
         live_execution_unlocked=False,
     )
     if client is None or broker is None:
-        return {"ok": False, "error": err, "message": err}
+        return {
+            "ok": False,
+            "error": err,
+            "message": err,
+            "candidate_count": 0,
+            "candidates": [],
+            "shadow": {"fetch_summary": [], "last_diagnostics": [], "rejection_reasons_by_symbol": {}},
+            "market_mode": None,
+            "token_cache": token_cache,
+        }
 
     cfg = get_app_settings()
     symbols = list(symbols_override) if symbols_override is not None else cfg.resolved_final_betting_symbol_list()
@@ -291,6 +336,9 @@ def generate_final_betting_shadow_candidates(
     if not symbols:
         return {"ok": False, "error": "empty_symbols", "message": "final_betting 심볼 리스트가 비어 있습니다."}
 
+    fetch_summary: list[dict[str, Any]] = []
+    diags: list[dict[str, Any]] = []
+    market_mode: dict[str, Any] | None = None
     set_final_betting_debug_now(debug_now_kst)
     try:
         scfg = None
@@ -367,6 +415,30 @@ def generate_final_betting_shadow_candidates(
         state_store.save(strategy.intraday_state or state)
 
         diags = list(getattr(strategy, "last_diagnostics", []) or [])
+        breakdown = dict(getattr(strategy, "last_intraday_signal_breakdown", {}) or {})
+        global_blocked = str(breakdown.get("blocked") or "")
+        if not bool(snap.fetch_allowed):
+            global_blocked = str(snap.fetch_block_reason or "fetch_blocked")
+        elif str(breakdown.get("entry_window") or "").strip().lower() == "closed" and not global_blocked:
+            global_blocked = "not_in_entry_window"
+
+        if global_blocked:
+            diags = (
+                [
+                    {
+                        "symbol": "__GLOBAL__",
+                        "strategy": "final_betting_v1",
+                        "entered": False,
+                        "blocked_reason": global_blocked,
+                        "session_state": str(snap.state or ""),
+                        "fetch_allowed": bool(snap.fetch_allowed),
+                        "fetch_block_reason": str(snap.fetch_block_reason or ""),
+                        "market_mode_active": str((market_mode or {}).get("market_mode_active") or ""),
+                        "market_mode_source": str((market_mode or {}).get("market_mode_source") or ""),
+                    }
+                ]
+                + diags
+            )
         entered = [d for d in diags if bool(d.get("entered"))]
         buy_syms = [o.symbol for o in orders if o.side == "buy"]
         sell_syms = [o.symbol for o in orders if o.side == "sell"]
@@ -416,6 +488,27 @@ def generate_final_betting_shadow_candidates(
                 )
             )
 
+        rejection_reasons: dict[str, str] = {}
+        pos_symbols = {str(getattr(p, "symbol", "") or "") for p in positions if str(getattr(p, "symbol", "") or "")}
+        for s in symbols:
+            if s in pos_symbols:
+                rejection_reasons[s] = "already_holding"
+        for d in diags:
+            sym = str(d.get("symbol") or "")
+            if not sym:
+                continue
+            if bool(d.get("entered")):
+                continue
+            if sym in rejection_reasons:
+                continue
+            br = str(d.get("blocked_reason") or d.get("entry_block_top_reason") or "")
+            if br:
+                rejection_reasons[sym] = br
+        if global_blocked:
+            for s in symbols:
+                if s not in rejection_reasons:
+                    rejection_reasons[s] = global_blocked
+
         return {
             "ok": True,
             "asof_utc": _utc_now_iso(),
@@ -434,13 +527,32 @@ def generate_final_betting_shadow_candidates(
                 "fetch_allowed": snap.fetch_allowed,
                 "order_allowed": False,
                 "market_mode": market_mode,
+                "rejection_reasons_by_symbol": rejection_reasons,
+                "strategy_breakdown": breakdown,
             },
             "equity_estimate_krw": float(equity),
-            "token_cache": {
-                "hit": bool(tok.token_cache_hit),
-                "source": tok.token_cache_source,
-                "persisted": bool(tok.token_cache_persisted),
+            "token_cache": token_cache,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": "final_betting_shadow_failed",
+            "message": str(exc),
+            "candidate_count": 0,
+            "candidates": [],
+            "shadow": {
+                "generated_buy_symbols": [],
+                "generated_sell_symbols": [],
+                "last_diagnostics": diags[-50:],
+                "fetch_summary": fetch_summary,
+                "session_state": None,
+                "fetch_allowed": None,
+                "order_allowed": False,
+                "market_mode": market_mode,
+                "rejection_reasons_by_symbol": {},
             },
+            "market_mode": market_mode,
+            "token_cache": token_cache,
         }
     finally:
         set_final_betting_debug_now(None)
@@ -486,22 +598,14 @@ def generate_intraday_shadow_report(
     symbols_override: list[str] | None = None,
     manual_market_mode: str | None = None,
 ) -> dict[str, Any]:
-    app_key, app_secret, account_no, product_code, mode = broker_service.get_plain_credentials(user_id)
-    if (mode or "").strip().lower() != "live":
-        return {"ok": False, "error": "broker_account_not_live", "message": "브로커 계정이 live 모드가 아닙니다."}
-
-    tok = broker_service.ensure_cached_token_for_paper_start(user_id)
-    if not tok.ok or not tok.access_token:
-        return {"ok": False, "error": tok.failure_code or "token_not_ready", "message": tok.message}
-
-    api_base = broker_service._resolve_kis_api_base(mode)  # type: ignore[attr-defined]
-    client = build_kis_client_for_live_user(
-        base_url=api_base,
-        access_token=tok.access_token,
-        app_key=app_key,
-        app_secret=app_secret,
+    client, broker, token_cache, err = _build_live_client_and_broker(
+        broker_service=broker_service,
+        backend_settings=backend_settings,
+        user_id=user_id,
         live_execution_unlocked=False,
     )
+    if client is None or broker is None:
+        return {"ok": False, "error": err, "message": err, "token_cache": token_cache}
 
     cfg = get_app_settings()
     symbols = list(symbols_override) if symbols_override is not None else cfg.resolved_intraday_symbol_list()
@@ -543,8 +647,6 @@ def generate_intraday_shadow_report(
         min_interval_sec=max(0.15, float(cfg.paper_intraday_chart_min_interval_sec)),
         logger=logger,
     )
-
-    broker = LiveBroker(kis_client=client, account_no=account_no, account_product_code=product_code, logger=logger)
     positions = broker.get_positions()
     portfolio_df = _build_positions_df(positions)
 
@@ -605,5 +707,6 @@ def generate_intraday_shadow_report(
         "last_diagnostics": list(getattr(strategy, "last_diagnostics", []) or [])[-50:],
         "intraday_signal_breakdown": dict(getattr(strategy, "last_intraday_signal_breakdown", {}) or {}),
         "fetch_summary": fetch_summary,
+        "token_cache": token_cache,
     }
 

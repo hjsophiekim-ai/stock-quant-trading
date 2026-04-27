@@ -205,7 +205,22 @@
             <button id="genFinalBettingBtn" type="button">Tick Now(후보 생성)</button>
             <button id="refreshCandidatesBtn" type="button">후보 새로고침</button>
           </div>
+          <div id="candidateErrorBanner" style="display: none; padding: 10px; border: 1px solid #fecaca; background: #fef2f2; color: #991b1b; border-radius: 8px; white-space: pre-line; margin: 8px 0"></div>
           <pre id="candidatesMetaPre">(loading)</pre>
+          <div class="row" style="gap: 10px; margin-top: 10px; align-items: flex-start">
+            <div style="flex: 1; min-width: 320px">
+              <div class="muted" style="font-size: 12px; margin-bottom: 6px">shadow.fetch_summary</div>
+              <pre id="candidatesFetchSummaryPre">(loading)</pre>
+            </div>
+            <div style="flex: 1; min-width: 320px">
+              <div class="muted" style="font-size: 12px; margin-bottom: 6px">last_diagnostics (top 20)</div>
+              <pre id="candidatesDiagnosticsPre">(loading)</pre>
+            </div>
+          </div>
+          <div style="margin-top: 10px">
+            <div class="muted" style="font-size: 12px; margin-bottom: 6px">종목별 탈락 이유</div>
+            <pre id="candidatesRejectionsPre">(loading)</pre>
+          </div>
           <div style="overflow: auto; margin-top: 10px">
             <table>
               <thead>
@@ -310,6 +325,10 @@
         const saveMessage = document.getElementById("saveMessage");
         const warn = document.getElementById("liveWarnPanel");
         const candidatesMetaPre = document.getElementById("candidatesMetaPre");
+        const candidateErrorBanner = document.getElementById("candidateErrorBanner");
+        const candidatesFetchSummaryPre = document.getElementById("candidatesFetchSummaryPre");
+        const candidatesDiagnosticsPre = document.getElementById("candidatesDiagnosticsPre");
+        const candidatesRejectionsPre = document.getElementById("candidatesRejectionsPre");
         const candidatesTbody = document.getElementById("candidatesTbody");
         const candidateActionMsg = document.getElementById("candidateActionMsg");
         const hfShadowMetaPre = document.getElementById("hfShadowMetaPre");
@@ -451,6 +470,13 @@
           if (startBlockers && startBlockers.length) lines.push("\nStart blockers:\n- " + startBlockers.join("\n- "));
           if (submitBlockers && submitBlockers.length) lines.push("\nSubmit blockers:\n- " + submitBlockers.join("\n- "));
           liveExecMsg.textContent = lines.join("\n");
+          if (sess && sess.last_error) {
+            candidateErrorBanner.style.display = "block";
+            candidateErrorBanner.textContent = "last_error:\n" + String(sess.last_error || "");
+          } else {
+            candidateErrorBanner.style.display = "none";
+            candidateErrorBanner.textContent = "";
+          }
         }
 
         async function refreshAutoGuarded() {
@@ -526,11 +552,89 @@
           await refreshLiveExec();
         }
 
+        function _fetchCounts(fetchSummary) {
+          const fs = Array.isArray(fetchSummary) ? fetchSummary : [];
+          const searched = fs.length;
+          let okBars = 0;
+          let blocked = 0;
+          for (const row of fs) {
+            const bars = row && row.bars_1m != null ? Number(row.bars_1m) : 0;
+            const err = row && row.fetch_error ? String(row.fetch_error) : "";
+            if (!err && bars > 0) okBars += 1;
+            if (err && String(err).indexOf("FETCH_SKIPPED") === 0) blocked += 1;
+          }
+          return { searched_symbols: searched, fetch_success_symbols: okBars, fetch_blocked_symbols: blocked };
+        }
+
+        function _reasonLabel(code, mmActive) {
+          const c = String(code || "");
+          const mm = String(mmActive || "").toLowerCase();
+          if (!c) return "—";
+          if (c === "already_holding") return "이미 보유 중";
+          if (c === "not_in_entry_window") return "entry window 아님";
+          if (c === "final_betting_disabled") return "final betting disabled";
+          if (c === "min_trade_value" || c === "spread" || c.indexOf("liquidity_") === 0) return "liquidity 부족";
+          if (c === "insufficient_budget_for_min_allocation" || c === "config_max_pct_lt_min_allocation") return "cash 부족";
+          if (c.indexOf("FETCH_") === 0 || c.indexOf("fetch") >= 0) return "fetch blocked";
+          if (mm === "defensive" && (c === "market_filter_blocked_1430" || c === "soft_regime_entry_not_allowed" || c === "index_filter_risk_off")) {
+            return "market mode defensive";
+          }
+          return "RSI/ATR/flow 조건 미충족 (" + c + ")";
+        }
+
+        function renderFinalBettingShadowResult(out) {
+          const shadow = out && out.shadow ? out.shadow : {};
+          const fs = shadow.fetch_summary || [];
+          const diags = shadow.last_diagnostics || [];
+          const rej = shadow.rejection_reasons_by_symbol || {};
+          const mm = out && out.market_mode ? out.market_mode : (shadow.market_mode || {});
+          const mmActive = mm && mm.market_mode_active ? String(mm.market_mode_active) : "";
+
+          const counts = _fetchCounts(fs);
+          const diagSyms = new Set();
+          for (const d of Array.isArray(diags) ? diags : []) {
+            if (d && d.symbol) diagSyms.add(String(d.symbol));
+          }
+          candidatesMetaPre.textContent = JSON.stringify(
+            {
+              ok: !!(out && out.ok),
+              candidate_count: out && out.candidate_count != null ? out.candidate_count : 0,
+              searched_symbols: counts.searched_symbols,
+              fetch_success_symbols: counts.fetch_success_symbols,
+              diagnosed_symbols: diagSyms.size,
+              market_mode_active: mmActive,
+              manual_market_mode_override: mm && mm.manual_market_mode_override ? mm.manual_market_mode_override : undefined,
+              token_cache: out && out.token_cache ? out.token_cache : undefined,
+              blocked: shadow && shadow.strategy_breakdown ? shadow.strategy_breakdown.blocked : undefined,
+              entry_window: shadow && shadow.strategy_breakdown ? shadow.strategy_breakdown.entry_window : undefined,
+            },
+            null,
+            2
+          );
+          candidatesFetchSummaryPre.textContent = JSON.stringify(fs, null, 2);
+          candidatesDiagnosticsPre.textContent = JSON.stringify((Array.isArray(diags) ? diags.slice(-20) : []), null, 2);
+
+          const rows = [];
+          const keys = Object.keys(rej || {}).sort();
+          for (const k of keys) {
+            const v = rej[k];
+            rows.push({ symbol: k, reason: _reasonLabel(v, mmActive), reason_code: String(v || "") });
+          }
+          candidatesRejectionsPre.textContent = JSON.stringify(rows, null, 2);
+        }
+
         async function tickLiveSession() {
           liveExecMsg.textContent = "(tick)";
           const r = await authFetch(backendUrl + "/api/live-exec/tick", { method: "POST", headers: await authHeaders() });
           const d = await r.json().catch(function () { return {}; });
           liveExecMsg.textContent = r.ok ? ("Tick OK\n" + JSON.stringify(d.counts || {}, null, 2)) : JSON.stringify(d.detail || d, null, 2);
+          if (r.ok && d && d.result && d.result.strategy_id === "final_betting_v1") {
+            renderFinalBettingShadowResult(d.result);
+            if (d.result && d.result.ok === false && (d.result.message || d.result.error)) {
+              candidateErrorBanner.style.display = "block";
+              candidateErrorBanner.textContent = "final_betting tick 실패:\n" + String(d.result.message || d.result.error || "");
+            }
+          }
           await refreshLiveExec();
           await refreshCandidates();
           await refreshLiveDashboard();

@@ -9,17 +9,18 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from backend.app.core.config import get_backend_settings
+from backend.app.core.storage_paths import resolve_portfolio_data_dir
 from backend.app.portfolio.sync_engine import load_last_snapshot, read_jsonl_tail, run_portfolio_sync
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
 
 def _fills_path() -> Path:
-    return Path(get_backend_settings().portfolio_data_dir) / "fills.jsonl"
+    return resolve_portfolio_data_dir(get_backend_settings()) / "fills.jsonl"
 
 
 def _pnl_hist_path() -> Path:
-    return Path(get_backend_settings().portfolio_data_dir) / "pnl_history.jsonl"
+    return resolve_portfolio_data_dir(get_backend_settings()) / "pnl_history.jsonl"
 
 
 @router.get("/summary")
@@ -82,7 +83,7 @@ def pnl_by_strategy() -> dict[str, Any]:
 def portfolio_sync_status() -> dict[str, Any]:
     """연속 동기화 실패 횟수·risk 검토 플래그."""
     s = get_backend_settings()
-    root = Path(s.portfolio_data_dir)
+    root = resolve_portfolio_data_dir(s)
     fail = root / "sync_failures.json"
     flag = root / "sync_risk_review.flag"
     data: dict[str, Any] = {}

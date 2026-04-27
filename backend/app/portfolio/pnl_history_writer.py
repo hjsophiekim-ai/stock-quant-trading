@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.app.core.config import BackendSettings
+from backend.app.core.storage_paths import resolve_portfolio_data_dir
 
 _lock = threading.Lock()
 
@@ -42,7 +43,7 @@ def append_pnl_history_from_paper_report(
     paper_market: str,
     min_interval_sec: float = 45.0,
 ) -> dict[str, Any]:
-    root = Path(settings.portfolio_data_dir)
+    root = resolve_portfolio_data_dir(settings)
     p = root / "pnl_history.jsonl"
     root.mkdir(parents=True, exist_ok=True)
 

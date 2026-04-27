@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.app.core.config import BackendSettings, get_backend_settings
+from backend.app.core.storage_paths import resolve_portfolio_data_dir
 from backend.app.portfolio.performance_math import (
     compute_equity_returns,
     fifo_and_avg_cost_replay,
@@ -28,12 +29,12 @@ def _parse_date(v: str | None) -> datetime | None:
 
 
 def load_pnl_rows(cfg: BackendSettings, limit: int = 5000) -> list[dict[str, Any]]:
-    p = Path(cfg.portfolio_data_dir) / "pnl_history.jsonl"
+    p = resolve_portfolio_data_dir(cfg) / "pnl_history.jsonl"
     return read_jsonl_tail(p, max_lines=limit)
 
 
 def load_fill_rows(cfg: BackendSettings, limit: int = 20000) -> list[dict[str, Any]]:
-    p = Path(cfg.portfolio_data_dir) / "fills.jsonl"
+    p = resolve_portfolio_data_dir(cfg) / "fills.jsonl"
     return read_jsonl_tail(p, max_lines=limit)
 
 

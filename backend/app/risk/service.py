@@ -6,15 +6,17 @@ from app.risk.audit_hook import register_risk_audit_callback
 from app.risk.reason_codes import RiskReasonCode
 from app.risk.rules import RiskLimits, RiskRules
 from backend.app.core.config import BackendSettings, get_backend_settings
+from backend.app.core.storage_paths import resolve_risk_events_jsonl, resolve_risk_order_audit_jsonl
 from backend.app.risk.audit import append_order_risk_audit, append_risk_event, read_jsonl_tail
 
 
 def install_risk_audit_from_settings(settings: BackendSettings | None = None) -> None:
     """FastAPI 기동 시 주문 리스크 감사 JSONL 연결."""
     b = settings or get_backend_settings()
+    audit_path = resolve_risk_order_audit_jsonl(b)
 
     def _cb(order, snapshot, decision) -> None:
-        append_order_risk_audit(b.risk_order_audit_jsonl, order, snapshot, decision)
+        append_order_risk_audit(audit_path, order, snapshot, decision)
 
     register_risk_audit_callback(_cb)
 
@@ -22,6 +24,8 @@ def install_risk_audit_from_settings(settings: BackendSettings | None = None) ->
 def build_public_risk_status(settings: BackendSettings | None = None) -> dict[str, Any]:
     """대시보드·GET /api/risk/status 용."""
     b = settings or get_backend_settings()
+    audit_path = resolve_risk_order_audit_jsonl(b)
+    events_path = resolve_risk_events_jsonl(b)
     limits = RiskLimits()
     rules = RiskRules(limits=limits)
     return {
@@ -47,6 +51,6 @@ def build_public_risk_status(settings: BackendSettings | None = None) -> dict[st
             "cycle_abort_only_on": RiskReasonCode.SYSTEM_OFF_TOTAL_LOSS.value,
             "high_vol_blocks_new_buys": limits.high_vol_new_entry_blocked,
         },
-        "recent_order_audits": read_jsonl_tail(b.risk_order_audit_jsonl, max_lines=40),
-        "recent_events": read_jsonl_tail(b.risk_events_jsonl, max_lines=40),
+        "recent_order_audits": read_jsonl_tail(audit_path, max_lines=40),
+        "recent_events": read_jsonl_tail(events_path, max_lines=40),
     }

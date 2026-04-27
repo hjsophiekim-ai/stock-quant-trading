@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi import APIRouter, Query
 
 from backend.app.core.config import get_backend_settings
+from backend.app.core.storage_paths import resolve_portfolio_data_dir
 from backend.app.portfolio.sync_engine import read_jsonl_tail
 
 router = APIRouter(prefix="/trading", tags=["trading"])
@@ -24,7 +23,7 @@ def get_orders() -> dict[str, list[dict[str, str]]]:
 def recent_trades(limit: int = Query(default=20, ge=1, le=200)) -> dict[str, object]:
     """포트폴리오 동기화가 적재한 `fills.jsonl` 기반 최근 체결(없으면 빈 목록)."""
     cfg = get_backend_settings()
-    p = Path(cfg.portfolio_data_dir) / "fills.jsonl"
+    p = resolve_portfolio_data_dir(cfg) / "fills.jsonl"
     raw = read_jsonl_tail(p, max_lines=min(2000, limit * 5))
     items: list[dict[str, object]] = []
     for r in reversed(raw):

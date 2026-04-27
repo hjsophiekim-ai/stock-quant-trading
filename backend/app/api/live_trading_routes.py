@@ -234,7 +234,10 @@ def paper_readiness(authorization: str | None = Header(default=None)) -> dict[st
     _ = _current_user(authorization)
     cfg = get_backend_settings()
     pr = evaluate_paper_readiness(cfg)
-    return paper_readiness_to_dict(pr)
+    return {
+        **paper_readiness_to_dict(pr),
+        "data_health": paper_readiness_data_health(cfg),
+    }
 
 
 @router.get("/paper-readiness-diagnostics")
