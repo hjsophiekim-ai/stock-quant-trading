@@ -18,6 +18,11 @@ from .broker_routes import get_broker_service
 from .live_trading_routes import runtime_safety_validation_for_user_id
 from ..engine.live_prep_engine import generate_final_betting_shadow_candidates, generate_intraday_shadow_report
 from ..engine.live_auto_guarded_engine import tick_live_auto_guarded
+from ..engine.live_auto_guarded_loop import (
+    get_live_auto_guarded_loop_status,
+    start_live_auto_guarded_loop,
+    stop_live_auto_guarded_loop,
+)
 from ..services.live_prep_store import LiveCandidate, LiveCandidateStore
 
 router = APIRouter(prefix="/live-exec", tags=["live-exec"])
@@ -301,6 +306,7 @@ def live_auto_guarded_status(authorization: str | None = Header(default=None)) -
         and bool(getattr(cfg, "live_trading_confirm", False))
         and bool(getattr(cfg, "live_trading_extra_confirm", False))
     )
+    loop_status = get_live_auto_guarded_loop_status(user.id)
     return {
         "ok": True,
         "config": {
@@ -310,6 +316,10 @@ def live_auto_guarded_status(authorization: str | None = Header(default=None)) -
             "live_auto_buy_enabled": bool(getattr(cfg, "live_auto_buy_enabled", False)),
             "live_auto_sell_enabled": bool(getattr(cfg, "live_auto_sell_enabled", True)),
             "live_auto_stop_loss_enabled": bool(getattr(cfg, "live_auto_stop_loss_enabled", True)),
+            "live_auto_loop_enabled": bool(getattr(cfg, "live_auto_loop_enabled", False)),
+            "live_auto_loop_interval_sec": int(getattr(cfg, "live_auto_loop_interval_sec", 60)),
+            "live_auto_loop_max_consecutive_failures": int(getattr(cfg, "live_auto_loop_max_consecutive_failures", 5)),
+            "live_auto_loop_auto_resume": bool(getattr(cfg, "live_auto_loop_auto_resume", False)),
             "limits": {
                 "max_order_krw": float(getattr(cfg, "live_auto_max_order_krw", 0.0)),
                 "max_daily_buy_count": int(getattr(cfg, "live_auto_max_daily_buy_count", 0)),
@@ -327,6 +337,7 @@ def live_auto_guarded_status(authorization: str | None = Header(default=None)) -
             },
         },
         "state": asdict(st),
+        "loop": loop_status,
         "safety": safety,
         "can_place_auto_order": bool(can_auto_order and bool(st.enabled)),
         "can_tick": bool((cfg.trading_mode or "").strip().lower() == "live" and (cfg.execution_mode or "").strip().lower() == "live_auto_guarded"),
@@ -349,7 +360,8 @@ def live_auto_guarded_start(payload: LiveAutoGuardedStartRequest, authorization:
     st.started_at_utc = datetime.now(timezone.utc).isoformat()
     st.stopped_at_utc = None
     st.updated_at_utc = datetime.now(timezone.utc).isoformat()
-    _auto_store(cfg).upsert(st)
+    astore = _auto_store(cfg)
+    astore.upsert(st)
     append_risk_event(
         cfg.risk_events_jsonl,
         {
@@ -360,7 +372,10 @@ def live_auto_guarded_start(payload: LiveAutoGuardedStartRequest, authorization:
             "reason": payload.reason,
         },
     )
-    return {"ok": True, "state": asdict(st)}
+    loop_out: dict[str, Any] | None = None
+    if bool(getattr(cfg, "live_auto_loop_enabled", False)):
+        loop_out = start_live_auto_guarded_loop(cfg=cfg, broker_service=get_broker_service(), store=astore, user_id=user.id)
+    return {"ok": True, "state": asdict(st), "loop": loop_out}
 
 
 @router.post("/auto-guarded/stop")
@@ -372,6 +387,7 @@ def live_auto_guarded_stop(payload: LiveAutoGuardedStopRequest, authorization: s
     st.stopped_at_utc = datetime.now(timezone.utc).isoformat()
     st.updated_at_utc = datetime.now(timezone.utc).isoformat()
     _auto_store(cfg).upsert(st)
+    loop_out = stop_live_auto_guarded_loop(cfg=cfg, user_id=user.id, reason=payload.reason)
     append_risk_event(
         cfg.risk_events_jsonl,
         {
@@ -382,7 +398,7 @@ def live_auto_guarded_stop(payload: LiveAutoGuardedStopRequest, authorization: s
             "reason": payload.reason,
         },
     )
-    return {"ok": True, "state": asdict(st)}
+    return {"ok": True, "state": asdict(st), "loop": loop_out}
 
 
 @router.post("/auto-guarded/tick")

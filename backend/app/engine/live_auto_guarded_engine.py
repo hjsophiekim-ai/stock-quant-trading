@@ -17,6 +17,7 @@ from backend.app.services.broker_secret_service import BrokerSecretService
 from backend.app.services.live_auto_guarded_store import LiveAutoGuardedState, LiveAutoGuardedStore
 from backend.app.services.live_market_mode_store import LiveMarketModeStore
 from backend.app.strategy.live_candidate_scoring import score_candidate
+from backend.app.strategy.live_performance_scoring import get_performance_signal
 
 logger = logging.getLogger("backend.app.engine.live_auto_guarded_engine")
 
@@ -331,6 +332,8 @@ def tick_live_auto_guarded(
                         manual_market_mode=manual,
                     )
                     candidates = list(shadow.get("candidates") or []) if isinstance(shadow, dict) else []
+                    perf_by_strategy: dict[str, dict[str, Any]] = {}
+                    perf_by_symbol: dict[tuple[str, str], dict[str, Any]] = {}
                     best = None
                     best_score = -999.0
                     best_reason = ""
@@ -339,15 +342,56 @@ def tick_live_auto_guarded(
                         side = str(c.get("side") or "").lower()
                         if side != "buy" or not sym:
                             continue
+                        sid = str(c.get("strategy_id") or "").strip() or "final_betting_v1"
                         already = any(str(getattr(p, "symbol", "")) == sym for p in positions)
                         has_oo = any(getattr(o, "symbol", "") == sym and getattr(o, "side", "") == "buy" for o in open_orders)
                         price = c.get("price")
+                        base = None
+                        try:
+                            flow = float(c.get("score")) if c.get("score") is not None else None
+                        except Exception:
+                            flow = None
+                        if flow is not None:
+                            base = (float(flow) - 50.0) / 50.0
+                        if sid not in perf_by_strategy:
+                            try:
+                                sig = get_performance_signal(cfg, strategy_id=sid, lookback_days=60, min_sell_trades=10)
+                                perf_by_strategy[sid] = {
+                                    "score_adjustment": sig.score_adjustment,
+                                    "buy_blocked": sig.buy_blocked,
+                                    "reason": sig.reason,
+                                    "metrics": sig.metrics,
+                                }
+                            except Exception:
+                                perf_by_strategy[sid] = {"score_adjustment": 0.0, "buy_blocked": False, "reason": "perf_unavailable"}
+                        k = (sid, sym)
+                        if k not in perf_by_symbol:
+                            try:
+                                sigs = get_performance_signal(cfg, strategy_id=sid, symbol=sym, lookback_days=120, min_sell_trades=5)
+                                perf_by_symbol[k] = {
+                                    "score_adjustment": sigs.score_adjustment,
+                                    "buy_blocked": sigs.buy_blocked,
+                                    "reason": sigs.reason,
+                                    "metrics": sigs.metrics,
+                                }
+                            except Exception:
+                                perf_by_symbol[k] = {"score_adjustment": 0.0, "buy_blocked": False, "reason": "symbol_perf_unavailable"}
+                        ps = perf_by_strategy.get(sid) or {}
+                        pxs = perf_by_symbol.get(k) or {}
+                        perf_bundle = {
+                            "score_adjustment": float(ps.get("score_adjustment") or 0.0) + float(pxs.get("score_adjustment") or 0.0),
+                            "buy_blocked": bool(ps.get("buy_blocked")) or bool(pxs.get("buy_blocked")),
+                            "reason": f"strategy({ps.get('reason','')}) | symbol({pxs.get('reason','')})"[:700],
+                            "metrics": {"strategy": ps.get("metrics"), "symbol": pxs.get("metrics")},
+                        }
                         sc = score_candidate(
                             symbol=sym,
+                            base_signal_score=base,
                             order_price=float(price) if price is not None else None,
                             market_mode=shadow.get("market_mode") if isinstance(shadow, dict) else None,
                             already_holding=already,
                             has_open_order=has_oo,
+                            strategy_performance=perf_bundle,
                         )
                         if sc.score > best_score:
                             best_score = sc.score

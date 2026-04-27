@@ -50,6 +50,12 @@ class BackendSettings(BaseSettings):
     live_auto_cooldown_after_order_seconds: int = Field(default=60, ge=0, le=3600, alias="LIVE_AUTO_COOLDOWN_AFTER_ORDER_SECONDS")
     live_auto_duplicate_order_block_minutes: int = Field(default=30, ge=0, le=1440, alias="LIVE_AUTO_DUPLICATE_ORDER_BLOCK_MINUTES")
     live_auto_require_market_open: bool = Field(default=True, alias="LIVE_AUTO_REQUIRE_MARKET_OPEN")
+    live_auto_tick_interval_sec: int = Field(default=30, ge=3, le=600, alias="LIVE_AUTO_TICK_INTERVAL_SEC")
+
+    live_auto_loop_enabled: bool = Field(default=False, alias="LIVE_AUTO_LOOP_ENABLED")
+    live_auto_loop_interval_sec: int = Field(default=60, ge=3, le=3600, alias="LIVE_AUTO_LOOP_INTERVAL_SEC")
+    live_auto_loop_max_consecutive_failures: int = Field(default=5, ge=1, le=100, alias="LIVE_AUTO_LOOP_MAX_CONSECUTIVE_FAILURES")
+    live_auto_loop_auto_resume: bool = Field(default=False, alias="LIVE_AUTO_LOOP_AUTO_RESUME")
 
     # 실거래 잠금 해제 전 모의(paper) 자동 검증 게이트
     live_unlock_enabled: bool = Field(default=True, alias="LIVE_UNLOCK_ENABLED")

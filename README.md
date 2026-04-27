@@ -95,6 +95,10 @@ TRADING_MODE=live 인 경우 아래 실행 모드만 허용됩니다.
     - LIVE_AUTO_ORDER=true
     - /api/live-trading/runtime-safety-validation 통과(종합 안전 게이트 + emergency stop 포함)
     - Paper readiness(모의 검증) 통과
+  - 자동 틱 루프(선택):
+    - LIVE_AUTO_LOOP_ENABLED=true 이고 `/api/live-exec/auto-guarded/start` 호출 시, 서버 내부에서 사용자별로 일정 주기(LIVE_AUTO_LOOP_INTERVAL_SEC)로 tick을 자동 실행합니다.
+    - `/api/live-exec/auto-guarded/stop` 호출 시 루프를 중단합니다.
+    - 단일 프로세스(Render/로컬) 기준 동작이며, 멀티 프로세스/멀티 인스턴스 환경에서는 사용자별 중복 루프 위험이 있으므로 외부 스케줄러(예: 단일 워커, cron, 큐 워커)로 구동을 권장합니다.
 
 Emergency Stop:
 - 앱에서 emergency stop을 켜면 live_auto_guarded의 자동 주문은 즉시 차단됩니다.

@@ -91,3 +91,36 @@ class LiveAutoGuardedStore:
                 rows.append(raw)
             self._save_rows(rows[-500:])
 
+    def list_enabled(self) -> list[LiveAutoGuardedState]:
+        with _lock:
+            rows = self._load_rows()
+        out: list[LiveAutoGuardedState] = []
+        for r in rows:
+            if not bool(r.get("enabled")):
+                continue
+            uid = str(r.get("user_id") or "")
+            if not uid:
+                continue
+            try:
+                out.append(
+                    LiveAutoGuardedState(
+                        user_id=uid,
+                        enabled=bool(r.get("enabled")),
+                        started_at_utc=r.get("started_at_utc"),
+                        stopped_at_utc=r.get("stopped_at_utc"),
+                        last_tick_at_utc=r.get("last_tick_at_utc"),
+                        last_decision=r.get("last_decision"),
+                        last_reason=r.get("last_reason"),
+                        cooldown_until_utc=r.get("cooldown_until_utc"),
+                        daily_buy_count=int(r.get("daily_buy_count") or 0),
+                        daily_sell_count=int(r.get("daily_sell_count") or 0),
+                        daily_kst_date=r.get("daily_kst_date"),
+                        recent_submits=dict(r.get("recent_submits") or {}),
+                        updated_at_utc=str(r.get("updated_at_utc") or _utc_now_iso()),
+                    )
+                )
+            except Exception:
+                continue
+        out.sort(key=lambda x: (str(x.user_id), str(x.started_at_utc or ""), str(x.updated_at_utc or "")))
+        return out
+

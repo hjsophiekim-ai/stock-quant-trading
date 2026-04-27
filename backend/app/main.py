@@ -76,6 +76,7 @@ def _ensure_full_stack(app: FastAPI) -> None:
         from backend.app.portfolio.sync_engine import install_portfolio_sync_background
         from backend.app.risk.service import install_risk_audit_from_settings
         from backend.app.engine.live_sell_only_loop import install_live_sell_only_background
+        from backend.app.engine.live_auto_guarded_loop import install_live_auto_guarded_loop_manager
 
         settings = get_backend_settings()
         install_risk_audit_from_settings()
@@ -84,6 +85,7 @@ def _ensure_full_stack(app: FastAPI) -> None:
             from backend.app.api.broker_routes import get_broker_service
 
             install_live_sell_only_background(settings, get_broker_service())
+            install_live_auto_guarded_loop_manager(settings, get_broker_service())
         except Exception:
             pass
 

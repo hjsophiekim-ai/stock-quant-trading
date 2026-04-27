@@ -58,6 +58,7 @@ def test_stop_loss_submits_sell(monkeypatch, tmp_path) -> None:
     cfg = _cfg(tmp_path, live_auto_buy_enabled=False)
     LiveAutoGuardedStore(cfg.live_auto_guarded_state_store_json).upsert(LiveAutoGuardedState(user_id="u1", enabled=True))
 
+    monkeypatch.setattr(eng, "get_performance_signal", lambda *_a, **_k: SimpleNamespace(score_adjustment=0.0, buy_blocked=False, reason="ok", metrics={}))
     monkeypatch.setattr(eng, "build_kis_client_for_live_user", lambda **_kw: _Client({"AAA": 98.0}))
 
     class FakeBroker:
@@ -99,6 +100,7 @@ def test_duplicate_open_order_blocks_buy(monkeypatch, tmp_path) -> None:
     st = LiveAutoGuardedState(user_id="u1", enabled=True)
     LiveAutoGuardedStore(cfg.live_auto_guarded_state_store_json).upsert(st)
 
+    monkeypatch.setattr(eng, "get_performance_signal", lambda *_a, **_k: SimpleNamespace(score_adjustment=0.0, buy_blocked=False, reason="ok", metrics={}))
     monkeypatch.setattr(eng, "build_kis_client_for_live_user", lambda **_kw: _Client({}))
 
     class FakeBroker:
@@ -152,6 +154,7 @@ def test_symbol_exposure_limit_blocks_buy(monkeypatch, tmp_path) -> None:
     st = LiveAutoGuardedState(user_id="u1", enabled=True)
     LiveAutoGuardedStore(cfg.live_auto_guarded_state_store_json).upsert(st)
 
+    monkeypatch.setattr(eng, "get_performance_signal", lambda *_a, **_k: SimpleNamespace(score_adjustment=0.0, buy_blocked=False, reason="ok", metrics={}))
     monkeypatch.setattr(eng, "build_kis_client_for_live_user", lambda **_kw: _Client({"CCC": 300_000.0}))
 
     class FakeBroker:
@@ -204,6 +207,7 @@ def test_daily_loss_limit_blocks_new_buys(monkeypatch, tmp_path) -> None:
     )
     LiveAutoGuardedStore(cfg.live_auto_guarded_state_store_json).upsert(LiveAutoGuardedState(user_id="u1", enabled=True))
 
+    monkeypatch.setattr(eng, "get_performance_signal", lambda *_a, **_k: SimpleNamespace(score_adjustment=0.0, buy_blocked=False, reason="ok", metrics={}))
     monkeypatch.setattr(eng, "build_kis_client_for_live_user", lambda **_kw: _Client({}))
 
     class FakeBroker:
