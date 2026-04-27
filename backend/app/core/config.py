@@ -68,6 +68,19 @@ class BackendSettings(BaseSettings):
     live_unlock_max_order_issue_rate: float = Field(default=0.05, ge=0.0, le=1.0, alias="LIVE_UNLOCK_MAX_ORDER_ISSUE_RATE")
     live_unlock_max_sync_failure_streak: int = Field(default=0, ge=0, le=20, alias="LIVE_UNLOCK_MAX_SYNC_FAILURE_STREAK")
 
+    readiness_builder_enabled: bool = Field(default=True, alias="READINESS_BUILDER_ENABLED")
+    readiness_builder_interval_sec: int = Field(default=60, ge=5, le=3600, alias="READINESS_BUILDER_INTERVAL_SEC")
+    readiness_builder_target_pnl_rows: int = Field(default=10, ge=1, le=500, alias="READINESS_BUILDER_TARGET_PNL_ROWS")
+    readiness_builder_target_audit_rows: int = Field(default=3, ge=0, le=500, alias="READINESS_BUILDER_TARGET_AUDIT_ROWS")
+    readiness_builder_max_attempts: int = Field(default=30, ge=1, le=500, alias="READINESS_BUILDER_MAX_ATTEMPTS")
+    readiness_builder_auto_start_on_live_auto: bool = Field(default=True, alias="READINESS_BUILDER_AUTO_START_ON_LIVE_AUTO")
+    readiness_builder_try_start_paper_session: bool = Field(default=True, alias="READINESS_BUILDER_TRY_START_PAPER_SESSION")
+    readiness_builder_paper_strategy_id: str = Field(default="swing_relaxed_v2", alias="READINESS_BUILDER_PAPER_STRATEGY_ID")
+    readiness_builder_state_store_json: str = Field(
+        default="backend_data/live_trading/readiness_builder_state.json",
+        alias="READINESS_BUILDER_STATE_STORE_JSON",
+    )
+
     runtime_loop_interval_sec: int = Field(default=120, ge=10, alias="RUNTIME_LOOP_INTERVAL_SEC")
     runtime_max_consecutive_failures: int = Field(default=5, ge=1, alias="RUNTIME_MAX_CONSECUTIVE_FAILURES")
     runtime_state_path: str = Field(default="backend_data/runtime_engine_state.json", alias="RUNTIME_STATE_PATH")

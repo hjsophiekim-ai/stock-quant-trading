@@ -86,6 +86,7 @@
             <button id="autoStopBtn" type="button">Stop</button>
             <button id="autoTickBtn" type="button">Tick</button>
           </div>
+          <div id="autoGuardedBanner" style="display: none; padding: 10px; border: 1px solid #fed7aa; background: #fff7ed; color: #9a3412; border-radius: 8px; white-space: pre-line; margin: 8px 0"></div>
           <pre id="autoGuardedPre">(loading)</pre>
         </div>
         <div class="panel">
@@ -108,6 +109,17 @@
         <div class="panel">
           <h3 style="margin-top: 0">Readiness 데이터 상태</h3>
           <pre id="readinessHealthPre">(loading)</pre>
+        </div>
+        <div class="panel warn">
+          <h3 style="margin-top: 0">실거래 준비 자동 생성(Readiness Builder)</h3>
+          <p class="muted">paper readiness가 부족하면 자동으로 데이터 생성(포트폴리오 sync + 주문 리스크 평가 로그)을 시도합니다. readiness 통과 전에는 실주문이 절대 제출되지 않습니다.</p>
+          <div class="row" style="margin: 10px 0">
+            <button id="rbRefreshBtn" type="button">Status</button>
+            <button id="rbStartBtn" type="button">Start Builder</button>
+            <button id="rbStopBtn" type="button">Stop Builder</button>
+            <button id="rbTickBtn" type="button">Run Once</button>
+          </div>
+          <pre id="readinessBuilderPre">(loading)</pre>
         </div>
         <div class="panel">
           <h3 style="margin-top: 0">Market Mode (Live)</h3>
@@ -317,6 +329,7 @@
         const runtimePre = document.getElementById("runtimePre");
         const paperPre = document.getElementById("paperReadinessPre");
         const healthPre = document.getElementById("readinessHealthPre");
+        const readinessBuilderPre = document.getElementById("readinessBuilderPre");
         const marketModePre = document.getElementById("liveMarketModePre");
         const liveDashMetaPre = document.getElementById("liveDashboardMetaPre");
         const livePositionsBody = document.getElementById("livePositionsBody");
@@ -338,21 +351,24 @@
         const liveExecPre = document.getElementById("liveExecPre");
         const liveExecMsg = document.getElementById("liveExecMsg");
         const autoGuardedPre = document.getElementById("autoGuardedPre");
+        const autoGuardedBanner = document.getElementById("autoGuardedBanner");
         let latestPlanId = "";
 
         async function refresh() {
-          const [stR, rtR, prR, ksR, dhR] = await Promise.all([
+          const [stR, rtR, prR, ksR, dhR, rbR] = await Promise.all([
             authFetch(backendUrl + "/api/live-trading/status"),
             authFetch(backendUrl + "/api/live-trading/runtime-safety-validation"),
             authFetch(backendUrl + "/api/live-trading/paper-readiness"),
             authFetch(backendUrl + "/api/live-trading/kill-switch-status"),
             authFetch(backendUrl + "/api/live-trading/paper-readiness-diagnostics"),
+            authFetch(backendUrl + "/api/live-trading/readiness-builder/status"),
           ]);
           const st = await stR.json().catch(function () { return {}; });
           const rt = await rtR.json().catch(function () { return {}; });
           const pr = await prR.json().catch(function () { return {}; });
           const ks = await ksR.json().catch(function () { return {}; });
           const dh = await dhR.json().catch(function () { return {}; });
+          const rb = await rbR.json().catch(function () { return {}; });
           statusPre.textContent = JSON.stringify(st, null, 2);
           savedIntentPre.textContent = JSON.stringify({
             requested_live_trading_flag: st.requested_live_trading_flag,
@@ -370,6 +386,7 @@
           runtimePre.textContent = JSON.stringify(rt, null, 2);
           paperPre.textContent = JSON.stringify(pr, null, 2) + "\n\nkill_switch:\n" + JSON.stringify(ks, null, 2);
           healthPre.textContent = JSON.stringify(dh, null, 2);
+          readinessBuilderPre.textContent = JSON.stringify(rb, null, 2);
           document.getElementById("flagLive").checked = !!st.live_trading_flag;
           document.getElementById("flagConfirm2").checked = !!st.secondary_confirm_flag;
           document.getElementById("flagExtra").checked = !!st.extra_approval_flag;
@@ -479,10 +496,56 @@
           }
         }
 
+        function renderAutoGuardedBanner(d) {
+          const blockers = (d && d.safety && Array.isArray(d.safety.blockers)) ? d.safety.blockers : [];
+          const hasReadiness = blockers.some(function (x) { return String(x || "").indexOf("PAPER_READINESS_FAILED") >= 0; });
+          if (d && d.blocked_before_order) {
+            autoGuardedBanner.style.display = "block";
+            autoGuardedBanner.textContent = "주문은 차단됨, 후보 평가는 완료됨";
+            return;
+          }
+          if (d && d.state && d.state.enabled && d.can_place_auto_order === false && hasReadiness) {
+            autoGuardedBanner.style.display = "block";
+            autoGuardedBanner.textContent = "Auto Guarded는 켜졌지만, 실거래 사전검증 데이터가 부족해서 주문은 아직 차단되어 있습니다. 자동 준비 작업을 실행 중입니다.";
+            return;
+          }
+          autoGuardedBanner.style.display = "none";
+          autoGuardedBanner.textContent = "";
+        }
+
         async function refreshAutoGuarded() {
           const r = await authFetch(backendUrl + "/api/live-exec/auto-guarded/status", { headers: await authHeaders() });
           const d = await r.json().catch(function () { return {}; });
           autoGuardedPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+          if (r.ok) renderAutoGuardedBanner(d);
+        }
+
+        async function refreshReadinessBuilder() {
+          const r = await authFetch(backendUrl + "/api/live-trading/readiness-builder/status", { headers: await authHeaders() });
+          const d = await r.json().catch(function () { return {}; });
+          readinessBuilderPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+        }
+
+        async function startReadinessBuilder() {
+          const r = await authFetch(backendUrl + "/api/live-trading/readiness-builder/start", { method: "POST", headers: await authHeaders() });
+          const d = await r.json().catch(function () { return {}; });
+          readinessBuilderPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+          await refreshReadinessBuilder();
+        }
+
+        async function stopReadinessBuilder() {
+          const r = await authFetch(backendUrl + "/api/live-trading/readiness-builder/stop", { method: "POST", headers: await authHeaders() });
+          const d = await r.json().catch(function () { return {}; });
+          readinessBuilderPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+          await refreshReadinessBuilder();
+        }
+
+        async function tickReadinessBuilder() {
+          const r = await authFetch(backendUrl + "/api/live-trading/readiness-builder/tick", { method: "POST", headers: await authHeaders() });
+          const d = await r.json().catch(function () { return {}; });
+          readinessBuilderPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+          await refreshReadinessBuilder();
+          await refresh();
         }
 
         async function startAutoGuarded() {
@@ -494,6 +557,7 @@
           });
           const d = await r.json().catch(function () { return {}; });
           autoGuardedPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+          if (r.ok) renderAutoGuardedBanner(d);
           await refreshAutoGuarded();
         }
 
@@ -506,6 +570,7 @@
           });
           const d = await r.json().catch(function () { return {}; });
           autoGuardedPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+          if (r.ok) renderAutoGuardedBanner(d);
           await refreshAutoGuarded();
         }
 
@@ -513,6 +578,7 @@
           const r = await authFetch(backendUrl + "/api/live-exec/auto-guarded/tick", { method: "POST", headers: await authHeaders() });
           const d = await r.json().catch(function () { return {}; });
           autoGuardedPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+          if (r.ok) renderAutoGuardedBanner(d);
           await refreshAutoGuarded();
           await refreshLiveDashboard();
         }
@@ -915,6 +981,10 @@
         document.getElementById("autoStartBtn").addEventListener("click", async function () { await startAutoGuarded(); });
         document.getElementById("autoStopBtn").addEventListener("click", async function () { await stopAutoGuarded(); });
         document.getElementById("autoTickBtn").addEventListener("click", async function () { await tickAutoGuarded(); });
+        document.getElementById("rbRefreshBtn").addEventListener("click", async function () { await refreshReadinessBuilder(); });
+        document.getElementById("rbStartBtn").addEventListener("click", async function () { await startReadinessBuilder(); });
+        document.getElementById("rbStopBtn").addEventListener("click", async function () { await stopReadinessBuilder(); });
+        document.getElementById("rbTickBtn").addEventListener("click", async function () { await tickReadinessBuilder(); });
         document.getElementById("refreshBtn").addEventListener("click", refresh);
         document.getElementById("refreshCandidatesBtn").addEventListener("click", refreshCandidates);
         document.getElementById("liveExecRefreshBtn").addEventListener("click", refreshLiveExec);
@@ -943,6 +1013,7 @@
         await refreshLiveMarketMode();
         await refreshLiveExec();
         await refreshAutoGuarded();
+        await refreshReadinessBuilder();
         await refreshCandidates();
         await refreshLiveDashboard();
         await refreshHfShadow();

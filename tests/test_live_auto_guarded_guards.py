@@ -93,5 +93,6 @@ def test_auto_guarded_tick_blocked_when_safety_fails(monkeypatch, tmp_path) -> N
     assert r.status_code == 200
     j = r.json()
     assert j.get("ok") is True
-    assert j.get("skipped") is True
+    assert j.get("blocked_before_order") is True
+    assert isinstance(j.get("last_diagnostics"), list)
 

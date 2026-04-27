@@ -8,6 +8,13 @@ from pydantic import BaseModel, Field
 
 from backend.app.risk.audit import append_risk_event
 from backend.app.risk.live_unlock_gate import evaluate_paper_readiness, paper_readiness_data_health, paper_readiness_to_dict
+from backend.app.engine.live_readiness_builder import (
+    get_readiness_builder_loop_status,
+    start_readiness_builder,
+    stop_readiness_builder,
+    tick_readiness_builder_once,
+)
+from backend.app.services.live_readiness_builder_store import LiveReadinessBuilderStore
 
 from ..core.config import BackendSettings, get_backend_settings
 from ..services.live_safety_state_store import LiveSafetyHistoryItem, LiveSafetyState, LiveSafetyStateStore
@@ -245,6 +252,64 @@ def paper_readiness_diagnostics(authorization: str | None = Header(default=None)
     _ = _current_user(authorization)
     cfg = get_backend_settings()
     return paper_readiness_data_health(cfg)
+
+
+def _readiness_store(cfg: BackendSettings) -> LiveReadinessBuilderStore:
+    return LiveReadinessBuilderStore(getattr(cfg, "readiness_builder_state_store_json"))
+
+
+@router.get("/readiness-builder/status")
+def readiness_builder_status(authorization: str | None = Header(default=None)) -> dict[str, object]:
+    cfg = get_backend_settings()
+    user = _current_user(authorization)
+    uid = str(getattr(user, "id"))
+    st = _readiness_store(cfg).get(uid)
+    return {
+        "ok": True,
+        "state": st.__dict__,
+        "loop": get_readiness_builder_loop_status(uid),
+        "readiness": paper_readiness_to_dict(evaluate_paper_readiness(cfg)),
+        "data_health": paper_readiness_data_health(cfg),
+        "config": {
+            "enabled": bool(getattr(cfg, "readiness_builder_enabled", False)),
+            "interval_sec": int(getattr(cfg, "readiness_builder_interval_sec", 60)),
+            "target_pnl_rows": int(getattr(cfg, "readiness_builder_target_pnl_rows", 10)),
+            "target_audit_rows": int(getattr(cfg, "readiness_builder_target_audit_rows", 3)),
+            "max_attempts": int(getattr(cfg, "readiness_builder_max_attempts", 30)),
+            "auto_start_on_live_auto": bool(getattr(cfg, "readiness_builder_auto_start_on_live_auto", True)),
+        },
+    }
+
+
+@router.post("/readiness-builder/start")
+def readiness_builder_start(authorization: str | None = Header(default=None)) -> dict[str, object]:
+    cfg = get_backend_settings()
+    user = _current_user(authorization)
+    uid = str(getattr(user, "id"))
+    from .broker_routes import get_broker_service
+
+    out = start_readiness_builder(cfg=cfg, broker_service=get_broker_service(), user_id=uid)
+    return dict(out)
+
+
+@router.post("/readiness-builder/stop")
+def readiness_builder_stop(authorization: str | None = Header(default=None)) -> dict[str, object]:
+    cfg = get_backend_settings()
+    user = _current_user(authorization)
+    uid = str(getattr(user, "id"))
+    out = stop_readiness_builder(cfg=cfg, user_id=uid)
+    return dict(out)
+
+
+@router.post("/readiness-builder/tick")
+def readiness_builder_tick(authorization: str | None = Header(default=None)) -> dict[str, object]:
+    cfg = get_backend_settings()
+    user = _current_user(authorization)
+    uid = str(getattr(user, "id"))
+    from .broker_routes import get_broker_service
+
+    out = tick_readiness_builder_once(cfg=cfg, broker_service=get_broker_service(), user_id=uid)
+    return dict(out)
 
 
 def runtime_safety_validation_for_user_id(cfg: BackendSettings, user_id: str) -> dict[str, object]:

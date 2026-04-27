@@ -23,6 +23,8 @@ from ..engine.live_auto_guarded_loop import (
     start_live_auto_guarded_loop,
     stop_live_auto_guarded_loop,
 )
+from ..engine.live_readiness_builder import get_readiness_builder_loop_status, start_readiness_builder
+from ..services.live_readiness_builder_store import LiveReadinessBuilderStore
 from ..services.live_prep_store import LiveCandidate, LiveCandidateStore
 
 router = APIRouter(prefix="/live-exec", tags=["live-exec"])
@@ -307,6 +309,9 @@ def live_auto_guarded_status(authorization: str | None = Header(default=None)) -
         and bool(getattr(cfg, "live_trading_extra_confirm", False))
     )
     loop_status = get_live_auto_guarded_loop_status(user.id)
+    rb_store = LiveReadinessBuilderStore(getattr(cfg, "readiness_builder_state_store_json"))
+    rb_state = rb_store.get(user.id)
+    rb_loop = get_readiness_builder_loop_status(user.id)
     return {
         "ok": True,
         "config": {
@@ -339,6 +344,7 @@ def live_auto_guarded_status(authorization: str | None = Header(default=None)) -
         "state": asdict(st),
         "loop": loop_status,
         "safety": safety,
+        "readiness_builder": {"state": rb_state.__dict__, "loop": rb_loop},
         "can_place_auto_order": bool(can_auto_order and bool(st.enabled)),
         "can_tick": bool((cfg.trading_mode or "").strip().lower() == "live" and (cfg.execution_mode or "").strip().lower() == "live_auto_guarded"),
     }
@@ -360,6 +366,19 @@ def live_auto_guarded_start(payload: LiveAutoGuardedStartRequest, authorization:
     st.started_at_utc = datetime.now(timezone.utc).isoformat()
     st.stopped_at_utc = None
     st.updated_at_utc = datetime.now(timezone.utc).isoformat()
+    safety = runtime_safety_validation_for_user_id(cfg, user.id)
+    if bool(getattr(cfg, "readiness_builder_auto_start_on_live_auto", True)) and any(
+        str(d.get("code") or "") == "PAPER_READINESS_FAILED"
+        for d in list(safety.get("blocker_details") or [])
+        if isinstance(d, dict)
+    ):
+        try:
+            start_readiness_builder(cfg=cfg, broker_service=get_broker_service(), user_id=user.id)
+            st.last_decision = "waiting_for_readiness"
+            st.last_reason = "paper readiness builder started"
+        except Exception:
+            st.last_decision = "waiting_for_readiness"
+            st.last_reason = "paper readiness builder start failed"
     astore = _auto_store(cfg)
     astore.upsert(st)
     append_risk_event(
@@ -375,7 +394,10 @@ def live_auto_guarded_start(payload: LiveAutoGuardedStartRequest, authorization:
     loop_out: dict[str, Any] | None = None
     if bool(getattr(cfg, "live_auto_loop_enabled", False)):
         loop_out = start_live_auto_guarded_loop(cfg=cfg, broker_service=get_broker_service(), store=astore, user_id=user.id)
-    return {"ok": True, "state": asdict(st), "loop": loop_out}
+    rb_store = LiveReadinessBuilderStore(getattr(cfg, "readiness_builder_state_store_json"))
+    rb_state = rb_store.get(user.id)
+    rb_loop = get_readiness_builder_loop_status(user.id)
+    return {"ok": True, "state": asdict(st), "loop": loop_out, "safety": safety, "readiness_builder": {"state": rb_state.__dict__, "loop": rb_loop}}
 
 
 @router.post("/auto-guarded/stop")

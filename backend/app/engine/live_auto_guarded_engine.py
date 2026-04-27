@@ -130,6 +130,9 @@ def tick_live_auto_guarded(
     _reset_daily_counts_if_needed(st)
     st.last_tick_at_utc = _utc_now_iso()
     st.updated_at_utc = _utc_now_iso()
+    orders_allowed = bool(safety.get("ok"))
+    blocked_before_order = not orders_allowed
+    safety_blockers = list(safety.get("blockers") or [])
 
     def _event(event_type: str, payload: dict[str, Any]) -> None:
         append_risk_event(
@@ -164,38 +167,59 @@ def tick_live_auto_guarded(
         store.upsert(st)
         return {"ok": True, "skipped": True, "reason": st.last_reason, "state": asdict(st)}
 
-    if not bool(safety.get("ok")):
-        st.last_decision = "blocked"
+    if not orders_allowed:
+        st.last_decision = "blocked_before_order"
         st.last_reason = "runtime_safety_validation failed"
-        blockers = list(safety.get("blockers") or [])
         bdetails = list(safety.get("blocker_details") or [])
-        if any("EMERGENCY_STOP" in str(x) or "emergency stop" in str(x).lower() for x in blockers):
-            _event("LIVE_AUTO_EMERGENCY_STOP_BLOCKED", {"reason": st.last_reason, "blockers": blockers, "blocker_details": bdetails})
-        _event("LIVE_AUTO_BUY_REJECTED", {"reason": st.last_reason, "blockers": blockers, "blocker_details": bdetails})
+        if any("EMERGENCY_STOP" in str(x) or "emergency stop" in str(x).lower() for x in safety_blockers):
+            _event(
+                "LIVE_AUTO_EMERGENCY_STOP_BLOCKED",
+                {"reason": st.last_reason, "blockers": safety_blockers, "blocker_details": bdetails},
+            )
+        _event("LIVE_AUTO_BUY_REJECTED", {"reason": st.last_reason, "blockers": safety_blockers, "blocker_details": bdetails})
         store.upsert(st)
-        return {"ok": True, "skipped": True, "reason": st.last_reason, "state": asdict(st), "safety": safety}
 
-    cds, cd_reason = should_skip_due_to_cooldown(cooldown_until_utc=st.cooldown_until_utc)
-    if cds:
-        st.last_decision = "skipped"
-        st.last_reason = cd_reason
-        _event("LIVE_AUTO_COOLDOWN_ACTIVE", {"reason": st.last_reason})
-        store.upsert(st)
-        return {"ok": True, "skipped": True, "reason": st.last_reason, "state": asdict(st)}
+    if orders_allowed:
+        cds, cd_reason = should_skip_due_to_cooldown(cooldown_until_utc=st.cooldown_until_utc)
+        if cds:
+            st.last_decision = "skipped"
+            st.last_reason = cd_reason
+            _event("LIVE_AUTO_COOLDOWN_ACTIVE", {"reason": st.last_reason})
+            store.upsert(st)
+            return {"ok": True, "skipped": True, "reason": st.last_reason, "state": asdict(st)}
 
-    ok_open, open_reason = _market_open_ok(bool(getattr(cfg, "live_auto_require_market_open", True)))
-    if not ok_open:
-        st.last_decision = "skipped"
-        st.last_reason = open_reason
-        store.upsert(st)
-        return {"ok": True, "skipped": True, "reason": st.last_reason, "state": asdict(st)}
+        ok_open, open_reason = _market_open_ok(bool(getattr(cfg, "live_auto_require_market_open", True)))
+        if not ok_open:
+            st.last_decision = "skipped"
+            st.last_reason = open_reason
+            store.upsert(st)
+            return {"ok": True, "skipped": True, "reason": st.last_reason, "state": asdict(st)}
 
     try:
         app_key, app_secret, account_no, product_code, mode = broker_service.get_plain_credentials(user_id)
     except Exception:
-        st.last_decision = "blocked"
+        st.last_decision = "blocked_before_order" if blocked_before_order else "blocked"
         st.last_reason = "broker_credentials_missing"
         store.upsert(st)
+        if blocked_before_order:
+            return {
+                "ok": True,
+                "blocked_before_order": True,
+                "safety_blockers": safety_blockers,
+                "safety": safety,
+                "reason": st.last_reason,
+                "error": st.last_reason,
+                "state": asdict(st),
+                "submitted": {"sells": [], "buys": []},
+                "pnl": None,
+                "counts": {"positions": 0, "open_orders": 0, "fills": 0},
+                "candidate_count": 0,
+                "evaluated_candidates": [],
+                "fetch_summary": [],
+                "last_diagnostics": [],
+                "rejection_reasons_by_symbol": {},
+                "market_mode": None,
+            }
         return {"ok": False, "error": "broker_credentials_missing", "state": asdict(st)}
 
     if (mode or "").strip().lower() != "live":
@@ -223,9 +247,15 @@ def tick_live_auto_guarded(
         access_token=str(getattr(tok, "access_token")),
         app_key=str(app_key),
         app_secret=str(app_secret),
-        live_execution_unlocked=True,
+        live_execution_unlocked=bool(orders_allowed),
     )
-    broker = _build_live_broker(cfg=cfg, client=client, account_no=account_no, product_code=product_code, read_only=False)
+    broker = _build_live_broker(
+        cfg=cfg,
+        client=client,
+        account_no=account_no,
+        product_code=product_code,
+        read_only=bool(blocked_before_order),
+    )
 
     positions = broker.get_positions()
     open_orders = broker.get_open_orders()
@@ -302,10 +332,15 @@ def tick_live_auto_guarded(
                 _event("LIVE_AUTO_SELL_SUBMITTED", {"symbol": sym, "skipped": True, "reason": dup[1]})
                 continue
             order = OrderRequest(symbol=sym, side="sell", quantity=int(decision.quantity), price=0, strategy_id="live_auto_guarded", signal_reason=decision.reason)
+            if not orders_allowed:
+                _event("LIVE_AUTO_SELL_SUBMITTED", {"symbol": sym, "skipped": True, "reason": "blocked_before_order"})
+                continue
             res = broker.place_order(order)
             st.daily_sell_count += 1
             st.recent_submits[_dup_key("sell", sym)] = _utc_now_iso()
-            sell_submitted.append({"symbol": sym, "quantity": int(decision.quantity), "accepted": bool(res.accepted), "order_id": res.order_id, "reason": decision.reason})
+            sell_submitted.append(
+                {"symbol": sym, "quantity": int(decision.quantity), "accepted": bool(res.accepted), "order_id": res.order_id, "reason": decision.reason}
+            )
             if "stop_loss" in decision.reason:
                 set_cooldown_after_loss(state=st.__dict__, minutes=int(getattr(cfg, "live_auto_cooldown_after_loss_minutes", 30)))
                 _event("LIVE_AUTO_STOP_LOSS_TRIGGERED", {"symbol": sym, "decision": asdict(decision), "order_id": res.order_id})
@@ -317,6 +352,29 @@ def tick_live_auto_guarded(
                 _event("LIVE_AUTO_SELL_SUBMITTED", {"symbol": sym, "decision": asdict(decision), "order_id": res.order_id})
 
     buy_submitted: list[dict[str, Any]] = []
+    shadow_eval: dict[str, Any] | None = None
+    if blocked_before_order:
+        from backend.app.engine.live_prep_engine import generate_final_betting_shadow_candidates
+
+        manual = LiveMarketModeStore(getattr(cfg, "live_market_mode_store_json")).get(user_id, market="domestic")
+        try:
+            shadow_eval = generate_final_betting_shadow_candidates(
+                broker_service=broker_service,
+                backend_settings=cfg,
+                user_id=user_id,
+                limit=5,
+                manual_market_mode=manual,
+            )
+        except Exception as exc:
+            shadow_eval = {
+                "ok": False,
+                "error": "shadow_eval_failed",
+                "message": str(exc),
+                "candidate_count": 0,
+                "candidates": [],
+                "shadow": {"fetch_summary": [], "last_diagnostics": [], "rejection_reasons_by_symbol": {}},
+            }
+
     if bool(getattr(cfg, "live_auto_buy_enabled", False)):
         if st.daily_buy_count < int(getattr(cfg, "live_auto_max_daily_buy_count", 3)):
             if len(positions) < int(getattr(cfg, "live_auto_max_position_count", 5)):
@@ -331,6 +389,7 @@ def tick_live_auto_guarded(
                         limit=5,
                         manual_market_mode=manual,
                     )
+                    shadow_eval = shadow if isinstance(shadow, dict) else shadow_eval
                     candidates = list(shadow.get("candidates") or []) if isinstance(shadow, dict) else []
                     perf_by_strategy: dict[str, dict[str, Any]] = {}
                     perf_by_symbol: dict[tuple[str, str], dict[str, Any]] = {}
@@ -444,16 +503,25 @@ def tick_live_auto_guarded(
                                     strategy_id="live_auto_guarded",
                                     signal_reason=f"auto_buy score={best_score:.3f} | {best_reason}",
                                 )
-                                res = broker.place_order(order)
-                                st.daily_buy_count += 1
-                                st.recent_submits[_dup_key("buy", sym)] = _utc_now_iso()
-                                buy_submitted.append(
-                                    {"symbol": sym, "quantity": int(qty), "accepted": bool(res.accepted), "order_id": res.order_id, "score": best_score}
-                                )
-                                _event(
-                                    "LIVE_AUTO_BUY_SUBMITTED",
-                                    {"symbol": sym, "order_id": res.order_id, "score": best_score, "quantity": int(qty), **exposure_ctx},
-                                )
+                                if not orders_allowed:
+                                    _event("LIVE_AUTO_BUY_REJECTED", {"symbol": sym, "reason": "blocked_before_order", "score": best_score, **exposure_ctx})
+                                else:
+                                    res = broker.place_order(order)
+                                    st.daily_buy_count += 1
+                                    st.recent_submits[_dup_key("buy", sym)] = _utc_now_iso()
+                                    buy_submitted.append(
+                                        {
+                                            "symbol": sym,
+                                            "quantity": int(qty),
+                                            "accepted": bool(res.accepted),
+                                            "order_id": res.order_id,
+                                            "score": best_score,
+                                        }
+                                    )
+                                    _event(
+                                        "LIVE_AUTO_BUY_SUBMITTED",
+                                        {"symbol": sym, "order_id": res.order_id, "score": best_score, "quantity": int(qty), **exposure_ctx},
+                                    )
                     else:
                         _event("LIVE_AUTO_BUY_REJECTED", {"reason": "no_candidate_above_threshold", "best_score": float(best_score)})
                 else:
@@ -481,9 +549,30 @@ def tick_live_auto_guarded(
     )
     return {
         "ok": True,
+        "blocked_before_order": bool(blocked_before_order),
+        "safety_blockers": safety_blockers,
+        "safety": safety,
         "state": asdict(st),
         "submitted": {"sells": sell_submitted, "buys": buy_submitted},
         "pnl": {"daily_pct": float(daily_pct), "total_pct": float(total_pct), "equity": equity},
         "counts": {"positions": len(positions), "open_orders": len(open_orders), "fills": len(fills)},
+        "candidate_count": int((shadow_eval or {}).get("candidate_count") or 0) if isinstance(shadow_eval, dict) else 0,
+        "evaluated_candidates": list((shadow_eval or {}).get("candidates") or []) if isinstance(shadow_eval, dict) else [],
+        "fetch_summary": (
+            list(((shadow_eval or {}).get("shadow") or {}).get("fetch_summary") or [])
+            if isinstance(shadow_eval, dict)
+            else []
+        ),
+        "last_diagnostics": (
+            list(((shadow_eval or {}).get("shadow") or {}).get("last_diagnostics") or [])
+            if isinstance(shadow_eval, dict)
+            else []
+        ),
+        "rejection_reasons_by_symbol": (
+            dict(((shadow_eval or {}).get("shadow") or {}).get("rejection_reasons_by_symbol") or {})
+            if isinstance(shadow_eval, dict)
+            else {}
+        ),
+        "market_mode": (shadow_eval or {}).get("market_mode") if isinstance(shadow_eval, dict) else None,
     }
 
