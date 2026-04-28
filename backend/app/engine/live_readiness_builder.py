@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from backend.app.core.config import BackendSettings
@@ -13,6 +13,24 @@ from backend.app.services.broker_secret_service import BrokerSecretService
 from backend.app.services.live_readiness_builder_store import LiveReadinessBuilderState, LiveReadinessBuilderStore
 
 logger = logging.getLogger("backend.app.engine.live_readiness_builder")
+
+_token_gate_lock = threading.Lock()
+_token_rate_limit_backoff_until_utc: dict[str, str] = {}
+
+
+def _is_before_utc_iso(now_utc_iso: str, other_utc_iso: str) -> bool:
+    try:
+        return datetime.fromisoformat(now_utc_iso) < datetime.fromisoformat(other_utc_iso)
+    except Exception:
+        return False
+
+
+def _add_seconds_utc_iso(base_utc_iso: str, seconds: int) -> str:
+    try:
+        dt = datetime.fromisoformat(base_utc_iso)
+        return (dt + timedelta(seconds=int(seconds))).isoformat()
+    except Exception:
+        return _utc_now_iso()
 
 
 def _utc_now_iso() -> str:
@@ -87,7 +105,7 @@ def _maybe_start_paper_session(
         return False, f"paper_session_start_failed: {exc}"
 
 
-def _warmup_order_audit(cfg: BackendSettings) -> tuple[int, str, dict[str, Any]]:
+def _warmup_order_audit(cfg: BackendSettings, user_id: str, broker_service: BrokerSecretService) -> tuple[int, str, dict[str, Any]]:
     try:
         from types import SimpleNamespace
 
@@ -95,9 +113,7 @@ def _warmup_order_audit(cfg: BackendSettings) -> tuple[int, str, dict[str, Any]]
 
         from app.orders.order_manager import OrderManager
         from app.risk.rules import RiskRules, RiskSnapshot
-        from backend.app.auth.kis_auth import issue_access_token
         from backend.app.clients.kis_client import build_kis_client_for_backend
-        from backend.app.core.config import resolved_kis_api_base_url
         from backend.app.strategy.signal_engine import get_swing_signal_engine, parse_live_quote_from_kis
         from app.scheduler.kis_universe import build_kis_stock_universe
         from app.config import get_settings as get_app_settings
@@ -112,40 +128,43 @@ def _warmup_order_audit(cfg: BackendSettings) -> tuple[int, str, dict[str, Any]]
     if not symbols:
         return 0, "empty_universe"
 
-    base = resolved_kis_api_base_url(bcfg)
-    tr = issue_access_token(app_key=bcfg.kis_app_key, app_secret=bcfg.kis_app_secret, base_url=base, timeout_sec=12)
-    if not tr.ok or not tr.access_token:
+    uid = str(user_id or "")
+    now_utc = _utc_now_iso()
+    with _token_gate_lock:
+        backoff_until = _token_rate_limit_backoff_until_utc.get(uid)
+    if backoff_until and _is_before_utc_iso(now_utc, backoff_until):
+        detail = {
+            "type": "kis_token_backoff",
+            "token_error_code": "TOKEN_RATE_LIMIT",
+            "next_retry_at_utc": backoff_until,
+            "message": "TOKEN_RATE_LIMIT backoff active",
+        }
+        return (0, "kis_token_backoff", detail)
+
+    tr2 = broker_service.ensure_cached_token_for_paper_start(uid)
+    if not tr2.ok or not tr2.access_token:
         hint = ""
-        base_kind = "mock" if "openapivts" in str(base or "").lower() else "live"
-        expected_kind = "mock" if str(getattr(bcfg, "trading_mode", "paper") or "paper").strip().lower() == "paper" else "live"
-        if base_kind != expected_kind:
-            hint = f"base url mismatch: expected {expected_kind} but got {base_kind}"
-        if str(tr.error_code or "") == "MISSING_APP_KEY":
-            hint = "KIS_APP_KEY 누락"
-        elif str(tr.error_code or "") == "MISSING_APP_SECRET":
-            hint = "KIS_APP_SECRET 누락"
-        elif str(tr.error_code or "") == "INVALID_BASE_URL":
-            hint = "KIS_BASE_URL/KIS_MOCK_BASE_URL 형식 오류"
-        elif str(tr.error_code or "").startswith("TOKEN_"):
-            hint = "토큰 엔드포인트 응답 오류/레이트리밋 가능"
+        token_code = str(tr2.token_error_code or "")
+        if token_code == "TOKEN_RATE_LIMIT":
+            next_retry = _add_seconds_utc_iso(now_utc, 65)
+            with _token_gate_lock:
+                _token_rate_limit_backoff_until_utc[uid] = next_retry
+            hint = "TOKEN_RATE_LIMIT: 최소 65초 대기 후 재시도"
         detail = {
             "type": "kis_token_failed",
-            "trading_mode": str(getattr(bcfg, "trading_mode", "") or ""),
-            "base_url_selected": str(base or ""),
-            "base_url_kind": base_kind,
-            "expected_base_url_kind": expected_kind,
-            "app_key_present": bool(getattr(bcfg, "kis_app_key", "") or ""),
-            "app_secret_present": bool(getattr(bcfg, "kis_app_secret", "") or ""),
-            "error_code": str(tr.error_code or ""),
-            "status_code": int(tr.status_code) if tr.status_code is not None else None,
-            "kis_base_url": str(tr.kis_base_url or ""),
-            "kis_http_path": str(tr.kis_http_path or ""),
-            "kis_tr_id": str(getattr(tr, "kis_tr_id", "") or ""),
-            "message": str(tr.message or ""),
+            "token_cache_hit": bool(getattr(tr2, "token_cache_hit", False)),
+            "token_cache_source": str(getattr(tr2, "token_cache_source", "") or ""),
+            "token_error_code": token_code,
+            "failure_code": str(getattr(tr2, "failure_code", "") or ""),
+            "message": str(getattr(tr2, "message", "") or ""),
             "hint": hint,
+            "next_retry_at_utc": (next_retry if token_code == "TOKEN_RATE_LIMIT" else None),
         }
         return (0, "kis_token_failed", detail)
-    client = build_kis_client_for_backend(bcfg, access_token=tr.access_token)
+
+    with _token_gate_lock:
+        _token_rate_limit_backoff_until_utc.pop(uid, None)
+    client = build_kis_client_for_backend(bcfg, access_token=tr2.access_token)
     lookback = max(int(bcfg.screener_lookback_days), 120)
     prices_df = build_kis_stock_universe(client, symbols, lookback_calendar_days=lookback)
     if prices_df.empty:
@@ -199,7 +218,7 @@ def tick_readiness_builder_once(
     user_id: str,
     market: str | None = None,
     store: LiveReadinessBuilderStore | None = None,
-    warmup_func: Callable[[BackendSettings], tuple[int, str]] = _warmup_order_audit,
+    warmup_func: Callable[[BackendSettings, str, BrokerSecretService], tuple[int, str, dict[str, Any]]] = _warmup_order_audit,
 ) -> dict[str, Any]:
     uid = str(user_id or "")
     s = store or LiveReadinessBuilderStore(getattr(cfg, "readiness_builder_state_store_json"))
@@ -246,7 +265,10 @@ def tick_readiness_builder_once(
 
     audit_n, audit_msg, audit_detail = (0, "skipped", {})
     try:
-        res = warmup_func(cfg)
+        try:
+            res = warmup_func(cfg, uid, broker_service)
+        except TypeError:
+            res = warmup_func(cfg)  # type: ignore[misc]
         if isinstance(res, tuple) and len(res) >= 3:
             audit_n, audit_msg, audit_detail = res[0], res[1], dict(res[2] or {})
         else:
