@@ -23,6 +23,8 @@
       th, td { border-bottom: 1px solid #e2e8f0; padding: 8px; text-align: left; font-size: 0.9rem; }
       th { background: #f1f5f9; }
       .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid #cbd5e1; font-size: 0.8rem; }
+      .pill.warn { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+      .pill.ok { background: #ecfdf5; border-color: #86efac; color: #166534; }
     </style>
   </head>
   <body>
@@ -45,10 +47,131 @@
         </p>
         <div id="liveWarnPanel" class="panel warn"></div>
 
-        <details class="panel">
-          <summary>상세보기</summary>
+        <div id="topStatusBar" class="panel">(loading)</div>
+
+        <div id="strategyTabs" class="row" style="margin: 10px 0"></div>
+
+        <div id="strategyMain" class="panel">
+          <div id="strategyControlCard"></div>
+          <div class="row" style="gap: 12px; align-items: flex-start; margin-top: 10px">
+            <div style="flex: 1; min-width: 420px">
+              <h3 style="margin: 0 0 6px 0">Shadow 후보</h3>
+              <div id="shadowEmpty" class="muted" style="display:none; white-space: pre-line; margin: 8px 0"></div>
+              <div style="overflow: auto">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>상태</th>
+                      <th>종목명/코드</th>
+                      <th>방향</th>
+                      <th>수량</th>
+                      <th>기준가</th>
+                      <th>점수</th>
+                      <th>이유</th>
+                      <th>갱신시간</th>
+                    </tr>
+                  </thead>
+                  <tbody id="shadowTbody"></tbody>
+                </table>
+              </div>
+            </div>
+            <div style="flex: 1; min-width: 420px">
+              <h3 style="margin: 0 0 6px 0">Auto-run 판단/주문</h3>
+              <div style="overflow: auto">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>상태</th>
+                      <th>전략</th>
+                      <th>종목</th>
+                      <th>방향</th>
+                      <th>수량</th>
+                      <th>예상금액</th>
+                      <th>점수</th>
+                      <th>거절 이유</th>
+                      <th>주문 ID</th>
+                      <th>시간</th>
+                    </tr>
+                  </thead>
+                  <tbody id="autoTbody"></tbody>
+                </table>
+              </div>
+              <div id="autoBadges" class="row" style="margin-top: 10px"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="accountPanel" class="panel">
+          <h3 style="margin-top: 0">주문/계좌 현황</h3>
+          <div class="row" style="margin-top: 8px">
+            <button id="refreshAccountBtn" type="button">새로고침</button>
+          </div>
+          <div class="row" style="gap: 12px; align-items: flex-start; margin-top: 10px">
+            <div style="flex: 1; min-width: 360px">
+              <h4 style="margin: 0 0 6px 0">보유 포지션</h4>
+              <div style="overflow:auto">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>종목</th>
+                      <th>수량</th>
+                      <th>평균단가</th>
+                      <th>현재가</th>
+                      <th>평가금액</th>
+                      <th>손익률</th>
+                    </tr>
+                  </thead>
+                  <tbody id="posTbody"></tbody>
+                </table>
+              </div>
+            </div>
+            <div style="flex: 1; min-width: 360px">
+              <h4 style="margin: 0 0 6px 0">미체결 주문</h4>
+              <div style="overflow:auto">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>주문번호</th>
+                      <th>종목</th>
+                      <th>매수/매도</th>
+                      <th>남은수량</th>
+                      <th>가격</th>
+                      <th>시간</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ooTbody"></tbody>
+                </table>
+              </div>
+            </div>
+            <div style="flex: 1; min-width: 360px">
+              <h4 style="margin: 0 0 6px 0">최근 체결</h4>
+              <div style="overflow:auto">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>종목</th>
+                      <th>매수/매도</th>
+                      <th>수량</th>
+                      <th>가격</th>
+                      <th>주문번호</th>
+                      <th>체결시간</th>
+                    </tr>
+                  </thead>
+                  <tbody id="fillsTbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <details id="debugDetails" class="panel">
+          <summary>상세보기 / 진단 로그</summary>
           <div style="margin-top: 10px">
-          <h3 style="margin-top: 0">Live 실행 콘솔</h3>
+
+          <details class="panel">
+            <summary>Live 실행 콘솔</summary>
+            <div style="margin-top: 10px">
+            <h3 style="margin-top: 0">Live 실행 콘솔</h3>
           <div class="row" style="margin: 10px 0">
             <label style="margin-top: 0">Strategy</label>
             <select id="liveStrategyId" style="padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px">
@@ -77,6 +200,8 @@
           </div>
           <p id="liveExecMsg" class="muted" style="white-space: pre-line"></p>
           <pre id="liveExecPre">(loading)</pre>
+            </div>
+          </details>
           </div>
         </details>
         <div id="autoGuardedPanel" class="panel warn">
@@ -365,6 +490,489 @@
           const s = await resolveDesktopSession();
           const t = s && s.accessToken ? s.accessToken : "";
           return Object.assign({ Authorization: "Bearer " + t }, extra || {});
+        }
+
+        const STRATEGY_META = {
+          final_betting_v1: { title: "final_betting_v1", desc: "장후반 후보(14:30~15:20)", window: "14:30~15:20" },
+          scalp_rsi_flag_hf_v1: { title: "scalp_rsi_flag_hf_v1", desc: "장중 단타 후보", window: "장중" },
+          scalp_macd_rsi_3m_v1: { title: "scalp_macd_rsi_3m_v1", desc: "장중 단타 후보", window: "장중" },
+          swing_relaxed_v2: { title: "swing_relaxed_v2", desc: "장중/스윙 후보", window: "장중/스윙" },
+          multi: { title: "multi", desc: "여러 전략을 합쳐 평가", window: "전략별" },
+        };
+        const STRATEGY_TABS = ["final_betting_v1", "scalp_rsi_flag_hf_v1", "scalp_macd_rsi_3m_v1", "swing_relaxed_v2", "multi"];
+        const MODE_OPTIONS = [
+          { value: "aggressive", label: "aggressive" },
+          { value: "auto", label: "auto" },
+          { value: "defensive", label: "passive" },
+        ];
+
+        const appState = {
+          selectedStrategy: "final_betting_v1",
+          selectedModeByStrategy: {},
+          latestShadowByStrategy: {},
+          latestAutoByStrategy: {},
+          lastLiveStatus: null,
+          lastAutoStatus: null,
+          lastMarketMode: null,
+          lastAccount: null,
+        };
+
+        const topStatusBar = document.getElementById("topStatusBar");
+        const strategyTabs = document.getElementById("strategyTabs");
+        const strategyControlCard = document.getElementById("strategyControlCard");
+        const shadowTbody = document.getElementById("shadowTbody");
+        const shadowEmpty = document.getElementById("shadowEmpty");
+        const autoTbody = document.getElementById("autoTbody");
+        const autoBadges = document.getElementById("autoBadges");
+        const posTbody = document.getElementById("posTbody");
+        const ooTbody = document.getElementById("ooTbody");
+        const fillsTbody = document.getElementById("fillsTbody");
+
+        function fmt(x) {
+          if (x === null || x === undefined) return "";
+          return String(x);
+        }
+        function fmtNum(x) {
+          if (x === null || x === undefined || x === "") return "";
+          const n = Number(x);
+          if (!Number.isFinite(n)) return "";
+          return n.toLocaleString("en-US");
+        }
+        function fmtPct(x) {
+          const n = Number(x);
+          if (!Number.isFinite(n)) return "";
+          return (n * 100).toFixed(2) + "%";
+        }
+        function fillTbodySimple(tbody, rows) {
+          tbody.innerHTML = "";
+          for (const cells of rows) {
+            const tr = document.createElement("tr");
+            tr.innerHTML = cells.map(function (c) { return "<td>" + c + "</td>"; }).join("");
+            tbody.appendChild(tr);
+          }
+        }
+        function pill(text, tone) {
+          const cls = tone ? ("pill " + tone) : "pill";
+          return "<span class=\"" + cls + "\">" + fmt(text) + "</span>";
+        }
+        function modeToApi(mode) {
+          if (mode === "passive") return "defensive";
+          return mode;
+        }
+        function apiModeToUi(mode) {
+          const m = String(mode || "auto");
+          if (m === "defensive") return "passive";
+          if (m === "neutral") return "auto";
+          return m;
+        }
+
+        function renderStrategyTabs() {
+          strategyTabs.innerHTML = "";
+          for (const sid of STRATEGY_TABS) {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.textContent = sid;
+            b.style.padding = "8px 10px";
+            b.style.border = "1px solid #cbd5e1";
+            b.style.borderRadius = "8px";
+            b.style.cursor = "pointer";
+            b.style.background = (sid === appState.selectedStrategy) ? "#0f172a" : "#fff";
+            b.style.color = (sid === appState.selectedStrategy) ? "#e2e8f0" : "#0f172a";
+            b.addEventListener("click", async function () {
+              appState.selectedStrategy = sid;
+              renderStrategyTabs();
+              await refreshMain({ refreshAccount: false });
+            });
+            strategyTabs.appendChild(b);
+          }
+        }
+
+        function renderTopStatusBar(status, autoStatus, marketMode) {
+          const canLive = !!(status && status.can_place_live_order);
+          const blockers = Array.isArray(status && status.pending_blocker_details) ? status.pending_blocker_details : [];
+          const one = blockers.length ? blockers[0] : null;
+          const blockedLine = one ? (String(one.code || "") + ": " + String(one.message || "")) : (String(status && status.warning_message || "") || "");
+
+          const autoEnabled = !!(autoStatus && autoStatus.state && autoStatus.state.enabled);
+          const sel = (autoStatus && autoStatus.state && autoStatus.state.selected_strategy) ? String(autoStatus.state.selected_strategy) : "";
+          const tickAt = (autoStatus && autoStatus.state && autoStatus.state.last_tick_at_utc) ? String(autoStatus.state.last_tick_at_utc) : "";
+          const buyCnt = (autoStatus && autoStatus.state) ? Number(autoStatus.state.daily_buy_count || 0) : 0;
+          const sellCnt = (autoStatus && autoStatus.state) ? Number(autoStatus.state.daily_sell_count || 0) : 0;
+          const emergency = !!(status && status.live_emergency_stop);
+          const pr = autoStatus && autoStatus.safety && autoStatus.safety.paper_readiness ? autoStatus.safety.paper_readiness : null;
+          const bypass = !!(pr && pr.bypassed);
+          const mm = apiModeToUi(marketMode && marketMode.manual_market_mode_override);
+
+          topStatusBar.className = "panel " + (canLive ? "ok" : "warn");
+          if (bypass) {
+            topStatusBar.style.borderColor = "#fb923c";
+            topStatusBar.style.background = "#fff7ed";
+            topStatusBar.style.color = "#9a3412";
+          } else {
+            topStatusBar.style.borderColor = "";
+            topStatusBar.style.background = "";
+            topStatusBar.style.color = "";
+          }
+          const lines = [];
+          lines.push("LIVE 주문 가능 여부: " + (canLive ? "가능" : "차단") + (canLive ? "" : (" · " + (blockedLine || "차단됨"))));
+          lines.push("자동매매: " + (autoEnabled ? "실행중" : "정지") + " · 전략: " + (sel || appState.selectedStrategy) + " · Market Mode: " + mm);
+          lines.push("최근 Tick: " + (tickAt || "-") + " · 오늘 매수/매도: " + buyCnt + "/" + sellCnt + " · Emergency Stop: " + (emergency ? "ON" : "OFF"));
+          if (bypass) lines.push("경고: 검증 우회 중(LIVE_UNLOCK_BYPASS)");
+          topStatusBar.textContent = lines.join("\n");
+        }
+
+        function renderStrategyControl(strategyId) {
+          const meta = STRATEGY_META[strategyId] || { title: strategyId, desc: "", window: "" };
+          const st = appState.lastAutoStatus && appState.lastAutoStatus.state ? appState.lastAutoStatus.state : {};
+          const loop = appState.lastAutoStatus && appState.lastAutoStatus.loop ? appState.lastAutoStatus.loop : {};
+          const loopRunning = !!(loop && loop.running);
+          const autoEnabled = !!(st && st.enabled);
+          const canPlace = !!(appState.lastAutoStatus && appState.lastAutoStatus.can_place_auto_order);
+          const safetyOk = !!(appState.lastAutoStatus && appState.lastAutoStatus.safety && appState.lastAutoStatus.safety.ok);
+          const cooldown = st && st.cooldown_until_utc ? String(st.cooldown_until_utc) : "";
+          const buys = Number(st && st.daily_buy_count || 0);
+          const sells = Number(st && st.daily_sell_count || 0);
+          const mm = apiModeToUi(appState.lastMarketMode && appState.lastMarketMode.manual_market_mode_override);
+          const selectedMode = appState.selectedModeByStrategy[strategyId] || mm || "auto";
+          appState.selectedModeByStrategy[strategyId] = selectedMode;
+
+          const buttons = [
+            { id: "btnShadow", label: "후보만 보기", tone: "" },
+            { id: "btnStart", label: "자동매매 시작", tone: "" },
+            { id: "btnStop", label: "자동매매 중지", tone: "" },
+            { id: "btnTick", label: "지금 한 번 판단", tone: "" },
+          ];
+          strategyControlCard.innerHTML =
+            "<div class=\"row\" style=\"justify-content: space-between; align-items: flex-start\">" +
+              "<div>" +
+                "<div style=\"font-weight: 800; font-size: 1.05rem\">" + fmt(meta.title) + "</div>" +
+                "<div class=\"muted\" style=\"margin-top: 4px\">" + fmt(meta.desc) + "</div>" +
+                "<div class=\"muted\" style=\"margin-top: 2px\">추천 사용 시간: " + fmt(meta.window) + "</div>" +
+              "</div>" +
+              "<div class=\"row\" style=\"gap: 8px\">" +
+                "<label style=\"margin-top: 0\">Mode</label>" +
+                "<select id=\"modeSelect\" style=\"padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px\">" +
+                  MODE_OPTIONS.map(function (o) {
+                    const v = o.value === "defensive" ? "passive" : o.value;
+                    const sel = (v === selectedMode) ? " selected" : "";
+                    return "<option value=\"" + v + "\"" + sel + ">" + o.label + "</option>";
+                  }).join("") +
+                "</select>" +
+                "<button id=\"modeSaveBtn\" type=\"button\">모드 저장</button>" +
+              "</div>" +
+            "</div>" +
+            "<div class=\"row\" style=\"margin-top: 10px\">" +
+              buttons.map(function (b) { return "<button id=\"" + b.id + "\" type=\"button\">" + b.label + "</button>"; }).join("") +
+              "<span class=\"muted\" style=\"margin-left: 8px\">Auto Loop: " + (loopRunning ? "ON" : "OFF") + "</span>" +
+            "</div>" +
+            "<div class=\"row\" style=\"margin-top: 10px\">" +
+              pill("auto " + (autoEnabled ? "실행중" : "정지")) +
+              pill("실주문 가능 " + (canPlace ? "YES" : "NO"), canPlace ? "" : "warn") +
+              pill("safety " + (safetyOk ? "ok" : "blocked"), safetyOk ? "" : "warn") +
+              pill("cooldown " + (cooldown ? "ON" : "OFF")) +
+              pill("daily buy " + buys) +
+              pill("daily sell " + sells) +
+            "</div>";
+
+          document.getElementById("modeSelect").addEventListener("change", function (ev) {
+            appState.selectedModeByStrategy[strategyId] = String(ev.target.value || "auto");
+          });
+          document.getElementById("modeSaveBtn").addEventListener("click", async function () {
+            const want = appState.selectedModeByStrategy[strategyId] || "auto";
+            const payload = { manual_market_mode: String(modeToApi(want)) };
+            await authFetch(backendUrl + "/api/live-trading/market-mode", {
+              method: "POST",
+              headers: await authHeaders({ "Content-Type": "application/json" }),
+              body: JSON.stringify(payload),
+            });
+            await refreshMain({ refreshAccount: false });
+          });
+
+          document.getElementById("btnShadow").addEventListener("click", async function () { await runShadow(strategyId); });
+          document.getElementById("btnStart").addEventListener("click", async function () { await startAuto(strategyId); });
+          document.getElementById("btnStop").addEventListener("click", async function () { await stopAuto(); });
+          document.getElementById("btnTick").addEventListener("click", async function () { await tickAuto(strategyId); });
+        }
+
+        function renderShadowCandidates(strategyId, data) {
+          const rows = [];
+          const now = new Date().toISOString();
+          if (!data || !data.ok) {
+            shadowEmpty.style.display = "block";
+            shadowEmpty.textContent = "현재 조건을 만족한 후보가 없습니다.\n이유: " + fmt((data && (data.message || data.error)) || "데이터 부족");
+            fillTbodySimple(shadowTbody, []);
+            return;
+          }
+
+          const type = data._type || "";
+          if (type === "final_betting") {
+            const items = Array.isArray(data.items) ? data.items : [];
+            const sh = data.shadow || {};
+            const asof = String(sh.asof_utc || data.asof_utc || now);
+            for (const c of items) {
+              const sym = fmt(c.symbol);
+              const side = String(c.side || "");
+              rows.push([
+                "후보",
+                sym,
+                side === "buy" ? "매수" : (side === "sell" ? "매도" : side),
+                fmtNum(c.quantity),
+                fmtNum(c.price),
+                fmt(c.score),
+                fmt(c.rationale),
+                asof,
+              ]);
+            }
+            if (!rows.length) {
+              shadowEmpty.style.display = "block";
+              const br = sh && sh.strategy_breakdown ? sh.strategy_breakdown : {};
+              const ew = br && br.entry_window ? String(br.entry_window) : "";
+              const r1 = ew && String(ew).toLowerCase() === "closed" ? "시간대 아님" : "조건 미충족/데이터 부족";
+              shadowEmpty.textContent = "현재 조건을 만족한 후보가 없습니다.\n이유: " + r1;
+            } else {
+              shadowEmpty.style.display = "none";
+              shadowEmpty.textContent = "";
+            }
+            fillTbodySimple(shadowTbody, rows);
+            return;
+          }
+
+          const asof = String(data.asof_utc || now);
+          const orders = Array.isArray(data.generated_orders) ? data.generated_orders : [];
+          const diags = Array.isArray(data.last_diagnostics) ? data.last_diagnostics : [];
+          const diagBy = {};
+          for (const d of diags) {
+            if (d && d.symbol && !diagBy[d.symbol]) diagBy[d.symbol] = d;
+          }
+          for (const o of orders) {
+            const sym = fmt(o.symbol);
+            const side = String(o.side || "");
+            const diag = diagBy[sym] || {};
+            const score = diag && (diag.momentum_path_hits || diag.reversal_path_hits || diag.hit_count || diag.v2_hit_count) ? (diag.momentum_path_hits || diag.reversal_path_hits || diag.hit_count || diag.v2_hit_count) : "";
+            rows.push([
+              "후보",
+              sym,
+              side === "buy" ? "매수" : (side === "sell" ? "매도" : side),
+              fmtNum(o.quantity),
+              fmtNum(o.price),
+              fmt(score),
+              fmt(o.signal_reason || ""),
+              asof,
+            ]);
+          }
+          if (!rows.length) {
+            shadowEmpty.style.display = "block";
+            shadowEmpty.textContent = "현재 조건을 만족한 후보가 없습니다.\n이유: 조건 미충족/데이터 부족";
+          } else {
+            shadowEmpty.style.display = "none";
+            shadowEmpty.textContent = "";
+          }
+          fillTbodySimple(shadowTbody, rows);
+        }
+
+        function renderAutoCandidates(strategyId, data) {
+          const rows = [];
+          const st = data && data.state ? data.state : {};
+          const when = (data && data.evaluation && data.evaluation.now_kst) ? String(data.evaluation.now_kst) : (st && st.last_tick_at_utc ? String(st.last_tick_at_utc) : "");
+          const blockedStart = !!(data && data.blocked_before_start);
+          if (blockedStart) {
+            rows.push(["차단", strategyId, "-", "-", "-", "-", "-", fmt(data.message_ko || "자동매매 시작이 필요합니다"), "-", when]);
+            fillTbodySimple(autoTbody, rows);
+            return;
+          }
+          const blocked = !!(data && data.blocked_before_order);
+          const safetyBlockers = Array.isArray(data && data.safety_blockers) ? data.safety_blockers : [];
+
+          const subs = data && data.submitted ? data.submitted : {};
+          const buys = Array.isArray(subs && subs.buys) ? subs.buys : [];
+          const submittedSet = new Set();
+          for (const b of buys) {
+            const sym = fmt(b.symbol);
+            const sid = fmt(b.source_strategy || "");
+            submittedSet.add(sid + "::" + sym);
+            rows.push([
+              "주문됨",
+              sid || strategyId,
+              sym,
+              "매수",
+              fmtNum(b.quantity),
+              "",
+              fmt(b.score),
+              "",
+              fmt(b.order_id),
+              when,
+            ]);
+          }
+
+          const cands = Array.isArray(data && data.evaluated_candidates) ? data.evaluated_candidates : [];
+          for (const c of cands) {
+            const sid = fmt(c.source_strategy || c.strategy_id || "");
+            const sym = fmt(c.symbol);
+            if (!sid || !sym) continue;
+            if (strategyId !== "multi" && sid !== strategyId) continue;
+            const key = sid + "::" + sym;
+            if (submittedSet.has(key)) continue;
+            const qty = Number(c.quantity || 0);
+            const px = (c.price === null || c.price === undefined) ? null : Number(c.price);
+            const amt = (px && qty) ? (px * qty) : null;
+            const sc = (c.score === null || c.score === undefined) ? null : Number(c.score);
+            let status = "대기";
+            let reason = "";
+            if (blocked) {
+              status = "차단";
+              reason = safetyBlockers.length ? ("차단: " + safetyBlockers.join(",")) : "차단";
+            } else if (sc !== null && Number.isFinite(sc) && sc < 0.5) {
+              status = "거절";
+              reason = "점수 낮음";
+            }
+            rows.push([
+              status,
+              sid,
+              sym,
+              "매수",
+              fmtNum(qty),
+              amt ? fmtNum(amt) : "",
+              sc !== null && Number.isFinite(sc) ? sc.toFixed(3) : "",
+              reason,
+              "",
+              when,
+            ]);
+          }
+
+          if (!rows.length) {
+            rows.push([blocked ? "차단" : "대기", strategyId, "-", "-", "-", "-", "-", blocked ? ("차단: " + safetyBlockers.join(",")) : "후보 없음", "-", when]);
+          }
+          fillTbodySimple(autoTbody, rows);
+        }
+
+        function renderAccountSnapshot(data) {
+          const pos = Array.isArray(data && data.positions) ? data.positions : [];
+          const oo = Array.isArray(data && data.open_orders) ? data.open_orders : [];
+          const ff = Array.isArray(data && data.recent_fills) ? data.recent_fills : [];
+
+          fillTbodySimple(posTbody, pos.map(function (p) {
+            const sym = fmt(p.symbol);
+            const qty = Number(p.quantity || 0);
+            const avg = Number(p.average_price || 0);
+            const cur = Number(p.current_price || p.last_price || 0);
+            const mv = (qty && cur) ? (qty * cur) : null;
+            const pnlPct = (avg && cur) ? ((cur - avg) / avg) : null;
+            return [sym, fmtNum(qty), fmtNum(avg), fmtNum(cur), mv ? fmtNum(mv) : "", pnlPct !== null ? fmtPct(pnlPct) : ""];
+          }));
+          fillTbodySimple(ooTbody, oo.map(function (o) {
+            return [fmt(o.order_id), fmt(o.symbol), fmt(o.side), fmtNum(o.remaining_quantity), fmtNum(o.price), fmt(o.created_at)];
+          }));
+          fillTbodySimple(fillsTbody, ff.map(function (f) {
+            return [fmt(f.symbol), fmt(f.side), fmtNum(f.quantity), fmtNum(f.fill_price), fmt(f.order_id), fmt(f.filled_at)];
+          }));
+        }
+
+        async function runShadow(strategyId) {
+          shadowEmpty.style.display = "none";
+          shadowEmpty.textContent = "";
+          if (strategyId === "multi") {
+            const outs = {};
+            for (const sid of ["final_betting_v1", "scalp_rsi_flag_hf_v1", "scalp_macd_rsi_3m_v1", "swing_relaxed_v2"]) {
+              try {
+                outs[sid] = await fetchShadowOne(sid);
+              } catch (e) {
+                outs[sid] = { ok: false, error: String(e || "error") };
+              }
+            }
+            const merged = { ok: true, _type: "multi", items: [], generated_orders: [], asof_utc: new Date().toISOString() };
+            for (const sid of Object.keys(outs)) {
+              const d = outs[sid];
+              if (!d || !d.ok) continue;
+              if (d._type === "final_betting") {
+                for (const c of (Array.isArray(d.items) ? d.items : [])) merged.items.push(Object.assign({ _sid: sid }, c));
+              } else {
+                for (const o of (Array.isArray(d.generated_orders) ? d.generated_orders : [])) merged.generated_orders.push(Object.assign({ _sid: sid }, o));
+              }
+            }
+            appState.latestShadowByStrategy[strategyId] = merged;
+            renderShadowCandidates(strategyId, merged);
+            return;
+          }
+          const out = await fetchShadowOne(strategyId);
+          appState.latestShadowByStrategy[strategyId] = out;
+          renderShadowCandidates(strategyId, out);
+        }
+
+        async function fetchShadowOne(strategyId) {
+          if (strategyId === "final_betting_v1") {
+            const r = await authFetch(backendUrl + "/api/live-prep/final-betting/generate?limit=5", { method: "POST", headers: await authHeaders() });
+            const d = await r.json().catch(function () { return {}; });
+            if (!r.ok) return Object.assign({ ok: false }, d.detail || d);
+            return { ok: true, _type: "final_betting", items: d.items || [], shadow: d.shadow || {} };
+          }
+          if (strategyId === "swing_relaxed_v2") {
+            const r = await authFetch(backendUrl + "/api/live-prep/swing-shadow/generate", { method: "POST", headers: await authHeaders() });
+            const d = await r.json().catch(function () { return {}; });
+            if (!r.ok) return Object.assign({ ok: false }, d.detail || d);
+            return d;
+          }
+          const r = await authFetch(backendUrl + "/api/live-prep/hf-shadow/generate?strategy_id=" + encodeURIComponent(strategyId), { method: "POST", headers: await authHeaders() });
+          const d = await r.json().catch(function () { return {}; });
+          if (!r.ok) return Object.assign({ ok: false }, d.detail || d);
+          return d;
+        }
+
+        async function startAuto(strategyId) {
+          const payload = { actor: "desktop-user", reason: "auto_start", strategy: String(strategyId) };
+          await authFetch(backendUrl + "/api/live-exec/auto-guarded/start", {
+            method: "POST",
+            headers: await authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify(payload),
+          });
+          await refreshMain({ refreshAccount: false });
+        }
+
+        async function stopAuto() {
+          await authFetch(backendUrl + "/api/live-exec/auto-guarded/stop", { method: "POST", headers: await authHeaders() });
+          await refreshMain({ refreshAccount: false });
+        }
+
+        async function tickAuto(strategyId) {
+          const r = await authFetch(backendUrl + "/api/live-exec/auto-guarded/tick?strategy=" + encodeURIComponent(strategyId), { method: "POST", headers: await authHeaders() });
+          const d = await r.json().catch(function () { return {}; });
+          appState.latestAutoByStrategy[strategyId] = r.ok ? d : (d.detail || d);
+          renderAutoCandidates(strategyId, appState.latestAutoByStrategy[strategyId]);
+          await refreshMain({ refreshAccount: true });
+        }
+
+        async function refreshMain(opts) {
+          const opt = opts || {};
+          const [stR, agR, mmR] = await Promise.all([
+            authFetch(backendUrl + "/api/live-trading/status", { headers: await authHeaders() }),
+            authFetch(backendUrl + "/api/live-exec/auto-guarded/status", { headers: await authHeaders() }),
+            authFetch(backendUrl + "/api/live-trading/market-mode", { headers: await authHeaders() }),
+          ]);
+          const st = await stR.json().catch(function () { return {}; });
+          const ag = await agR.json().catch(function () { return {}; });
+          const mm = await mmR.json().catch(function () { return {}; });
+          appState.lastLiveStatus = stR.ok ? st : (st.detail || st);
+          appState.lastAutoStatus = agR.ok ? ag : (ag.detail || ag);
+          appState.lastMarketMode = mmR.ok ? mm : (mm.detail || mm);
+
+          renderStrategyTabs();
+          renderTopStatusBar(appState.lastLiveStatus, appState.lastAutoStatus, appState.lastMarketMode);
+          renderStrategyControl(appState.selectedStrategy);
+
+          const sh = appState.latestShadowByStrategy[appState.selectedStrategy];
+          if (sh) renderShadowCandidates(appState.selectedStrategy, sh);
+          const au = appState.latestAutoByStrategy[appState.selectedStrategy];
+          if (au) renderAutoCandidates(appState.selectedStrategy, au);
+          autoBadges.innerHTML = "";
+
+          if (opt.refreshAccount) {
+            const execMode = "live_shadow";
+            const ar = await authFetch(backendUrl + "/api/live-prep/dashboard-data?execution_mode=" + encodeURIComponent(execMode), { headers: await authHeaders() });
+            const ad = await ar.json().catch(function () { return {}; });
+            appState.lastAccount = ar.ok ? ad : (ad.detail || ad);
+          }
+          if (appState.lastAccount && appState.lastAccount.positions) {
+            renderAccountSnapshot(appState.lastAccount);
+          }
         }
 
         const statusPre = document.getElementById("statusPre");
@@ -1210,6 +1818,9 @@
         document.getElementById("refreshLiveMarketModeBtn").addEventListener("click", async function () {
           await refreshLiveMarketMode();
         });
+        document.getElementById("refreshAccountBtn").addEventListener("click", async function () {
+          await refreshMain({ refreshAccount: true });
+        });
         document.getElementById("refreshLiveDashboardBtn").addEventListener("click", async function () {
           await refreshLiveDashboard();
         });
@@ -1248,6 +1859,7 @@
         document.getElementById("brokerSettingsBtn").addEventListener("click", function () { window.location.href = "./broker-settings.html"; });
         document.getElementById("logoutBtn").addEventListener("click", async function () { await clearDesktopSession(); window.location.href = "./login.html"; });
 
+        await refreshMain({ refreshAccount: true });
         await refresh();
         await refreshLiveMarketMode();
         await refreshLiveExec();

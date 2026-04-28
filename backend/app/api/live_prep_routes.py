@@ -16,7 +16,11 @@ from app.strategy.intraday_common import kst_now
 
 from backend.app.clients.kis_client import build_kis_client_for_live_user
 from backend.app.core.config import get_backend_settings, is_execution_mode_allowed, is_live_order_execution_configured
-from backend.app.engine.live_prep_engine import generate_final_betting_shadow_candidates, generate_intraday_shadow_report
+from backend.app.engine.live_prep_engine import (
+    generate_final_betting_shadow_candidates,
+    generate_intraday_shadow_report,
+    generate_swing_relaxed_v2_shadow_report,
+)
 from backend.app.risk.audit import append_risk_event
 from backend.app.services.live_exec_session_store import LiveExecSessionStore
 from backend.app.services.live_market_mode_store import LiveMarketModeStore
@@ -331,6 +335,31 @@ def generate_hf_shadow(
     _append_event(
         "LIVE_PREP_HF_SHADOW_GENERATED",
         {"actor": user.id, "strategy_id": str(strategy_id), "generated_order_count": int(out.get("generated_order_count") or 0)},
+    )
+    return out
+
+
+@router.post("/swing-shadow/generate")
+def generate_swing_shadow(
+    authorization: str | None = Header(default=None),
+    execution_mode: str | None = Query(default=None),
+) -> dict[str, Any]:
+    user = _current_user(authorization)
+    _require_live_prep_enabled_for_user(user.id, hint_execution_mode=execution_mode)
+    cfg = get_backend_settings()
+    svc = get_broker_service()
+    manual_mode = LiveMarketModeStore(cfg.live_market_mode_store_json).get(user.id, market="domestic")
+    out = generate_swing_relaxed_v2_shadow_report(
+        broker_service=svc,
+        backend_settings=cfg,
+        user_id=user.id,
+        manual_market_mode=manual_mode,
+    )
+    if not out.get("ok"):
+        raise HTTPException(status_code=503, detail=out)
+    _append_event(
+        "LIVE_PREP_SWING_SHADOW_GENERATED",
+        {"actor": user.id, "strategy_id": "swing_relaxed_v2", "generated_order_count": int(out.get("generated_order_count") or 0)},
     )
     return out
 
