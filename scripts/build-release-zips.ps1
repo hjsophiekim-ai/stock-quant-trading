@@ -415,6 +415,9 @@ if (Test-Path $apkZip) { Remove-Item -Force $apkZip }
 Try-CompressArchive -Path (Join-Path $apkStage "*") -DestinationPath $apkZip
 Write-Host "[release] created $apkZip" -ForegroundColor Green
 
+try { Remove-Item -Recurse -Force $deskStage -ErrorAction SilentlyContinue } catch { }
+try { Remove-Item -Recurse -Force $apkStage -ErrorAction SilentlyContinue } catch { }
+
 Write-Host ""
 Write-Host "Done. Output files:" -ForegroundColor Green
 Write-Host "  $deskZip"

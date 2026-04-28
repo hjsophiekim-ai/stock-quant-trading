@@ -710,3 +710,78 @@ def generate_intraday_shadow_report(
         "token_cache": token_cache,
     }
 
+
+def generate_swing_relaxed_v2_shadow_report(
+    *,
+    broker_service: BrokerSecretService,
+    backend_settings: BackendSettings,
+    user_id: str,
+    symbols_override: list[str] | None = None,
+    manual_market_mode: str | None = None,
+) -> dict[str, Any]:
+    client, broker, token_cache, err = _build_live_client_and_broker(
+        broker_service=broker_service,
+        backend_settings=backend_settings,
+        user_id=user_id,
+        live_execution_unlocked=False,
+    )
+    if client is None or broker is None:
+        return {"ok": False, "error": err, "message": err, "token_cache": token_cache}
+
+    cfg = get_app_settings()
+    symbols = list(symbols_override) if symbols_override is not None else cfg.resolved_final_betting_symbol_list()
+    symbols = [s.strip() for s in symbols if s and str(s).strip()]
+    if not symbols:
+        return {"ok": False, "error": "empty_symbols", "message": "swing 심볼 리스트가 비어 있습니다."}
+
+    try:
+        from app.scheduler.kis_universe import build_kis_stock_universe
+        from app.strategy.swing_relaxed_v2_strategy import SwingRelaxedV2Strategy
+    except Exception as exc:
+        return {"ok": False, "error": "import_failed", "message": str(exc)}
+
+    lookback = max(int(cfg.paper_kis_chart_lookback_days), 120)
+    prices_df = build_kis_stock_universe(client, symbols, lookback_calendar_days=lookback)
+    if prices_df.empty:
+        return {"ok": False, "error": "daily_universe_fetch_failed", "message": "일봉 유니버스 조회 실패", "token_cache": token_cache}
+
+    kospi = build_kospi_index_series(client, lookback_calendar_days=lookback, logger=logger)
+    sp500 = build_mock_sp500_proxy_from_kospi(kospi)
+    vol = build_mock_volatility_series(kospi)
+    positions = broker.get_positions()
+    portfolio_df = _build_positions_df(positions)
+
+    st_path = (Path(backend_settings.backend_data_dir or "backend_data") / "live_prep" / f"swing_relaxed_v2_{user_id[:12]}.json").resolve()
+    strategy = SwingRelaxedV2Strategy()
+    setattr(strategy, "_swing_v2_tp1_state_path", str(st_path))
+    market_mode = attach_market_mode_to_strategy(
+        strategy,
+        manual=manual_market_mode,
+        kospi=kospi,
+        sp500=sp500,
+        volatility=vol,
+        settings=cfg,
+    )
+
+    context = StrategyContext(
+        prices=prices_df,
+        kospi_index=kospi,
+        sp500_index=sp500,
+        portfolio=portfolio_df,
+        volatility_index=vol,
+    )
+    orders = strategy.generate_orders(context)
+    return {
+        "ok": True,
+        "asof_utc": _utc_now_iso(),
+        "market": "domestic",
+        "strategy_id": "swing_relaxed_v2",
+        "order_allowed": False,
+        "generated_order_count": len(orders),
+        "generated_orders": [_order_to_dict(o) for o in orders],
+        "market_mode": market_mode,
+        "last_diagnostics": list(getattr(strategy, "last_diagnostics", []) or [])[-50:],
+        "fetch_summary": [],
+        "token_cache": token_cache,
+    }
+

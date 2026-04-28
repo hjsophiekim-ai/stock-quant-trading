@@ -116,6 +116,10 @@ def _status_payload_for_user(cfg: BackendSettings, st: LiveSafetyState) -> dict[
     return {
         "trading_mode": cfg.trading_mode,
         "execution_mode": cfg.execution_mode,
+        "live_unlock_bypass_requested": bool(getattr(cfg, "live_unlock_bypass", False)),
+        "live_unlock_bypass_confirm_env": bool(getattr(cfg, "live_unlock_bypass_confirm", False)),
+        "live_unlock_bypass_effective": bool(getattr(readiness, "bypassed", False)),
+        "live_unlock_technical_summary": str(getattr(readiness, "technical_summary", "") or ""),
         "env_live_trading": bool(cfg.live_trading),
         "env_live_trading_confirm": bool(cfg.live_trading_confirm),
         "env_live_trading_extra_confirm": bool(cfg.live_trading_extra_confirm),

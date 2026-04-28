@@ -89,6 +89,69 @@ def _safe_price_from_quote(q: dict[str, Any]) -> float:
         return 0.0
 
 
+def _supported_auto_strategies() -> set[str]:
+    return {"final_betting_v1", "scalp_rsi_flag_hf_v1", "scalp_macd_rsi_3m_v1", "swing_relaxed_v2"}
+
+
+def _parse_strategy_list(raw: str) -> list[str]:
+    parts = [p.strip() for p in str(raw or "").split(",") if p.strip()]
+    out: list[str] = []
+    seen: set[str] = set()
+    for p in parts:
+        if p not in seen:
+            out.append(p)
+            seen.add(p)
+    return out
+
+
+def _resolve_effective_auto_strategies(cfg: Any, state: LiveAutoGuardedState) -> list[str]:
+    sel = str(getattr(state, "selected_strategy", "") or "").strip()
+    if not sel:
+        sel = str(getattr(cfg, "live_auto_strategy", "") or "").strip() or "final_betting_v1"
+    if sel == "multi":
+        raw = str(getattr(cfg, "live_auto_strategies", "") or "").strip()
+        ids = _parse_strategy_list(raw) if raw else ["final_betting_v1", "scalp_rsi_flag_hf_v1", "scalp_macd_rsi_3m_v1", "swing_relaxed_v2"]
+    else:
+        ids = [sel]
+    supported = _supported_auto_strategies()
+    return [x for x in ids if x in supported]
+
+
+def _window_allowed(strategy_id: str, now) -> bool:
+    sid = str(strategy_id or "").strip()
+    t = now.time()
+    if sid == "final_betting_v1":
+        t0 = parse_krx_hhmm("143000")
+        t1 = parse_krx_hhmm("152000")
+        return bool(t0 <= t <= t1)
+    if sid in {"scalp_rsi_flag_hf_v1", "scalp_macd_rsi_3m_v1"}:
+        t0 = parse_krx_hhmm("090000")
+        t1 = parse_krx_hhmm("152000")
+        return bool(t0 <= t <= t1)
+    return True
+
+
+def _base_score_from_diag(diag: dict[str, Any], *, strategy_id: str) -> float:
+    sid = str(strategy_id or "").strip()
+    if sid in {"scalp_rsi_flag_hf_v1", "scalp_macd_rsi_3m_v1"}:
+        try:
+            hits = max(int(diag.get("momentum_path_hits") or 0), int(diag.get("reversal_path_hits") or 0), int(diag.get("hit_count") or 0))
+        except Exception:
+            hits = 0
+        base = 0.65 + 0.12 * float(max(0, hits - 2))
+        return float(max(0.45, min(1.2, base)))
+    if sid == "swing_relaxed_v2":
+        try:
+            hits = int(diag.get("v2_hit_count") or diag.get("hit_count") or 0)
+            min_hits = int(diag.get("min_hits_required") or 2)
+        except Exception:
+            hits, min_hits = 0, 2
+        extra = float(max(0, hits - min_hits))
+        base = 0.62 + 0.10 * extra
+        return float(max(0.45, min(1.2, base)))
+    return 0.75
+
+
 def _build_live_broker(
     *,
     cfg: Any,
@@ -148,10 +211,17 @@ def tick_live_auto_guarded(
     _event("LIVE_AUTO_TICK_STARTED", {"execution_mode": getattr(cfg, "execution_mode", ""), "enabled": bool(st.enabled)})
 
     if not bool(st.enabled):
-        st.last_decision = "skipped"
+        st.last_decision = "blocked"
         st.last_reason = "auto_guarded_not_started"
         store.upsert(st)
-        return {"ok": True, "skipped": True, "reason": st.last_reason, "state": asdict(st)}
+        return {
+            "ok": True,
+            "blocked_before_start": True,
+            "blocked": True,
+            "reason": st.last_reason,
+            "message_ko": "Auto Guarded가 시작되지 않았습니다. 먼저 Start를 눌러 활성화하세요.",
+            "state": asdict(st),
+        }
 
     if str(getattr(cfg, "execution_mode", "")).strip().lower() != "live_auto_guarded":
         st.last_decision = "blocked"
@@ -352,51 +422,246 @@ def tick_live_auto_guarded(
                 _event("LIVE_AUTO_SELL_SUBMITTED", {"symbol": sym, "decision": asdict(decision), "order_id": res.order_id})
 
     buy_submitted: list[dict[str, Any]] = []
-    shadow_eval: dict[str, Any] | None = None
-    if blocked_before_order:
-        from backend.app.engine.live_prep_engine import generate_final_betting_shadow_candidates
+    now_kst = kst_now()
+    manual = LiveMarketModeStore(getattr(cfg, "live_market_mode_store_json")).get(user_id, market="domestic")
+    effective_strategies = _resolve_effective_auto_strategies(cfg, st)
+    per_strategy: list[dict[str, Any]] = []
+    all_candidates: list[dict[str, Any]] = []
+    merged_fetch_summary: list[dict[str, Any]] = []
+    merged_diagnostics: list[dict[str, Any]] = []
+    merged_rejection_reasons: dict[str, Any] = {}
 
-        manual = LiveMarketModeStore(getattr(cfg, "live_market_mode_store_json")).get(user_id, market="domestic")
-        try:
-            shadow_eval = generate_final_betting_shadow_candidates(
-                broker_service=broker_service,
-                backend_settings=cfg,
-                user_id=user_id,
-                limit=5,
-                manual_market_mode=manual,
-            )
-        except Exception as exc:
-            shadow_eval = {
-                "ok": False,
-                "error": "shadow_eval_failed",
-                "message": str(exc),
-                "candidate_count": 0,
-                "candidates": [],
-                "shadow": {"fetch_summary": [], "last_diagnostics": [], "rejection_reasons_by_symbol": {}},
-            }
+    def _append_strategy_eval(row: dict[str, Any]) -> None:
+        per_strategy.append(row)
+
+    if bool(getattr(cfg, "live_auto_buy_enabled", False)) or blocked_before_order:
+        for sid in effective_strategies:
+            sid = str(sid or "").strip()
+            in_window = _window_allowed(sid, now_kst)
+            if not in_window and sid in {"final_betting_v1", "scalp_rsi_flag_hf_v1", "scalp_macd_rsi_3m_v1"}:
+                _append_strategy_eval(
+                    {
+                        "strategy_id": sid,
+                        "evaluated": False,
+                        "skipped_reason": "not_in_time_window",
+                        "candidate_count": 0,
+                        "rejected_count": 0,
+                        "submitted_count": 0,
+                        "inspected_symbols": [],
+                    }
+                )
+                continue
+            if sid == "final_betting_v1":
+                from backend.app.engine.live_prep_engine import generate_final_betting_shadow_candidates
+
+                try:
+                    shadow = generate_final_betting_shadow_candidates(
+                        broker_service=broker_service,
+                        backend_settings=cfg,
+                        user_id=user_id,
+                        limit=8,
+                        manual_market_mode=manual,
+                    )
+                except Exception as exc:
+                    shadow = {
+                        "ok": False,
+                        "error": "shadow_eval_failed",
+                        "message": str(exc),
+                        "candidate_count": 0,
+                        "candidates": [],
+                        "shadow": {},
+                    }
+                sh = shadow.get("shadow") if isinstance(shadow, dict) else {}
+                if isinstance(sh, dict):
+                    merged_fetch_summary.extend(list(sh.get("fetch_summary") or []))
+                    merged_diagnostics.extend(list(sh.get("last_diagnostics") or []))
+                    merged_rejection_reasons.update(dict(sh.get("rejection_reasons_by_symbol") or {}))
+                mm = shadow.get("market_mode") if isinstance(shadow, dict) else None
+                raw_candidates = list(shadow.get("candidates") or []) if isinstance(shadow, dict) else []
+                inspected = []
+                for row in list(sh.get("fetch_summary") or [])[:60] if isinstance(sh, dict) else []:
+                    sym = str(row.get("symbol") or "")
+                    if sym:
+                        inspected.append({"symbol": sym, "uid": f"sym:{sym}"})
+                buy_candidates: list[dict[str, Any]] = []
+                for c in raw_candidates:
+                    if not isinstance(c, dict):
+                        continue
+                    if str(c.get("side") or "").lower() != "buy":
+                        continue
+                    sym = str(c.get("symbol") or "")
+                    if not sym:
+                        continue
+                    try:
+                        base = float(c.get("score")) if c.get("score") is not None else None
+                    except Exception:
+                        base = None
+                    if base is not None:
+                        base = (float(base) - 50.0) / 50.0
+                    buy_candidates.append(
+                        {
+                            "candidate_id": str(c.get("candidate_id") or ""),
+                            "symbol": sym,
+                            "side": "buy",
+                            "quantity": int(c.get("quantity") or 0),
+                            "price": c.get("price"),
+                            "strategy_id": "final_betting_v1",
+                            "score": base,
+                            "rationale": str(c.get("rationale") or ""),
+                            "source_strategy": "final_betting_v1",
+                            "market_mode": mm,
+                        }
+                    )
+                all_candidates.extend(buy_candidates)
+                rejected_count = len(dict(sh.get("rejection_reasons_by_symbol") or {})) if isinstance(sh, dict) else 0
+                _append_strategy_eval(
+                    {
+                        "strategy_id": sid,
+                        "evaluated": True,
+                        "candidate_count": len(buy_candidates),
+                        "rejected_count": int(rejected_count),
+                        "submitted_count": 0,
+                        "inspected_symbols": inspected[:50],
+                    }
+                )
+                continue
+            if sid in {"scalp_rsi_flag_hf_v1", "scalp_macd_rsi_3m_v1"}:
+                from backend.app.engine.live_prep_engine import generate_intraday_shadow_report
+
+                rep = generate_intraday_shadow_report(
+                    broker_service=broker_service,
+                    backend_settings=cfg,
+                    user_id=user_id,
+                    strategy_id=sid,
+                    manual_market_mode=manual,
+                )
+                mm = rep.get("market_mode") if isinstance(rep, dict) else None
+                orders = list(rep.get("generated_orders") or []) if isinstance(rep, dict) else []
+                diags = list(rep.get("last_diagnostics") or []) if isinstance(rep, dict) else []
+                merged_fetch_summary.extend(list(rep.get("fetch_summary") or []) if isinstance(rep, dict) else [])
+                merged_diagnostics.extend(diags)
+                diag_by_sym: dict[str, dict[str, Any]] = {}
+                for d in diags:
+                    if not isinstance(d, dict):
+                        continue
+                    sym = str(d.get("symbol") or "")
+                    if sym and sym not in diag_by_sym:
+                        diag_by_sym[sym] = d
+                inspected = [{"symbol": s, "uid": f"sym:{s}"} for s in list(diag_by_sym.keys())[:50]]
+                buy_candidates: list[dict[str, Any]] = []
+                for o in orders:
+                    if not isinstance(o, dict):
+                        continue
+                    if str(o.get("side") or "").lower() != "buy":
+                        continue
+                    sym = str(o.get("symbol") or "")
+                    if not sym:
+                        continue
+                    diag = diag_by_sym.get(sym) or {}
+                    base = _base_score_from_diag(diag, strategy_id=sid)
+                    buy_candidates.append(
+                        {
+                            "candidate_id": f"{sid}:{sym}",
+                            "symbol": sym,
+                            "side": "buy",
+                            "quantity": int(o.get("quantity") or 0),
+                            "price": o.get("price"),
+                            "strategy_id": sid,
+                            "score": base,
+                            "rationale": str(o.get("signal_reason") or ""),
+                            "source_strategy": sid,
+                            "market_mode": mm,
+                        }
+                    )
+                all_candidates.extend(buy_candidates)
+                rejected_count = len([d for d in diags if isinstance(d, dict) and not bool(d.get("entered"))])
+                _append_strategy_eval(
+                    {
+                        "strategy_id": sid,
+                        "evaluated": True,
+                        "candidate_count": len(buy_candidates),
+                        "rejected_count": int(rejected_count),
+                        "submitted_count": 0,
+                        "inspected_symbols": inspected[:50],
+                    }
+                )
+                continue
+            if sid == "swing_relaxed_v2":
+                from backend.app.engine.live_prep_engine import generate_swing_relaxed_v2_shadow_report
+
+                rep = generate_swing_relaxed_v2_shadow_report(
+                    broker_service=broker_service,
+                    backend_settings=cfg,
+                    user_id=user_id,
+                    manual_market_mode=manual,
+                )
+                mm = rep.get("market_mode") if isinstance(rep, dict) else None
+                orders = list(rep.get("generated_orders") or []) if isinstance(rep, dict) else []
+                diags = list(rep.get("last_diagnostics") or []) if isinstance(rep, dict) else []
+                merged_diagnostics.extend(diags)
+                diag_by_sym: dict[str, dict[str, Any]] = {}
+                for d in diags:
+                    if not isinstance(d, dict):
+                        continue
+                    sym = str(d.get("symbol") or "")
+                    if sym and sym not in diag_by_sym:
+                        diag_by_sym[sym] = d
+                inspected = [{"symbol": s, "uid": f"sym:{s}"} for s in list(diag_by_sym.keys())[:50]]
+                buy_candidates: list[dict[str, Any]] = []
+                for o in orders:
+                    if not isinstance(o, dict):
+                        continue
+                    if str(o.get("side") or "").lower() != "buy":
+                        continue
+                    sym = str(o.get("symbol") or "")
+                    if not sym:
+                        continue
+                    diag = diag_by_sym.get(sym) or {}
+                    base = _base_score_from_diag(diag, strategy_id=sid)
+                    buy_candidates.append(
+                        {
+                            "candidate_id": f"{sid}:{sym}",
+                            "symbol": sym,
+                            "side": "buy",
+                            "quantity": int(o.get("quantity") or 0),
+                            "price": o.get("price"),
+                            "strategy_id": sid,
+                            "score": base,
+                            "rationale": str(o.get("signal_reason") or ""),
+                            "source_strategy": sid,
+                            "market_mode": mm,
+                        }
+                    )
+                all_candidates.extend(buy_candidates)
+                rejected_count = len([d for d in diags if isinstance(d, dict) and not bool(d.get("entered"))])
+                _append_strategy_eval(
+                    {
+                        "strategy_id": sid,
+                        "evaluated": True,
+                        "candidate_count": len(buy_candidates),
+                        "rejected_count": int(rejected_count),
+                        "submitted_count": 0,
+                        "inspected_symbols": inspected[:50],
+                    }
+                )
+                continue
+
+    st.last_eval_at_utc = _utc_now_iso()
+    st.last_eval_strategies = list(effective_strategies)
+    st.last_eval_summary = {"strategies": per_strategy, "evaluated_candidate_count": len(all_candidates)}
+    st.last_eval_candidates = list(all_candidates)[:50]
 
     if bool(getattr(cfg, "live_auto_buy_enabled", False)):
         if st.daily_buy_count < int(getattr(cfg, "live_auto_max_daily_buy_count", 3)):
             if len(positions) < int(getattr(cfg, "live_auto_max_position_count", 5)):
                 if (cash - float(getattr(cfg, "live_auto_min_cash_buffer_krw", 100_000.0))) > float(getattr(cfg, "live_auto_max_order_krw", 100_000.0)):
-                    from backend.app.engine.live_prep_engine import generate_final_betting_shadow_candidates
-
-                    manual = LiveMarketModeStore(getattr(cfg, "live_market_mode_store_json")).get(user_id, market="domestic")
-                    shadow = generate_final_betting_shadow_candidates(
-                        broker_service=broker_service,
-                        backend_settings=cfg,
-                        user_id=user_id,
-                        limit=5,
-                        manual_market_mode=manual,
-                    )
-                    shadow_eval = shadow if isinstance(shadow, dict) else shadow_eval
-                    candidates = list(shadow.get("candidates") or []) if isinstance(shadow, dict) else []
                     perf_by_strategy: dict[str, dict[str, Any]] = {}
                     perf_by_symbol: dict[tuple[str, str], dict[str, Any]] = {}
+                    quote_cache: dict[str, float] = {}
                     best = None
                     best_score = -999.0
                     best_reason = ""
-                    for c in candidates:
+                    for c in all_candidates:
                         sym = str(c.get("symbol") or "")
                         side = str(c.get("side") or "").lower()
                         if side != "buy" or not sym:
@@ -405,13 +670,28 @@ def tick_live_auto_guarded(
                         already = any(str(getattr(p, "symbol", "")) == sym for p in positions)
                         has_oo = any(getattr(o, "symbol", "") == sym and getattr(o, "side", "") == "buy" for o in open_orders)
                         price = c.get("price")
-                        base = None
                         try:
-                            flow = float(c.get("score")) if c.get("score") is not None else None
+                            base = float(c.get("score")) if c.get("score") is not None else None
                         except Exception:
-                            flow = None
-                        if flow is not None:
-                            base = (float(flow) - 50.0) / 50.0
+                            base = None
+                        order_price: float | None = None
+                        try:
+                            order_price = float(price) if price is not None else None
+                        except Exception:
+                            order_price = None
+                        if order_price is None or order_price <= 0:
+                            if sym in quote_cache:
+                                order_price = float(quote_cache.get(sym) or 0.0)
+                            else:
+                                try:
+                                    q = client.get_quote(sym)
+                                    qp = float(_safe_price_from_quote(q) or 0.0)
+                                except Exception:
+                                    qp = 0.0
+                                quote_cache[sym] = float(qp)
+                                order_price = float(qp)
+                            if order_price and order_price > 0:
+                                c["price"] = float(order_price)
                         if sid not in perf_by_strategy:
                             try:
                                 sig = get_performance_signal(cfg, strategy_id=sid, lookback_days=60, min_sell_trades=10)
@@ -446,8 +726,8 @@ def tick_live_auto_guarded(
                         sc = score_candidate(
                             symbol=sym,
                             base_signal_score=base,
-                            order_price=float(price) if price is not None else None,
-                            market_mode=shadow.get("market_mode") if isinstance(shadow, dict) else None,
+                            order_price=(float(order_price) if order_price is not None and float(order_price) > 0 else None),
+                            market_mode=c.get("market_mode") if isinstance(c.get("market_mode"), dict) else None,
                             already_holding=already,
                             has_open_order=has_oo,
                             strategy_performance=perf_bundle,
@@ -463,6 +743,12 @@ def tick_live_auto_guarded(
                             px_f = float(px) if px is not None else 0.0
                         except Exception:
                             px_f = 0.0
+                        if px_f <= 0:
+                            try:
+                                q = client.get_quote(sym)
+                                px_f = float(_safe_price_from_quote(q) or 0.0)
+                            except Exception:
+                                px_f = 0.0
                         qty = int(best.get("quantity") or 0)
                         if qty <= 0:
                             qty = 1
@@ -501,7 +787,7 @@ def tick_live_auto_guarded(
                                     quantity=int(qty),
                                     price=0 if px_f <= 0 else float(px_f),
                                     strategy_id="live_auto_guarded",
-                                    signal_reason=f"auto_buy score={best_score:.3f} | {best_reason}",
+                                    signal_reason=f"auto_buy src={str(best.get('source_strategy') or best.get('strategy_id') or '')} score={best_score:.3f} | {best_reason}",
                                 )
                                 if not orders_allowed:
                                     _event("LIVE_AUTO_BUY_REJECTED", {"symbol": sym, "reason": "blocked_before_order", "score": best_score, **exposure_ctx})
@@ -516,12 +802,16 @@ def tick_live_auto_guarded(
                                             "accepted": bool(res.accepted),
                                             "order_id": res.order_id,
                                             "score": best_score,
+                                            "source_strategy": str(best.get("source_strategy") or best.get("strategy_id") or ""),
                                         }
                                     )
                                     _event(
                                         "LIVE_AUTO_BUY_SUBMITTED",
                                         {"symbol": sym, "order_id": res.order_id, "score": best_score, "quantity": int(qty), **exposure_ctx},
                                     )
+                                    for row in per_strategy:
+                                        if str(row.get("strategy_id") or "") == str(best.get("source_strategy") or best.get("strategy_id") or ""):
+                                            row["submitted_count"] = int(row.get("submitted_count") or 0) + 1
                     else:
                         _event("LIVE_AUTO_BUY_REJECTED", {"reason": "no_candidate_above_threshold", "best_score": float(best_score)})
                 else:
@@ -556,23 +846,16 @@ def tick_live_auto_guarded(
         "submitted": {"sells": sell_submitted, "buys": buy_submitted},
         "pnl": {"daily_pct": float(daily_pct), "total_pct": float(total_pct), "equity": equity},
         "counts": {"positions": len(positions), "open_orders": len(open_orders), "fills": len(fills)},
-        "candidate_count": int((shadow_eval or {}).get("candidate_count") or 0) if isinstance(shadow_eval, dict) else 0,
-        "evaluated_candidates": list((shadow_eval or {}).get("candidates") or []) if isinstance(shadow_eval, dict) else [],
-        "fetch_summary": (
-            list(((shadow_eval or {}).get("shadow") or {}).get("fetch_summary") or [])
-            if isinstance(shadow_eval, dict)
-            else []
-        ),
-        "last_diagnostics": (
-            list(((shadow_eval or {}).get("shadow") or {}).get("last_diagnostics") or [])
-            if isinstance(shadow_eval, dict)
-            else []
-        ),
-        "rejection_reasons_by_symbol": (
-            dict(((shadow_eval or {}).get("shadow") or {}).get("rejection_reasons_by_symbol") or {})
-            if isinstance(shadow_eval, dict)
-            else {}
-        ),
-        "market_mode": (shadow_eval or {}).get("market_mode") if isinstance(shadow_eval, dict) else None,
+        "evaluation": {
+            "now_kst": now_kst.isoformat(),
+            "strategies": per_strategy,
+            "candidate_count": len(all_candidates),
+        },
+        "candidate_count": len(all_candidates),
+        "evaluated_candidates": list(all_candidates),
+        "fetch_summary": list(merged_fetch_summary),
+        "last_diagnostics": list(merged_diagnostics)[-120:],
+        "rejection_reasons_by_symbol": dict(merged_rejection_reasons),
+        "market_mode": None,
     }
 

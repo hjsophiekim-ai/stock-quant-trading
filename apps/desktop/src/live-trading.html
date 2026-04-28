@@ -13,6 +13,7 @@
       .panel { background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px; margin-bottom: 10px; }
       .warn { background: #fef2f2; border-color: #fecaca; color: #7f1d1d; }
       .ok { background: #ecfdf5; border-color: #86efac; color: #166534; }
+      details.panel > summary { cursor: pointer; font-weight: 700; }
       pre { white-space: pre-wrap; font-size: 0.82rem; font-family: ui-monospace, monospace; margin: 0; }
       .muted { color: #64748b; font-size: 0.86rem; }
       label { display: block; margin-top: 8px; font-weight: 700; }
@@ -44,7 +45,9 @@
         </p>
         <div id="liveWarnPanel" class="panel warn"></div>
 
-        <div class="panel">
+        <details class="panel">
+          <summary>상세보기</summary>
+          <div style="margin-top: 10px">
           <h3 style="margin-top: 0">Live 실행 콘솔</h3>
           <div class="row" style="margin: 10px 0">
             <label style="margin-top: 0">Strategy</label>
@@ -74,8 +77,9 @@
           </div>
           <p id="liveExecMsg" class="muted" style="white-space: pre-line"></p>
           <pre id="liveExecPre">(loading)</pre>
-        </div>
-        <div class="panel warn">
+          </div>
+        </details>
+        <div id="autoGuardedPanel" class="panel warn">
           <h3 style="margin-top: 0">Live Auto Guarded</h3>
           <p class="muted">
             이 모드에서만 자동 실주문이 가능하며, EXECUTION_MODE=live_auto_guarded + LIVE_AUTO_ORDER=true + LIVE_TRADING 다중 승인 + 런타임 안전 검증을 모두 통과해야 주문이 제출됩니다.
@@ -85,10 +89,46 @@
             <button id="autoStartBtn" type="button">Start</button>
             <button id="autoStopBtn" type="button">Stop</button>
             <button id="autoTickBtn" type="button">Tick</button>
+            <label style="margin-left: 8px; margin-top: 0">전략</label>
+            <select id="autoStrategySelect" style="padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px">
+              <option value="final_betting_v1">final_betting_v1</option>
+              <option value="scalp_rsi_flag_hf_v1">scalp_rsi_flag_hf_v1</option>
+              <option value="scalp_macd_rsi_3m_v1">scalp_macd_rsi_3m_v1</option>
+              <option value="swing_relaxed_v2">swing_relaxed_v2</option>
+              <option value="multi">multi</option>
+            </select>
+            <label style="margin-left: 8px; margin-top: 0">Mode</label>
+            <select id="liveMarketMode" style="padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px">
+              <option value="auto">auto</option>
+              <option value="aggressive">aggressive</option>
+              <option value="neutral">neutral</option>
+              <option value="defensive">passive(defensive)</option>
+            </select>
+            <button id="saveLiveMarketModeBtn" type="button">Save Mode</button>
+            <button id="refreshLiveMarketModeBtn" type="button">Refresh Mode</button>
           </div>
           <div id="autoGuardedBanner" style="display: none; padding: 10px; border: 1px solid #fed7aa; background: #fff7ed; color: #9a3412; border-radius: 8px; white-space: pre-line; margin: 8px 0"></div>
-          <pre id="autoGuardedPre">(loading)</pre>
+          <div id="paperBypassBadge" style="display: none; padding: 8px 10px; border: 1px solid #fca5a5; background: #fef2f2; color: #991b1b; border-radius: 8px; white-space: pre-line; margin: 8px 0; font-weight: 600"></div>
+          <div id="autoGuardedSummary" class="muted" style="white-space: pre-line; margin-top: 6px">(loading)</div>
+          <div style="overflow: auto; margin-top: 10px">
+            <table>
+              <thead>
+                <tr>
+                  <th>Strategy</th>
+                  <th>Symbol</th>
+                  <th>UID</th>
+                  <th>Candidate</th>
+                </tr>
+              </thead>
+              <tbody id="autoInspectTbody"></tbody>
+            </table>
+          </div>
         </div>
+        <details class="panel">
+          <summary>상세보기</summary>
+          <div style="margin-top: 10px">
+          <h3 style="margin-top: 0">Auto Guarded Raw</h3>
+          <pre id="autoGuardedPre">(loading)</pre>
         <div class="panel">
           <h3 style="margin-top: 0">상태 요약</h3>
           <h4 style="margin: 10px 0 6px 0">Saved operator intent</h4>
@@ -119,6 +159,7 @@
             <button id="rbStopBtn" type="button">Stop Builder</button>
             <button id="rbTickBtn" type="button">Run Once</button>
           </div>
+          <div id="readinessBuilderBanner" style="display: none; padding: 10px; border: 1px solid #fecaca; background: #fef2f2; color: #991b1b; border-radius: 8px; white-space: pre-line; margin: 8px 0"></div>
           <pre id="readinessBuilderPre">(loading)</pre>
         </div>
         <div class="panel">
@@ -126,16 +167,16 @@
           <p class="muted">auto / aggressive / neutral / defensive 를 Live shadow 계산에 동일하게 적용합니다.</p>
           <div class="row" style="margin-top: 8px">
             <label style="margin-top: 0">Manual override</label>
-            <select id="liveMarketMode" style="padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px">
+            <select id="liveMarketModeDebug" style="padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px">
               <option value="auto">auto</option>
               <option value="aggressive">aggressive</option>
               <option value="neutral">neutral</option>
               <option value="defensive">passive(defensive)</option>
             </select>
-            <button id="saveLiveMarketModeBtn" type="button">Save Market Mode</button>
-            <button id="refreshLiveMarketModeBtn" type="button">Refresh Market Mode</button>
+            <button id="saveLiveMarketModeBtnDebug" type="button">Save Market Mode</button>
+            <button id="refreshLiveMarketModeBtnDebug" type="button">Refresh Market Mode</button>
           </div>
-          <pre id="liveMarketModePre">(loading)</pre>
+          <pre id="liveMarketModePreDebug">(loading)</pre>
         </div>
         <div class="panel">
           <h3 style="margin-top: 0">계정 스냅샷 (Live)</h3>
@@ -218,6 +259,7 @@
             <button id="refreshCandidatesBtn" type="button">후보 새로고침</button>
           </div>
           <div id="candidateErrorBanner" style="display: none; padding: 10px; border: 1px solid #fecaca; background: #fef2f2; color: #991b1b; border-radius: 8px; white-space: pre-line; margin: 8px 0"></div>
+          <div id="finalBettingInfoBanner" style="display: none; padding: 10px; border: 1px solid #bfdbfe; background: #eff6ff; color: #1e3a8a; border-radius: 8px; white-space: pre-line; margin: 8px 0"></div>
           <pre id="candidatesMetaPre">(loading)</pre>
           <div class="row" style="gap: 10px; margin-top: 10px; align-items: flex-start">
             <div style="flex: 1; min-width: 320px">
@@ -307,6 +349,8 @@
           </div>
           <pre id="liquidationPre">(loading)</pre>
         </div>
+          </div>
+        </details>
       </main>
     </div>
     <script src="./runtime-config.js"></script>
@@ -330,7 +374,7 @@
         const paperPre = document.getElementById("paperReadinessPre");
         const healthPre = document.getElementById("readinessHealthPre");
         const readinessBuilderPre = document.getElementById("readinessBuilderPre");
-        const marketModePre = document.getElementById("liveMarketModePre");
+        const marketModePre = document.getElementById("liveMarketModePreDebug");
         const liveDashMetaPre = document.getElementById("liveDashboardMetaPre");
         const livePositionsBody = document.getElementById("livePositionsBody");
         const liveOpenOrdersBody = document.getElementById("liveOpenOrdersBody");
@@ -339,6 +383,7 @@
         const warn = document.getElementById("liveWarnPanel");
         const candidatesMetaPre = document.getElementById("candidatesMetaPre");
         const candidateErrorBanner = document.getElementById("candidateErrorBanner");
+        const finalBettingInfoBanner = document.getElementById("finalBettingInfoBanner");
         const candidatesFetchSummaryPre = document.getElementById("candidatesFetchSummaryPre");
         const candidatesDiagnosticsPre = document.getElementById("candidatesDiagnosticsPre");
         const candidatesRejectionsPre = document.getElementById("candidatesRejectionsPre");
@@ -352,7 +397,13 @@
         const liveExecMsg = document.getElementById("liveExecMsg");
         const autoGuardedPre = document.getElementById("autoGuardedPre");
         const autoGuardedBanner = document.getElementById("autoGuardedBanner");
+        const paperBypassBadge = document.getElementById("paperBypassBadge");
+        const readinessBuilderBanner = document.getElementById("readinessBuilderBanner");
+        const autoStrategySelect = document.getElementById("autoStrategySelect");
+        const autoGuardedSummary = document.getElementById("autoGuardedSummary");
+        const autoInspectTbody = document.getElementById("autoInspectTbody");
         let latestPlanId = "";
+        let latestFinalBettingEntryWindow = null;
 
         async function refresh() {
           const [stR, rtR, prR, ksR, dhR, rbR] = await Promise.all([
@@ -522,6 +573,15 @@
         function renderAutoGuardedBanner(d) {
           const blockers = (d && d.safety && Array.isArray(d.safety.blockers)) ? d.safety.blockers : [];
           const hasReadiness = blockers.some(function (x) { return String(x || "").indexOf("PAPER_READINESS_FAILED") >= 0; });
+          const pr = (d && d.safety && d.safety.paper_readiness) ? d.safety.paper_readiness : {};
+          const bypassed = !!(pr && pr.bypassed);
+          if (bypassed) {
+            paperBypassBadge.style.display = "block";
+            paperBypassBadge.textContent = "위험: paper readiness 우회 중";
+          } else {
+            paperBypassBadge.style.display = "none";
+            paperBypassBadge.textContent = "";
+          }
           if (d && d.blocked_before_order) {
             autoGuardedBanner.style.display = "block";
             autoGuardedBanner.textContent = "주문은 차단됨, 후보 평가는 완료됨";
@@ -540,7 +600,89 @@
           const r = await authFetch(backendUrl + "/api/live-exec/auto-guarded/status", { headers: await authHeaders() });
           const d = await r.json().catch(function () { return {}; });
           autoGuardedPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
-          if (r.ok) renderAutoGuardedBanner(d);
+          if (r.ok) {
+            try {
+              await refreshLiveMarketMode();
+            } catch (e) {
+            }
+            if (d && d.final_betting_entry_window) latestFinalBettingEntryWindow = d.final_betting_entry_window;
+            renderAutoGuardedBanner(d);
+            try {
+              const sel = d && d.state ? (d.state.selected_strategy || "") : "";
+              if (sel) autoStrategySelect.value = String(sel);
+            } catch (e) {
+            }
+            const st = d && d.state ? d.state : {};
+            const loop = d && d.loop ? d.loop : {};
+            const ev = st && st.last_eval_summary ? st.last_eval_summary : null;
+            const mode = String(document.getElementById("liveMarketMode").value || "auto");
+            const modeLbl = mode === "defensive" ? "passive(defensive)" : mode;
+            const enabled = !!(st && st.enabled);
+            const loopRunning = !!(loop && loop.running);
+            const canPlace = !!(d && d.can_place_auto_order);
+            const canTick = !!(d && d.can_tick);
+            const evalAt = st && st.last_eval_at_utc ? String(st.last_eval_at_utc) : "";
+            const effectiveStrategy = st && st.selected_strategy ? String(st.selected_strategy) : (d && d.config ? String(d.config.live_auto_strategy_env || "") : "");
+            const lines = [];
+            lines.push("running=" + (enabled ? "YES" : "NO") + " (loop=" + (loopRunning ? "ON" : "OFF") + ")  can_tick=" + (canTick ? "YES" : "NO"));
+            lines.push("strategy=" + (effectiveStrategy || "unknown") + "  mode=" + modeLbl + "  can_place_auto_order=" + (canPlace ? "YES" : "NO"));
+            if (evalAt) lines.push("last_eval_at_utc=" + evalAt);
+            if (ev && Array.isArray(ev.strategies)) {
+              const parts = [];
+              for (const s of ev.strategies) {
+                if (!s) continue;
+                parts.push(
+                  String(s.strategy_id || "") +
+                  ": evaluated=" + String(!!s.evaluated) +
+                  " cand=" + String(s.candidate_count || 0) +
+                  " rej=" + String(s.rejected_count || 0) +
+                  " sub=" + String(s.submitted_count || 0) +
+                  (s.skipped_reason ? (" (" + String(s.skipped_reason || "") + ")") : "")
+                );
+              }
+              if (parts.length) lines.push("summary=" + parts.join(" | "));
+            }
+            autoGuardedSummary.textContent = lines.join("\n");
+
+            const candSet = new Set();
+            try {
+              const cs = Array.isArray(st.last_eval_candidates) ? st.last_eval_candidates : [];
+              for (const c of cs) {
+                if (!c) continue;
+                const sid = String(c.source_strategy || c.strategy_id || "");
+                const sym = String(c.symbol || "");
+                if (sid && sym) candSet.add(sid + "::" + sym);
+              }
+            } catch (e) {
+            }
+            const seen = new Set();
+            const rowsHtml = [];
+            if (ev && Array.isArray(ev.strategies)) {
+              for (const s of ev.strategies) {
+                if (!s) continue;
+                const sid = String(s.strategy_id || "");
+                const xs = Array.isArray(s.inspected_symbols) ? s.inspected_symbols : [];
+                for (const x of xs) {
+                  const sym = x && x.symbol ? String(x.symbol) : "";
+                  const uid = x && x.uid ? String(x.uid) : (sym ? ("sym:" + sym) : "");
+                  if (!sid || !sym) continue;
+                  const key = sid + "::" + sym;
+                  if (seen.has(key)) continue;
+                  seen.add(key);
+                  const isCand = candSet.has(key);
+                  rowsHtml.push(
+                    "<td>" + sid + "</td>" +
+                    "<td>" + sym + "</td>" +
+                    "<td>" + uid + "</td>" +
+                    "<td>" + (isCand ? "<span class=\"pill\">YES</span>" : "<span class=\"pill\">NO</span>") + "</td>"
+                  );
+                  if (rowsHtml.length >= 120) break;
+                }
+                if (rowsHtml.length >= 120) break;
+              }
+            }
+            fillTbody(autoInspectTbody, rowsHtml);
+          }
         }
 
         async function refreshReadinessBuilder() {
@@ -548,6 +690,28 @@
           const r = await authFetch(backendUrl + "/api/live-trading/readiness-builder/status?market=" + encodeURIComponent(mk), { headers: await authHeaders() });
           const d = await r.json().catch(function () { return {}; });
           readinessBuilderPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
+          const st = d && d.state ? d.state : null;
+          const lad = st && st.last_action_detail ? st.last_action_detail : null;
+          const det = lad && lad.detail ? lad.detail : null;
+          if (det && String(det.type || "") === "kis_token_failed") {
+            readinessBuilderBanner.style.display = "block";
+            const sc = det.status_code != null ? String(det.status_code) : "unknown";
+            const ec = det.error_code ? String(det.error_code) : "unknown";
+            const base = det.kis_base_url ? String(det.kis_base_url) : (det.base_url_selected ? String(det.base_url_selected) : "");
+            const pth = det.kis_http_path ? String(det.kis_http_path) : "";
+            const kind = det.base_url_kind ? String(det.base_url_kind) : "";
+            const hint = det.hint ? String(det.hint) : "";
+            readinessBuilderBanner.textContent =
+              "Readiness Builder: KIS 토큰 발급 실패\n" +
+              "- base_url=" + base + (kind ? (" (" + kind + ")") : "") + "\n" +
+              "- endpoint=" + (base && pth ? (base + pth) : pth) + "\n" +
+              "- status_code=" + sc + "\n" +
+              "- error_code=" + ec + "\n" +
+              "- hint=" + (hint || "없음");
+          } else {
+            readinessBuilderBanner.style.display = "none";
+            readinessBuilderBanner.textContent = "";
+          }
         }
 
         async function startReadinessBuilder() {
@@ -575,7 +739,7 @@
         }
 
         async function startAutoGuarded() {
-          const payload = { actor: "desktop-user", reason: String(document.getElementById("reasonInput").value || "start_auto") };
+          const payload = { actor: "desktop-user", reason: String(document.getElementById("reasonInput").value || "start_auto"), strategy: String(autoStrategySelect.value || "") };
           const r = await authFetch(backendUrl + "/api/live-exec/auto-guarded/start", {
             method: "POST",
             headers: await authHeaders({ "Content-Type": "application/json" }),
@@ -601,7 +765,18 @@
         }
 
         async function tickAutoGuarded() {
-          const r = await authFetch(backendUrl + "/api/live-exec/auto-guarded/tick", { method: "POST", headers: await authHeaders() });
+          try {
+            const stR = await authFetch(backendUrl + "/api/live-exec/auto-guarded/status", { headers: await authHeaders() });
+            const stD = await stR.json().catch(function () { return {}; });
+            if (stR.ok && stD && stD.state && stD.state.enabled === false) {
+              autoGuardedBanner.style.display = "block";
+              autoGuardedBanner.textContent = "Auto Guarded가 꺼져 있습니다. Start를 먼저 누르세요.";
+              return;
+            }
+          } catch (e) {
+          }
+          const stSel = String(autoStrategySelect.value || "");
+          const r = await authFetch(backendUrl + "/api/live-exec/auto-guarded/tick?strategy=" + encodeURIComponent(stSel), { method: "POST", headers: await authHeaders() });
           const d = await r.json().catch(function () { return {}; });
           autoGuardedPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
           if (r.ok) renderAutoGuardedBanner(d);
@@ -689,6 +864,25 @@
             nowKst = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Seoul" }).replace(" ", "T") + "+09:00";
           } catch (e) {
             nowKst = "";
+          }
+          if (notInEntryWindow && (out && Number(out.candidate_count || 0) === 0)) {
+            finalBettingInfoBanner.style.display = "block";
+            let nowHhmm = "";
+            try {
+              nowHhmm = String(nowKst || "").slice(11, 16);
+            } catch (e) {
+              nowHhmm = "";
+            }
+            let win = "14:30~15:20";
+            if (latestFinalBettingEntryWindow && latestFinalBettingEntryWindow.window_start_hhmm && latestFinalBettingEntryWindow.window_end_hhmm) {
+              const s = String(latestFinalBettingEntryWindow.window_start_hhmm || "");
+              const e2 = String(latestFinalBettingEntryWindow.window_end_hhmm || "");
+              if (s.length >= 4 && e2.length >= 4) win = s.slice(0, 2) + ":" + s.slice(2, 4) + "~" + e2.slice(0, 2) + ":" + e2.slice(2, 4);
+            }
+            finalBettingInfoBanner.textContent = "후보 0개는 정상입니다.\n현재 " + (nowHhmm || "KST") + ", 진입 구간 " + win;
+          } else {
+            finalBettingInfoBanner.style.display = "none";
+            finalBettingInfoBanner.textContent = "";
           }
 
           const counts = _fetchCounts(fs);

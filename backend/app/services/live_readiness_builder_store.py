@@ -22,6 +22,7 @@ class LiveReadinessBuilderState:
     attempts: int = 0
     status: str | None = None
     last_action: str | None = None
+    last_action_detail: dict[str, Any] = field(default_factory=dict)
     last_error: str | None = None
     last_health: dict[str, Any] = field(default_factory=dict)
     updated_at_utc: str = field(default_factory=_utc_now_iso)
@@ -64,6 +65,7 @@ class LiveReadinessBuilderStore:
                         attempts=int(r.get("attempts") or 0),
                         status=r.get("status"),
                         last_action=r.get("last_action"),
+                        last_action_detail=dict(r.get("last_action_detail") or {}),
                         last_error=r.get("last_error"),
                         last_health=dict(r.get("last_health") or {}),
                         updated_at_utc=str(r.get("updated_at_utc") or _utc_now_iso()),

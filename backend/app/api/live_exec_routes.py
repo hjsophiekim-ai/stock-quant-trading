@@ -48,6 +48,7 @@ class LiveExecStopRequest(BaseModel):
 class LiveAutoGuardedStartRequest(BaseModel):
     actor: str = Field(default="user", min_length=1, max_length=64)
     reason: str = Field(default="start_live_auto_guarded", min_length=3, max_length=240)
+    strategy: str | None = None
 
 
 class LiveAutoGuardedStopRequest(BaseModel):
@@ -338,16 +339,33 @@ def live_auto_guarded_status(authorization: str | None = Header(default=None)) -
             issues.append({"type": "paper_readiness", "code": "AUDIT_ROWS_ZERO", "message": "order_audit rows = 0"})
     except Exception:
         pass
+    entry_window: dict[str, Any] = {"now_kst": None, "window_start_hhmm": None, "window_end_hhmm": None, "in_window": None}
     try:
+        from app.config import get_settings as get_app_settings
         from app.strategy.intraday_common import kst_now, parse_krx_hhmm
 
+        acfg = get_app_settings()
         now = kst_now()
         t = now.time()
-        t0 = parse_krx_hhmm("143000")
-        t1 = parse_krx_hhmm("152000")
+        start_raw = str(getattr(acfg, "paper_final_betting_entry_start_hhmm", "143000") or "143000")
+        end_raw = str(getattr(acfg, "paper_final_betting_entry_end_hhmm", "152000") or "152000")
+        t0 = parse_krx_hhmm(start_raw, default=parse_krx_hhmm("143000"))
+        t1 = parse_krx_hhmm(end_raw, default=parse_krx_hhmm("152000"))
         in_window = bool(t0 <= t <= t1)
+        entry_window = {
+            "now_kst": now.isoformat(),
+            "window_start_hhmm": t0.strftime("%H%M"),
+            "window_end_hhmm": t1.strftime("%H%M"),
+            "in_window": bool(in_window),
+        }
         if not in_window:
-            issues.append({"type": "final_betting", "code": "NOT_IN_ENTRY_WINDOW_ESTIMATE", "message": f"now_kst={now.isoformat()} window=14:30~15:20"})
+            issues.append(
+                {
+                    "type": "final_betting",
+                    "code": "NOT_IN_ENTRY_WINDOW",
+                    "message": f"now_kst={now.isoformat()} window={t0.strftime('%H:%M')}~{t1.strftime('%H:%M')}",
+                }
+            )
     except Exception:
         pass
     return {
@@ -363,6 +381,8 @@ def live_auto_guarded_status(authorization: str | None = Header(default=None)) -
             "live_auto_loop_interval_sec": int(getattr(cfg, "live_auto_loop_interval_sec", 60)),
             "live_auto_loop_max_consecutive_failures": int(getattr(cfg, "live_auto_loop_max_consecutive_failures", 5)),
             "live_auto_loop_auto_resume": bool(getattr(cfg, "live_auto_loop_auto_resume", False)),
+            "live_auto_strategy_env": str(getattr(cfg, "live_auto_strategy", "") or ""),
+            "live_auto_strategies_env": str(getattr(cfg, "live_auto_strategies", "") or ""),
             "limits": {
                 "max_order_krw": float(getattr(cfg, "live_auto_max_order_krw", 0.0)),
                 "max_daily_buy_count": int(getattr(cfg, "live_auto_max_daily_buy_count", 0)),
@@ -384,6 +404,8 @@ def live_auto_guarded_status(authorization: str | None = Header(default=None)) -
         "safety": safety,
         "readiness_builder": {"state": rb_state.__dict__, "loop": rb_loop},
         "issues": issues,
+        "final_betting_entry_window": entry_window,
+        "can_auto_order": bool(can_auto_order),
         "can_place_auto_order": bool(can_auto_order and bool(st.enabled)),
         "can_tick": bool((cfg.trading_mode or "").strip().lower() == "live" and (cfg.execution_mode or "").strip().lower() == "live_auto_guarded"),
     }
@@ -402,6 +424,8 @@ def live_auto_guarded_start(payload: LiveAutoGuardedStartRequest, authorization:
         raise HTTPException(status_code=409, detail="live_exec_session_running")
     st = _auto_store(cfg).get(user.id)
     st.enabled = True
+    if payload.strategy is not None:
+        st.selected_strategy = str(payload.strategy or "").strip() or None
     st.started_at_utc = datetime.now(timezone.utc).isoformat()
     st.stopped_at_utc = None
     st.updated_at_utc = datetime.now(timezone.utc).isoformat()
@@ -463,13 +487,22 @@ def live_auto_guarded_stop(payload: LiveAutoGuardedStopRequest, authorization: s
 
 
 @router.post("/auto-guarded/tick")
-def live_auto_guarded_tick(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+def live_auto_guarded_tick(
+    authorization: str | None = Header(default=None),
+    strategy: str | None = Query(default=None),
+) -> dict[str, Any]:
     cfg = get_backend_settings()
     user = _current_user(authorization)
     if (cfg.execution_mode or "").strip().lower() != "live_auto_guarded":
         raise HTTPException(status_code=403, detail="EXECUTION_MODE=live_auto_guarded required")
     safety = runtime_safety_validation_for_user_id(cfg, user.id)
     svc = get_broker_service()
+    if strategy is not None:
+        astore = _auto_store(cfg)
+        st = astore.get(user.id)
+        st.selected_strategy = str(strategy or "").strip() or None
+        st.updated_at_utc = datetime.now(timezone.utc).isoformat()
+        astore.upsert(st)
     out = tick_live_auto_guarded(cfg=cfg, broker_service=svc, user_id=user.id, safety=safety)
     return out
 

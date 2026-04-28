@@ -18,9 +18,14 @@ class LiveAutoGuardedState:
     enabled: bool = False
     started_at_utc: str | None = None
     stopped_at_utc: str | None = None
+    selected_strategy: str | None = None
     last_tick_at_utc: str | None = None
     last_decision: str | None = None
     last_reason: str | None = None
+    last_eval_at_utc: str | None = None
+    last_eval_strategies: list[str] = field(default_factory=list)
+    last_eval_summary: dict[str, Any] = field(default_factory=dict)
+    last_eval_candidates: list[dict[str, Any]] = field(default_factory=list)
     cooldown_until_utc: str | None = None
     daily_buy_count: int = 0
     daily_sell_count: int = 0
@@ -62,9 +67,14 @@ class LiveAutoGuardedStore:
                         enabled=bool(r.get("enabled")),
                         started_at_utc=r.get("started_at_utc"),
                         stopped_at_utc=r.get("stopped_at_utc"),
+                        selected_strategy=r.get("selected_strategy"),
                         last_tick_at_utc=r.get("last_tick_at_utc"),
                         last_decision=r.get("last_decision"),
                         last_reason=r.get("last_reason"),
+                        last_eval_at_utc=r.get("last_eval_at_utc"),
+                        last_eval_strategies=list(r.get("last_eval_strategies") or []),
+                        last_eval_summary=dict(r.get("last_eval_summary") or {}),
+                        last_eval_candidates=list(r.get("last_eval_candidates") or []),
                         cooldown_until_utc=r.get("cooldown_until_utc"),
                         daily_buy_count=int(r.get("daily_buy_count") or 0),
                         daily_sell_count=int(r.get("daily_sell_count") or 0),
@@ -108,9 +118,14 @@ class LiveAutoGuardedStore:
                         enabled=bool(r.get("enabled")),
                         started_at_utc=r.get("started_at_utc"),
                         stopped_at_utc=r.get("stopped_at_utc"),
+                            selected_strategy=r.get("selected_strategy"),
                         last_tick_at_utc=r.get("last_tick_at_utc"),
                         last_decision=r.get("last_decision"),
                         last_reason=r.get("last_reason"),
+                            last_eval_at_utc=r.get("last_eval_at_utc"),
+                            last_eval_strategies=list(r.get("last_eval_strategies") or []),
+                            last_eval_summary=dict(r.get("last_eval_summary") or {}),
+                            last_eval_candidates=list(r.get("last_eval_candidates") or []),
                         cooldown_until_utc=r.get("cooldown_until_utc"),
                         daily_buy_count=int(r.get("daily_buy_count") or 0),
                         daily_sell_count=int(r.get("daily_sell_count") or 0),

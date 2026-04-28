@@ -87,7 +87,7 @@ def _maybe_start_paper_session(
         return False, f"paper_session_start_failed: {exc}"
 
 
-def _warmup_order_audit(cfg: BackendSettings) -> tuple[int, str]:
+def _warmup_order_audit(cfg: BackendSettings) -> tuple[int, str, dict[str, Any]]:
     try:
         from types import SimpleNamespace
 
@@ -115,12 +115,41 @@ def _warmup_order_audit(cfg: BackendSettings) -> tuple[int, str]:
     base = resolved_kis_api_base_url(bcfg)
     tr = issue_access_token(app_key=bcfg.kis_app_key, app_secret=bcfg.kis_app_secret, base_url=base, timeout_sec=12)
     if not tr.ok or not tr.access_token:
-        return 0, "kis_token_failed"
+        hint = ""
+        base_kind = "mock" if "openapivts" in str(base or "").lower() else "live"
+        expected_kind = "mock" if str(getattr(bcfg, "trading_mode", "paper") or "paper").strip().lower() == "paper" else "live"
+        if base_kind != expected_kind:
+            hint = f"base url mismatch: expected {expected_kind} but got {base_kind}"
+        if str(tr.error_code or "") == "MISSING_APP_KEY":
+            hint = "KIS_APP_KEY 누락"
+        elif str(tr.error_code or "") == "MISSING_APP_SECRET":
+            hint = "KIS_APP_SECRET 누락"
+        elif str(tr.error_code or "") == "INVALID_BASE_URL":
+            hint = "KIS_BASE_URL/KIS_MOCK_BASE_URL 형식 오류"
+        elif str(tr.error_code or "").startswith("TOKEN_"):
+            hint = "토큰 엔드포인트 응답 오류/레이트리밋 가능"
+        detail = {
+            "type": "kis_token_failed",
+            "trading_mode": str(getattr(bcfg, "trading_mode", "") or ""),
+            "base_url_selected": str(base or ""),
+            "base_url_kind": base_kind,
+            "expected_base_url_kind": expected_kind,
+            "app_key_present": bool(getattr(bcfg, "kis_app_key", "") or ""),
+            "app_secret_present": bool(getattr(bcfg, "kis_app_secret", "") or ""),
+            "error_code": str(tr.error_code or ""),
+            "status_code": int(tr.status_code) if tr.status_code is not None else None,
+            "kis_base_url": str(tr.kis_base_url or ""),
+            "kis_http_path": str(tr.kis_http_path or ""),
+            "kis_tr_id": str(getattr(tr, "kis_tr_id", "") or ""),
+            "message": str(tr.message or ""),
+            "hint": hint,
+        }
+        return (0, "kis_token_failed", detail)
     client = build_kis_client_for_backend(bcfg, access_token=tr.access_token)
     lookback = max(int(bcfg.screener_lookback_days), 120)
     prices_df = build_kis_stock_universe(client, symbols, lookback_calendar_days=lookback)
     if prices_df.empty:
-        return 0, "daily_universe_fetch_failed"
+        return 0, "daily_universe_fetch_failed", {"type": "daily_universe_fetch_failed"}
     quotes: dict[str, Any] = {}
     for sym in symbols[: min(30, len(symbols))]:
         try:
@@ -148,7 +177,7 @@ def _warmup_order_audit(cfg: BackendSettings) -> tuple[int, str]:
                 n += 1
             except Exception:
                 continue
-        return n, "signals_evaluated"
+        return n, "signals_evaluated", {"type": "signals_evaluated", "evaluated": int(n)}
     per = list(getattr(snap, "per_symbol", []) or [])
     if per:
         sym = str(getattr(per[0], "symbol", "") or "")
@@ -159,8 +188,8 @@ def _warmup_order_audit(cfg: BackendSettings) -> tuple[int, str]:
                 OrderSignal(symbol=sym, side="buy", quantity=1, limit_price=None, stop_loss_pct=None, strategy_id="readiness_builder", signal_id=None),
                 rs,
             )
-            return 1, "fallback_symbol_evaluated"
-    return 0, "no_symbols_evaluated"
+            return 1, "fallback_symbol_evaluated", {"type": "fallback_symbol_evaluated", "symbol": sym}
+    return 0, "no_symbols_evaluated", {"type": "no_symbols_evaluated"}
 
 
 def tick_readiness_builder_once(
@@ -181,6 +210,7 @@ def tick_readiness_builder_once(
     st.last_tick_at_utc = _utc_now_iso()
     st.updated_at_utc = _utc_now_iso()
     st.attempts = int(st.attempts or 0) + 1
+    st.last_action_detail = {}
 
     health0 = paper_readiness_data_health(cfg)
     target_pnl = int(getattr(cfg, "readiness_builder_target_pnl_rows", 10) or 10)
@@ -214,13 +244,19 @@ def tick_readiness_builder_once(
         st.last_action = "portfolio_sync_failed"
         _event(cfg, "READINESS_BUILDER_PORTFOLIO_SYNC", {"user_id": uid, "ok": False, "error": sync_err})
 
-    audit_n, audit_msg = (0, "skipped")
+    audit_n, audit_msg, audit_detail = (0, "skipped", {})
     try:
-        audit_n, audit_msg = warmup_func(cfg)
+        res = warmup_func(cfg)
+        if isinstance(res, tuple) and len(res) >= 3:
+            audit_n, audit_msg, audit_detail = res[0], res[1], dict(res[2] or {})
+        else:
+            audit_n, audit_msg = res[0], res[1]
         st.last_action = f"order_audit_warmup:{audit_msg}"
+        st.last_action_detail = {"stage": "order_audit_warmup", "message": str(audit_msg or ""), "detail": audit_detail}
         _event(cfg, "READINESS_BUILDER_ORDER_AUDIT", {"user_id": uid, "evaluated": int(audit_n), "message": audit_msg})
     except Exception as exc:
         st.last_action = "order_audit_warmup_failed"
+        st.last_action_detail = {"stage": "order_audit_warmup", "message": "exception", "detail": {"type": "warmup_exception", "error": str(exc)}}
         _event(cfg, "READINESS_BUILDER_ORDER_AUDIT", {"user_id": uid, "evaluated": 0, "error": str(exc)})
 
     health1 = paper_readiness_data_health(cfg)

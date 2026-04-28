@@ -52,6 +52,9 @@ class BackendSettings(BaseSettings):
     live_auto_require_market_open: bool = Field(default=True, alias="LIVE_AUTO_REQUIRE_MARKET_OPEN")
     live_auto_tick_interval_sec: int = Field(default=30, ge=3, le=600, alias="LIVE_AUTO_TICK_INTERVAL_SEC")
 
+    live_auto_strategy: str = Field(default="final_betting_v1", alias="LIVE_AUTO_STRATEGY")
+    live_auto_strategies: str = Field(default="", alias="LIVE_AUTO_STRATEGIES")
+
     live_auto_loop_enabled: bool = Field(default=False, alias="LIVE_AUTO_LOOP_ENABLED")
     live_auto_loop_interval_sec: int = Field(default=60, ge=3, le=3600, alias="LIVE_AUTO_LOOP_INTERVAL_SEC")
     live_auto_loop_max_consecutive_failures: int = Field(default=5, ge=1, le=100, alias="LIVE_AUTO_LOOP_MAX_CONSECUTIVE_FAILURES")
@@ -60,6 +63,7 @@ class BackendSettings(BaseSettings):
     # 실거래 잠금 해제 전 모의(paper) 자동 검증 게이트
     live_unlock_enabled: bool = Field(default=True, alias="LIVE_UNLOCK_ENABLED")
     live_unlock_bypass: bool = Field(default=False, alias="LIVE_UNLOCK_BYPASS")
+    live_unlock_bypass_confirm: bool = Field(default=False, alias="LIVE_UNLOCK_BYPASS_CONFIRM")
     live_unlock_lookback_days: int = Field(default=30, ge=7, le=365, alias="LIVE_UNLOCK_LOOKBACK_DAYS")
     live_unlock_min_pnl_samples: int = Field(default=10, ge=3, le=500, alias="LIVE_UNLOCK_MIN_PNL_SAMPLES")
     live_unlock_min_period_return_pct: float = Field(default=0.0, ge=-50.0, le=200.0, alias="LIVE_UNLOCK_MIN_PERIOD_RETURN_PCT")

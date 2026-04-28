@@ -258,11 +258,23 @@ def evaluate_paper_readiness(settings: Any) -> PaperReadinessResult:
         )
 
     if cfg.live_unlock_bypass:
+        env = str(getattr(cfg, "app_env", "") or "").strip().lower()
+        confirm = bool(getattr(cfg, "live_unlock_bypass_confirm", False))
+        if env == "production" and (not confirm):
+            return PaperReadinessResult(
+                ok=False,
+                bypassed=False,
+                user_message_ko="운영 환경에서는 LIVE_UNLOCK_BYPASS_CONFIRM=true가 없으면 LIVE_UNLOCK_BYPASS를 적용할 수 없습니다.",
+                technical_summary="LIVE_UNLOCK_BYPASS=true (requires LIVE_UNLOCK_BYPASS_CONFIRM=true in production)",
+            )
         return PaperReadinessResult(
             ok=True,
             bypassed=True,
-            user_message_ko="운영자 테스트 모드: 모의 검증 게이트를 건너뜁니다.",
-            technical_summary="LIVE_UNLOCK_BYPASS=true",
+            user_message_ko="위험: 운영자 테스트 모드로 모의 검증 게이트를 우회합니다.",
+            technical_summary=(
+                "LIVE_UNLOCK_BYPASS=true"
+                + ("; LIVE_UNLOCK_BYPASS_CONFIRM=true" if (env == "production" and confirm) else "")
+            ),
         )
 
     root = resolve_portfolio_data_dir(cfg)

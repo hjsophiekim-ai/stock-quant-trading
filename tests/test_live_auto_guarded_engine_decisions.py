@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 
 def _cfg(tmp_path, **overrides):
@@ -250,6 +252,7 @@ def test_safety_failure_does_not_call_place_order_but_returns_candidate_diagnost
 
     monkeypatch.setattr(eng, "get_performance_signal", lambda *_a, **_k: SimpleNamespace(score_adjustment=0.0, buy_blocked=False, reason="ok", metrics={}))
     monkeypatch.setattr(eng, "build_kis_client_for_live_user", lambda **_kw: _Client({"AAA": 98.0}))
+    monkeypatch.setattr(eng, "kst_now", lambda: datetime(2026, 4, 28, 14, 40, tzinfo=ZoneInfo("Asia/Seoul")))
 
     class FakeBroker:
         def __init__(self):
