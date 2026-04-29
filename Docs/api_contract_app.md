@@ -136,6 +136,33 @@ Base: `/api/live-trading`
   - req: `{ enabled: boolean, reason: string, actor?: string }`
   - res: `{ ok: boolean } & LiveTradingStatusResponse`
 
+### 8a) Live Auto Guarded (전략별 자동매매)
+
+Base: `/api/live-trading`
+
+목표:
+
+- 사용자 선택 전략을 서버 상태에 저장하고, tick 결과(후보/주문/거절)를 일관된 구조로 제공
+- runtime safety를 통과하지 못하면 실주문은 차단하되, 마지막 평가 결과는 유지
+
+- `GET /auto-guarded/status` (Authorization: Bearer)
+  - res: `LiveAutoGuardedStatusResponse`
+- `POST /auto-guarded/start` (Authorization: Bearer)
+  - req: `LiveAutoGuardedStartRequest`
+  - res: `LiveAutoGuardedStartResponse`
+- `POST /auto-guarded/stop` (Authorization: Bearer)
+  - req: `LiveAutoGuardedStopRequest`
+  - res: `LiveAutoGuardedStopResponse`
+- `POST /auto-guarded/mode` (Authorization: Bearer)
+  - req: `LiveAutoGuardedModeUpdateRequest`
+  - res: `{ ok: true, strategy_id: string, mode: LiveAutoMode }`
+- `POST /auto-guarded/tick` (Authorization: Bearer)
+  - res: `LiveAutoGuardedTickResponse`
+
+- `GET /compact-dashboard` (Authorization: Bearer)
+  - res: `LiveTradingCompactDashboardResponse`
+  - `include_raw=true` query를 주면 raw 블록을 추가로 반환(기본은 최소 필드)
+
 ## 8b) Live Prep API (Manual Approval)
 
 Base: `/api/live-prep`
@@ -148,6 +175,8 @@ Base: `/api/live-prep`
   - res: `{ ok: true, items: LiveCandidate[], shadow: object }`
 - `POST /hf-shadow/generate?strategy_id=scalp_rsi_flag_hf_v1` (Authorization: Bearer)
   - res: `{ ok: true, order_allowed: false, generated_orders: object[] }` (신호/가상주문 출력)
+- `POST /swing-shadow/generate?strategy_id=swing_relaxed_v2` (Authorization: Bearer)
+  - res: `{ ok: true, order_allowed: false, generated_orders: object[] }` (일봉 기반 shadow 후보/신호 출력)
 - `GET /sell-only-arm/status` (Authorization: Bearer)
   - res: `{ ok: true, state: SellOnlyArmState | null }`
 - `POST /sell-only-arm` (Authorization: Bearer)

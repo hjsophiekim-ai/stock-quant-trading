@@ -19,7 +19,7 @@ from backend.app.core.config import get_backend_settings, is_execution_mode_allo
 from backend.app.engine.live_prep_engine import (
     generate_final_betting_shadow_candidates,
     generate_intraday_shadow_report,
-    generate_swing_relaxed_v2_shadow_report,
+    generate_swing_shadow_report,
 )
 from backend.app.risk.audit import append_risk_event
 from backend.app.services.live_exec_session_store import LiveExecSessionStore
@@ -341,6 +341,7 @@ def generate_hf_shadow(
 
 @router.post("/swing-shadow/generate")
 def generate_swing_shadow(
+    strategy_id: str = Query(..., min_length=3, max_length=64),
     authorization: str | None = Header(default=None),
     execution_mode: str | None = Query(default=None),
 ) -> dict[str, Any]:
@@ -348,18 +349,17 @@ def generate_swing_shadow(
     _require_live_prep_enabled_for_user(user.id, hint_execution_mode=execution_mode)
     cfg = get_backend_settings()
     svc = get_broker_service()
-    manual_mode = LiveMarketModeStore(cfg.live_market_mode_store_json).get(user.id, market="domestic")
-    out = generate_swing_relaxed_v2_shadow_report(
+    out = generate_swing_shadow_report(
         broker_service=svc,
         backend_settings=cfg,
         user_id=user.id,
-        manual_market_mode=manual_mode,
+        strategy_id=str(strategy_id),
     )
     if not out.get("ok"):
         raise HTTPException(status_code=503, detail=out)
     _append_event(
         "LIVE_PREP_SWING_SHADOW_GENERATED",
-        {"actor": user.id, "strategy_id": "swing_relaxed_v2", "generated_order_count": int(out.get("generated_order_count") or 0)},
+        {"actor": user.id, "strategy_id": str(strategy_id), "generated_order_count": int(out.get("generated_order_count") or 0)},
     )
     return out
 

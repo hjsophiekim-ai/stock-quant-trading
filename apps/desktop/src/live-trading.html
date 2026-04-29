@@ -3,28 +3,40 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Live Trading · 국내</title>
+    <title>국내 Live</title>
     <style>
       body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; background: #f8fafc; }
       .layout { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
       .sidebar { background: #0f172a; color: #e2e8f0; padding: 16px; }
-      .sidebar button { width: 100%; margin-bottom: 8px; padding: 8px; cursor: pointer; }
+      .sidebar button { width: 100%; margin-bottom: 8px; padding: 8px; cursor: pointer; border: 0; border-radius: 8px; background: #1e293b; color: #e2e8f0; }
+      .sidebar button:hover { background: #334155; }
       .main { padding: 16px; }
-      .panel { background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px; margin-bottom: 10px; }
-      .warn { background: #fef2f2; border-color: #fecaca; color: #7f1d1d; }
-      .ok { background: #ecfdf5; border-color: #86efac; color: #166534; }
-      details.panel > summary { cursor: pointer; font-weight: 700; }
-      pre { white-space: pre-wrap; font-size: 0.82rem; font-family: ui-monospace, monospace; margin: 0; }
-      .muted { color: #64748b; font-size: 0.86rem; }
-      label { display: block; margin-top: 8px; font-weight: 700; }
-      input[type="text"] { width: min(640px, 100%); padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; }
-      .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+      .panel { background: #fff; border: 1px solid #cbd5e1; border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+      .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+      .summary { display: grid; grid-template-columns: repeat(7, minmax(120px, 1fr)); gap: 10px; }
+      .card { border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px; background: #fff; }
+      .label { font-size: 0.78rem; color: #64748b; margin-bottom: 6px; }
+      .value { font-weight: 800; font-size: 0.95rem; }
+      .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; border: 1px solid #cbd5e1; }
+      .badge.ok { background: #ecfdf5; border-color: #86efac; color: #166534; }
+      .badge.bad { background: #fef2f2; border-color: #fecaca; color: #7f1d1d; }
+      .badge.warn { background: #fffbeb; border-color: #f59e0b; color: #7c2d12; }
+      .tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+      .tab { padding: 8px 10px; border-radius: 999px; border: 1px solid #cbd5e1; background: #fff; cursor: pointer; }
+      .tab.active { background: #0f172a; color: #e2e8f0; border-color: #0f172a; }
+      .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .controls .panel { margin-bottom: 0; }
+      select, button { padding: 8px 10px; border-radius: 10px; border: 1px solid #cbd5e1; background: #fff; cursor: pointer; }
+      button.primary { background: #0ea5e9; color: #fff; border-color: #0ea5e9; }
+      button.danger { background: #ef4444; color: #fff; border-color: #ef4444; }
+      button.ghost { background: #fff; }
       table { width: 100%; border-collapse: collapse; }
-      th, td { border-bottom: 1px solid #e2e8f0; padding: 8px; text-align: left; font-size: 0.9rem; }
+      th, td { border-bottom: 1px solid #e2e8f0; padding: 8px; text-align: left; font-size: 0.9rem; vertical-align: top; }
       th { background: #f1f5f9; }
-      .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid #cbd5e1; font-size: 0.8rem; }
-      .pill.warn { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
-      .pill.ok { background: #ecfdf5; border-color: #86efac; color: #166534; }
+      .muted { color: #64748b; font-size: 0.88rem; }
+      .empty { padding: 12px; color: #475569; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 12px; }
+      pre { white-space: pre-wrap; font-size: 0.82rem; font-family: ui-monospace, monospace; margin: 0; }
+      details > summary { cursor: pointer; font-weight: 800; }
     </style>
   </head>
   <body>
@@ -41,75 +53,140 @@
         <button id="logoutBtn" type="button">Logout</button>
       </aside>
       <main class="main">
-        <h2>국내 Live Trading · market=domestic</h2>
-        <p class="muted">
-          실거래는 다중 잠금 해제 + 모의검증 통과 전에는 차단됩니다. Live는 Paper처럼 “전략 선택 → Start/Stop → 상태 확인” 흐름으로 운용합니다.
-        </p>
-        <div id="liveWarnPanel" class="panel warn"></div>
-
-        <div id="topStatusBar" class="panel">(loading)</div>
-
-        <div id="strategyTabs" class="row" style="margin: 10px 0"></div>
-
-        <div id="strategyMain" class="panel">
-          <div id="strategyControlCard"></div>
-          <div class="row" style="gap: 12px; align-items: flex-start; margin-top: 10px">
-            <div style="flex: 1; min-width: 420px">
-              <h3 style="margin: 0 0 6px 0">Shadow 후보</h3>
-              <div id="shadowEmpty" class="muted" style="display:none; white-space: pre-line; margin: 8px 0"></div>
-              <div style="overflow: auto">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>상태</th>
-                      <th>종목명/코드</th>
-                      <th>방향</th>
-                      <th>수량</th>
-                      <th>기준가</th>
-                      <th>점수</th>
-                      <th>이유</th>
-                      <th>갱신시간</th>
-                    </tr>
-                  </thead>
-                  <tbody id="shadowTbody"></tbody>
-                </table>
-              </div>
+        <div class="panel">
+          <div class="row" style="justify-content: space-between">
+            <div>
+              <div style="font-weight: 900; font-size: 1.1rem">국내 Live</div>
+              <div class="muted" id="statusLine">로딩 중…</div>
             </div>
-            <div style="flex: 1; min-width: 420px">
-              <h3 style="margin: 0 0 6px 0">Auto-run 판단/주문</h3>
-              <div id="autoNotice" class="muted" style="display:none; white-space: pre-line; margin: 8px 0"></div>
-              <div style="overflow: auto">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>상태</th>
-                      <th>전략</th>
-                      <th>종목</th>
-                      <th>방향</th>
-                      <th>수량</th>
-                      <th>예상금액</th>
-                      <th>점수</th>
-                      <th>거절 이유</th>
-                      <th>주문 ID</th>
-                      <th>시간</th>
-                    </tr>
-                  </thead>
-                  <tbody id="autoTbody"></tbody>
-                </table>
-              </div>
-              <div id="autoBadges" class="row" style="margin-top: 10px"></div>
+            <div class="row">
+              <span id="bypassBadge" class="badge warn" style="display:none">검증 우회 중</span>
+              <button id="refreshBtn" class="ghost" type="button">새로고침</button>
+              <button id="emergencyStopBtn" class="danger" type="button">Emergency Stop</button>
             </div>
           </div>
         </div>
 
-        <div id="accountPanel" class="panel">
-          <h3 style="margin-top: 0">주문/계좌 현황</h3>
-          <div class="row" style="margin-top: 8px">
-            <button id="refreshAccountBtn" type="button">새로고침</button>
+        <div class="panel">
+          <div class="summary">
+            <div class="card">
+              <div class="label">실주문 가능</div>
+              <div class="value" id="liveOrderValue">-</div>
+            </div>
+            <div class="card">
+              <div class="label">자동매매</div>
+              <div class="value" id="autoEnabledValue">-</div>
+            </div>
+            <div class="card">
+              <div class="label">선택 전략</div>
+              <div class="value" id="selectedStrategyValue">-</div>
+            </div>
+            <div class="card">
+              <div class="label">Market Mode</div>
+              <div class="value" id="marketModeValue">-</div>
+            </div>
+            <div class="card">
+              <div class="label">최근 Tick</div>
+              <div class="value" id="lastTickValue">-</div>
+            </div>
+            <div class="card">
+              <div class="label">오늘 매수/매도 수</div>
+              <div class="value" id="dailyCountsValue">-</div>
+            </div>
+            <div class="card">
+              <div class="label">차단 사유</div>
+              <div class="value" id="blockersValue">-</div>
+            </div>
           </div>
-          <div class="row" style="gap: 12px; align-items: flex-start; margin-top: 10px">
-            <div style="flex: 1; min-width: 360px">
-              <h4 style="margin: 0 0 6px 0">보유 포지션</h4>
+        </div>
+
+        <div class="panel">
+          <div class="tabs" id="strategyTabs"></div>
+        </div>
+
+        <div class="controls">
+          <div class="panel">
+            <div class="row" style="justify-content: space-between">
+              <div>
+                <div style="font-weight: 900" id="strategyTitle">-</div>
+                <div class="muted" id="strategyHint">-</div>
+              </div>
+              <div class="row">
+                <select id="modeSelect">
+                  <option value="aggressive">aggressive</option>
+                  <option value="auto">auto</option>
+                  <option value="passive">passive</option>
+                </select>
+                <button id="saveModeBtn" type="button">모드 저장</button>
+              </div>
+            </div>
+            <div class="row" style="margin-top: 10px">
+              <button id="shadowBtn" type="button">후보만 보기</button>
+              <button id="startAutoBtn" class="primary" type="button">자동매매 시작</button>
+              <button id="stopAutoBtn" type="button">자동매매 중지</button>
+              <button id="tickBtn" type="button">지금 한 번 판단</button>
+              <span class="badge" id="autoLoopBadge">자동 루프 OFF</span>
+            </div>
+          </div>
+          <div class="panel">
+            <div style="font-weight: 900; margin-bottom: 8px">체결/계좌 요약</div>
+            <div class="muted" id="accountSummary">-</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div style="font-weight: 900; margin-bottom: 8px">Shadow 후보</div>
+          <div id="shadowEmpty" class="empty" style="display:none"></div>
+          <div style="overflow:auto">
+            <table>
+              <thead>
+                <tr>
+                  <th>상태</th>
+                  <th>종목</th>
+                  <th>방향</th>
+                  <th>수량</th>
+                  <th>기준가</th>
+                  <th>점수</th>
+                  <th>이유</th>
+                  <th>갱신시간</th>
+                </tr>
+              </thead>
+              <tbody id="shadowTbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div style="font-weight: 900; margin-bottom: 8px">마지막 판단 결과(후보/주문/거절/차단)</div>
+          <div id="autoEmpty" class="empty" style="display:none"></div>
+          <div style="overflow:auto">
+            <table>
+              <thead>
+                <tr>
+                  <th>상태</th>
+                  <th>전략</th>
+                  <th>종목</th>
+                  <th>방향</th>
+                  <th>수량</th>
+                  <th>예상금액</th>
+                  <th>점수</th>
+                  <th>이유</th>
+                  <th>주문 ID</th>
+                  <th>시간</th>
+                </tr>
+              </thead>
+              <tbody id="autoTbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="row" style="justify-content: space-between; margin-bottom: 8px">
+            <div style="font-weight: 900">주문/계좌 현황</div>
+          </div>
+          <div class="row" style="align-items:flex-start">
+            <div style="flex:1; min-width: 360px">
+              <div style="font-weight: 800; margin-bottom: 6px">보유 포지션</div>
               <div style="overflow:auto">
                 <table>
                   <thead>
@@ -126,8 +203,8 @@
                 </table>
               </div>
             </div>
-            <div style="flex: 1; min-width: 360px">
-              <h4 style="margin: 0 0 6px 0">미체결 주문</h4>
+            <div style="flex:1; min-width: 360px">
+              <div style="font-weight: 800; margin-bottom: 6px">미체결 주문</div>
               <div style="overflow:auto">
                 <table>
                   <thead>
@@ -144,8 +221,8 @@
                 </table>
               </div>
             </div>
-            <div style="flex: 1; min-width: 360px">
-              <h4 style="margin: 0 0 6px 0">최근 체결</h4>
+            <div style="flex:1; min-width: 360px">
+              <div style="font-weight: 800; margin-bottom: 6px">최근 체결</div>
               <div style="overflow:auto">
                 <table>
                   <thead>
@@ -158,1789 +235,60 @@
                       <th>체결시간</th>
                     </tr>
                   </thead>
-                  <tbody id="fillsTbody"></tbody>
+                  <tbody id="fillTbody"></tbody>
                 </table>
               </div>
             </div>
           </div>
         </div>
 
-        <details id="debugDetails" class="panel">
-          <summary>상세보기 / 진단 로그</summary>
-          <div style="margin-top: 10px">
-
-          <details class="panel">
-            <summary>Live 실행 콘솔</summary>
-            <div style="margin-top: 10px">
-            <h3 style="margin-top: 0">Live 실행 콘솔</h3>
-          <div class="row" style="margin: 10px 0">
-            <label style="margin-top: 0">Strategy</label>
-            <select id="liveStrategyId" style="padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px">
-              <option value="final_betting_v1">final_betting_v1</option>
-              <option value="scalp_rsi_flag_hf_v1">scalp_rsi_flag_hf_v1</option>
-              <option value="scalp_macd_rsi_3m_v1">scalp_macd_rsi_3m_v1</option>
-              <option value="swing_relaxed_v2">swing_relaxed_v2</option>
-            </select>
-
-            <label style="margin-top: 0">Execution Mode</label>
-            <select id="liveExecMode" style="padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px">
-              <option value="live_shadow">live_shadow</option>
-              <option value="live_manual_approval">live_manual_approval</option>
-            </select>
-
-            <label style="margin-top: 0">Market</label>
-            <select id="liveMarket" style="padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px">
-              <option value="domestic">domestic</option>
-            </select>
-          </div>
-          <div class="row" style="margin-top: 10px">
-            <button id="liveStartBtn" type="button">Start</button>
-            <button id="liveStopBtn" type="button">Stop</button>
-            <button id="liveTickBtn" type="button">Tick Now</button>
-            <button id="liveExecRefreshBtn" type="button">Refresh Exec</button>
-          </div>
-          <p id="liveExecMsg" class="muted" style="white-space: pre-line"></p>
-          <pre id="liveExecPre">(loading)</pre>
+        <div class="panel">
+          <details>
+            <summary>상세보기 / 진단</summary>
+            <div class="muted" style="margin-top: 8px">Raw/콘솔/진단 정보는 기본 숨김이며, 필요할 때만 펼쳐서 확인합니다.</div>
+            <div class="row" style="align-items:flex-start; margin-top: 10px">
+              <div style="flex:1; min-width: 320px">
+                <div style="font-weight: 800; margin-bottom: 6px">Raw compact-dashboard</div>
+                <pre id="rawCompact"></pre>
+              </div>
+              <div style="flex:1; min-width: 320px">
+                <div style="font-weight: 800; margin-bottom: 6px">Raw shadow</div>
+                <pre id="rawShadow"></pre>
+              </div>
+              <div style="flex:1; min-width: 320px">
+                <div style="font-weight: 800; margin-bottom: 6px">Raw tick</div>
+                <pre id="rawTick"></pre>
+              </div>
+            </div>
+            <div class="row" style="margin-top: 12px">
+              <button id="diagRefreshBtn" type="button">진단 새로고침</button>
+              <button id="sellOnlyRefreshBtn" type="button">Sell-Only 상태</button>
+              <button id="sellOnlyToggleBtn" type="button">Sell-Only 토글</button>
+              <button id="liqRefreshBtn" type="button">전체 청산 계획</button>
+              <button id="liqPrepareBtn" type="button">청산 준비</button>
+              <button id="liqExecuteBtn" type="button">청산 실행</button>
+            </div>
+            <div class="row" style="align-items:flex-start; margin-top: 10px">
+              <div style="flex:1; min-width: 320px">
+                <div style="font-weight: 800; margin-bottom: 6px">Live 실행 콘솔 Raw</div>
+                <pre id="rawLiveExec"></pre>
+              </div>
+              <div style="flex:1; min-width: 320px">
+                <div style="font-weight: 800; margin-bottom: 6px">Sell-Only Raw</div>
+                <pre id="rawSellOnly"></pre>
+              </div>
+              <div style="flex:1; min-width: 320px">
+                <div style="font-weight: 800; margin-bottom: 6px">Liquidation Raw</div>
+                <pre id="rawLiquidation"></pre>
+              </div>
             </div>
           </details>
-          </div>
-        </details>
-        <div id="autoGuardedPanel" class="panel warn">
-          <h3 style="margin-top: 0">Live Auto Guarded</h3>
-          <p class="muted">
-            이 모드에서만 자동 실주문이 가능하며, EXECUTION_MODE=live_auto_guarded + LIVE_AUTO_ORDER=true + LIVE_TRADING 다중 승인 + 런타임 안전 검증을 모두 통과해야 주문이 제출됩니다.
-          </p>
-          <div class="row" style="margin: 10px 0">
-            <button id="autoStatusBtn" type="button">Status</button>
-            <button id="autoStartBtn" type="button">Start</button>
-            <button id="autoStopBtn" type="button">Stop</button>
-            <button id="autoTickBtn" type="button">Tick</button>
-            <label style="margin-left: 8px; margin-top: 0">전략</label>
-            <select id="autoStrategySelect" style="padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px">
-              <option value="final_betting_v1">final_betting_v1</option>
-              <option value="scalp_rsi_flag_hf_v1">scalp_rsi_flag_hf_v1</option>
-              <option value="scalp_macd_rsi_3m_v1">scalp_macd_rsi_3m_v1</option>
-              <option value="swing_relaxed_v2">swing_relaxed_v2</option>
-              <option value="multi">multi</option>
-            </select>
-            <label style="margin-left: 8px; margin-top: 0">Mode</label>
-            <select id="liveMarketMode" style="padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px">
-              <option value="auto">auto</option>
-              <option value="aggressive">aggressive</option>
-              <option value="neutral">neutral</option>
-              <option value="defensive">passive(defensive)</option>
-            </select>
-            <button id="saveLiveMarketModeBtn" type="button">Save Mode</button>
-            <button id="refreshLiveMarketModeBtn" type="button">Refresh Mode</button>
-          </div>
-          <div id="autoGuardedBanner" style="display: none; padding: 10px; border: 1px solid #fed7aa; background: #fff7ed; color: #9a3412; border-radius: 8px; white-space: pre-line; margin: 8px 0"></div>
-          <div id="paperBypassBadge" style="display: none; padding: 8px 10px; border: 1px solid #fca5a5; background: #fef2f2; color: #991b1b; border-radius: 8px; white-space: pre-line; margin: 8px 0; font-weight: 600"></div>
-          <div id="autoGuardedSummary" class="muted" style="white-space: pre-line; margin-top: 6px">(loading)</div>
-          <div style="overflow: auto; margin-top: 10px">
-            <table>
-              <thead>
-                <tr>
-                  <th>Strategy</th>
-                  <th>Symbol</th>
-                  <th>UID</th>
-                  <th>Candidate</th>
-                </tr>
-              </thead>
-              <tbody id="autoInspectTbody"></tbody>
-            </table>
-          </div>
-        </div>
-        <details class="panel">
-          <summary>상세보기</summary>
-          <div style="margin-top: 10px">
-          <h3 style="margin-top: 0">Auto Guarded Raw</h3>
-          <pre id="autoGuardedPre">(loading)</pre>
-        <div class="panel">
-          <h3 style="margin-top: 0">상태 요약</h3>
-          <h4 style="margin: 10px 0 6px 0">Saved operator intent</h4>
-          <pre id="savedIntentPre">(loading)</pre>
-          <h4 style="margin: 10px 0 6px 0">Effective unlock blockers</h4>
-          <pre id="effectiveBlockersPre">(loading)</pre>
-          <h4 style="margin: 10px 0 6px 0">Raw status</h4>
-          <pre id="statusPre">(loading)</pre>
-        </div>
-        <div class="panel">
-          <h3 style="margin-top: 0">런타임 안전 검증</h3>
-          <pre id="runtimePre">(loading)</pre>
-        </div>
-        <div class="panel">
-          <h3 style="margin-top: 0">Paper Readiness</h3>
-          <pre id="paperReadinessPre">(loading)</pre>
-        </div>
-        <div class="panel">
-          <h3 style="margin-top: 0">Readiness 데이터 상태</h3>
-          <pre id="readinessHealthPre">(loading)</pre>
-        </div>
-        <div class="panel warn">
-          <h3 style="margin-top: 0">실거래 준비 자동 생성(Readiness Builder)</h3>
-          <p class="muted">paper readiness가 부족하면 자동으로 데이터 생성(포트폴리오 sync + 주문 리스크 평가 로그)을 시도합니다. readiness 통과 전에는 실주문이 절대 제출되지 않습니다.</p>
-          <div class="row" style="margin: 10px 0">
-            <button id="rbRefreshBtn" type="button">Status</button>
-            <button id="rbStartBtn" type="button">Start Builder</button>
-            <button id="rbStopBtn" type="button">Stop Builder</button>
-            <button id="rbTickBtn" type="button">Run Once</button>
-          </div>
-          <div id="readinessBuilderBanner" style="display: none; padding: 10px; border: 1px solid #fecaca; background: #fef2f2; color: #991b1b; border-radius: 8px; white-space: pre-line; margin: 8px 0"></div>
-          <pre id="readinessBuilderPre">(loading)</pre>
-        </div>
-        <div class="panel">
-          <h3 style="margin-top: 0">Market Mode (Live)</h3>
-          <p class="muted">auto / aggressive / neutral / defensive 를 Live shadow 계산에 동일하게 적용합니다.</p>
-          <div class="row" style="margin-top: 8px">
-            <label style="margin-top: 0">Manual override</label>
-            <select id="liveMarketModeDebug" style="padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px">
-              <option value="auto">auto</option>
-              <option value="aggressive">aggressive</option>
-              <option value="neutral">neutral</option>
-              <option value="defensive">passive(defensive)</option>
-            </select>
-            <button id="saveLiveMarketModeBtnDebug" type="button">Save Market Mode</button>
-            <button id="refreshLiveMarketModeBtnDebug" type="button">Refresh Market Mode</button>
-          </div>
-          <pre id="liveMarketModePreDebug">(loading)</pre>
-        </div>
-        <div class="panel">
-          <h3 style="margin-top: 0">계정 스냅샷 (Live)</h3>
-          <p class="muted">최근 체결/미체결/보유 포지션을 KIS 조회 기반으로 표시합니다.</p>
-          <div class="row" style="margin-top: 8px">
-            <button id="refreshLiveDashboardBtn" type="button">Refresh Snapshot</button>
-          </div>
-          <pre id="liveDashboardMetaPre">(loading)</pre>
-          <h4 style="margin: 10px 0 6px 0">보유 포지션</h4>
-          <div style="overflow: auto">
-            <table>
-              <thead>
-                <tr>
-                  <th>Symbol</th>
-                  <th>Qty</th>
-                  <th>Avg</th>
-                </tr>
-              </thead>
-              <tbody id="livePositionsBody"></tbody>
-            </table>
-          </div>
-          <h4 style="margin: 10px 0 6px 0">미체결 주문</h4>
-          <div style="overflow: auto">
-            <table>
-              <thead>
-                <tr>
-                  <th>Order</th>
-                  <th>Symbol</th>
-                  <th>Side</th>
-                  <th>Rem</th>
-                  <th>Price</th>
-                  <th>Created</th>
-                </tr>
-              </thead>
-              <tbody id="liveOpenOrdersBody"></tbody>
-            </table>
-          </div>
-          <h4 style="margin: 10px 0 6px 0">최근 체결</h4>
-          <div style="overflow: auto">
-            <table>
-              <thead>
-                <tr>
-                  <th>Symbol</th>
-                  <th>Side</th>
-                  <th>Qty</th>
-                  <th>Price</th>
-                  <th>Order</th>
-                  <th>Filled</th>
-                </tr>
-              </thead>
-              <tbody id="liveFillsBody"></tbody>
-            </table>
-          </div>
-        </div>
-        <div class="panel">
-          <h3 style="margin-top: 0">잠금 해제 토글</h3>
-          <div class="row">
-            <label><input id="flagLive" type="checkbox" /> Live Enable Flag</label>
-            <label><input id="flagConfirm2" type="checkbox" /> Secondary Confirm</label>
-            <label><input id="flagExtra" type="checkbox" /> Extra Approval</label>
-            <label><input id="flagEmergency" type="checkbox" /> Emergency Stop</label>
-          </div>
-          <label for="reasonInput">변경 사유</label>
-          <input id="reasonInput" type="text" value="운영자 수동 승인" />
-          <div class="row" style="margin-top: 10px">
-            <button id="saveBtn" type="button">Save Safety Settings</button>
-            <button id="saveEmergencyBtn" type="button">Save Emergency Stop</button>
-            <button id="refreshBtn" type="button">새로고침</button>
-          </div>
-          <p id="saveMessage" class="muted" style="white-space: pre-line"></p>
         </div>
 
-        <div class="panel warn">
-          <h3 style="margin-top: 0">final_betting 후보/승인(세션 연동)</h3>
-          <p class="muted">
-            이 목록은 시스템이 코드 정의된 유니버스에서 계산한 후보입니다. 실주문은 수동 승인 없이는 제출되지 않습니다.
-          </p>
-          <div class="row" style="margin: 10px 0">
-            <button id="genFinalBettingBtn" type="button">Tick Now(후보 생성)</button>
-            <button id="refreshCandidatesBtn" type="button">후보 새로고침</button>
-          </div>
-          <div id="candidateErrorBanner" style="display: none; padding: 10px; border: 1px solid #fecaca; background: #fef2f2; color: #991b1b; border-radius: 8px; white-space: pre-line; margin: 8px 0"></div>
-          <div id="finalBettingInfoBanner" style="display: none; padding: 10px; border: 1px solid #bfdbfe; background: #eff6ff; color: #1e3a8a; border-radius: 8px; white-space: pre-line; margin: 8px 0"></div>
-          <pre id="candidatesMetaPre">(loading)</pre>
-          <div class="row" style="gap: 10px; margin-top: 10px; align-items: flex-start">
-            <div style="flex: 1; min-width: 320px">
-              <div class="muted" style="font-size: 12px; margin-bottom: 6px">shadow.fetch_summary</div>
-              <pre id="candidatesFetchSummaryPre">(loading)</pre>
-            </div>
-            <div style="flex: 1; min-width: 320px">
-              <div class="muted" style="font-size: 12px; margin-bottom: 6px">last_diagnostics (top 20)</div>
-              <pre id="candidatesDiagnosticsPre">(loading)</pre>
-            </div>
-          </div>
-          <div style="margin-top: 10px">
-            <div class="muted" style="font-size: 12px; margin-bottom: 6px">종목별 탈락 이유</div>
-            <pre id="candidatesRejectionsPre">(loading)</pre>
-          </div>
-          <div style="overflow: auto; margin-top: 10px">
-            <table>
-              <thead>
-                <tr>
-                  <th>Status</th>
-                  <th>Symbol</th>
-                  <th>Qty</th>
-                  <th>Price</th>
-                  <th>SL%</th>
-                  <th>Score</th>
-                  <th>Rationale</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody id="candidatesTbody"></tbody>
-            </table>
-          </div>
-          <p id="candidateActionMsg" class="muted" style="white-space: pre-line"></p>
-        </div>
-
-        <div class="panel">
-          <h3 style="margin-top: 0">Intraday Shadow · 검토 종목(세션 연동)</h3>
-          <p class="muted">live_shadow 계산 결과에서 “지금 검토되는 매수/매도 후보”를 요약해 보여줍니다. (주문은 발생하지 않습니다)</p>
-          <div class="row" style="margin: 10px 0">
-            <label style="margin-top: 0">Strategy</label>
-            <select id="hfStrategyId" style="padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px">
-              <option value="scalp_rsi_flag_hf_v1">scalp_rsi_flag_hf_v1</option>
-              <option value="scalp_macd_rsi_3m_v1">scalp_macd_rsi_3m_v1</option>
-              <option value="scalp_momentum_v1">scalp_momentum_v1</option>
-            </select>
-            <button id="genHfShadowBtn" type="button">Generate Shadow</button>
-          </div>
-          <pre id="hfShadowMetaPre">(loading)</pre>
-          <div style="overflow: auto; margin-top: 10px">
-            <table>
-              <thead>
-                <tr>
-                  <th>Side</th>
-                  <th>Symbol</th>
-                  <th>Qty</th>
-                  <th>Price</th>
-                  <th>Strategy</th>
-                  <th>Reason</th>
-                </tr>
-              </thead>
-              <tbody id="hfShadowTbody"></tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="panel warn">
-          <h3 style="margin-top: 0">Sell-Only Arm (final_betting 전용)</h3>
-          <p class="muted">명시적으로 무장한 날짜의 오전 윈도우에서, final_betting 포지션에 한해 매도 신호가 나올 때만 자동 제출됩니다.</p>
-          <div class="row" style="margin: 10px 0">
-            <label><input id="sellOnlyEnabled" type="checkbox" /> Enable</label>
-            <input id="sellOnlyDate" type="text" placeholder="YYYYMMDD (기본: 내일)" style="max-width: 180px" />
-            <button id="saveSellOnlyArmBtn" type="button">Save Arm</button>
-            <button id="refreshSellOnlyArmBtn" type="button">Refresh Arm</button>
-          </div>
-          <pre id="sellOnlyArmPre">(loading)</pre>
-        </div>
-
-        <div class="panel warn">
-          <h3 style="margin-top: 0">전체 청산(1클릭) · 준비/실행</h3>
-          <p class="muted">다음날 아침 클릭 한 번으로 전체 보유 종목 청산을 실행하기 위해, 미리 청산 플랜을 생성합니다.</p>
-          <div class="row" style="margin: 10px 0">
-            <label><input id="liqUseMarket" type="checkbox" checked /> Market(가격 0)</label>
-            <button id="prepareLiquidationBtn" type="button">Prepare</button>
-            <button id="refreshLiquidationBtn" type="button">Plans</button>
-            <input id="liqConfirm" type="text" value="LIQUIDATE_ALL" style="max-width: 180px" />
-            <button id="executeLiquidationBtn" type="button">Execute Latest</button>
-          </div>
-          <pre id="liquidationPre">(loading)</pre>
-        </div>
-          </div>
-        </details>
+        <script src="./runtime-config.js"></script>
+        <script src="./auth-session.js"></script>
+        <script src="./live-trading.js"></script>
       </main>
     </div>
-    <script src="./runtime-config.js"></script>
-    <script src="./auth-session.js"></script>
-    <script>
-      (async function () {
-        const backendUrl = effectiveBackendUrl();
-        const pre = await ensureValidBackendSession(backendUrl);
-        if (!pre.ok) { window.location.href = "./login.html"; return; }
-
-        async function authHeaders(extra) {
-          const s = await resolveDesktopSession();
-          const t = s && s.accessToken ? s.accessToken : "";
-          return Object.assign({ Authorization: "Bearer " + t }, extra || {});
-        }
-
-        const STRATEGY_META = {
-          final_betting_v1: { title: "final_betting_v1", desc: "장후반 후보(14:30~15:20)", window: "14:30~15:20" },
-          scalp_rsi_flag_hf_v1: { title: "scalp_rsi_flag_hf_v1", desc: "장중 단타 후보", window: "장중" },
-          scalp_macd_rsi_3m_v1: { title: "scalp_macd_rsi_3m_v1", desc: "장중 단타 후보", window: "장중" },
-          swing_relaxed_v2: { title: "swing_relaxed_v2", desc: "장중/스윙 후보", window: "장중/스윙" },
-          multi: { title: "multi", desc: "여러 전략을 합쳐 평가", window: "전략별" },
-        };
-        const STRATEGY_TABS = ["final_betting_v1", "scalp_rsi_flag_hf_v1", "scalp_macd_rsi_3m_v1", "swing_relaxed_v2", "multi"];
-        const MODE_OPTIONS = [
-          { value: "aggressive", label: "aggressive" },
-          { value: "auto", label: "auto" },
-          { value: "defensive", label: "passive" },
-        ];
-
-        const appState = {
-          selectedStrategy: "final_betting_v1",
-          selectedModeByStrategy: {},
-          latestShadowByStrategy: {},
-          latestAutoByStrategy: {},
-          lastLiveStatus: null,
-          lastAutoStatus: null,
-          lastMarketMode: null,
-          lastAccount: null,
-        };
-
-        const topStatusBar = document.getElementById("topStatusBar");
-        const strategyTabs = document.getElementById("strategyTabs");
-        const strategyControlCard = document.getElementById("strategyControlCard");
-        const shadowTbody = document.getElementById("shadowTbody");
-        const shadowEmpty = document.getElementById("shadowEmpty");
-        const autoTbody = document.getElementById("autoTbody");
-        const autoNotice = document.getElementById("autoNotice");
-        const autoBadges = document.getElementById("autoBadges");
-        const posTbody = document.getElementById("posTbody");
-        const ooTbody = document.getElementById("ooTbody");
-        const fillsTbody = document.getElementById("fillsTbody");
-
-        function fmt(x) {
-          if (x === null || x === undefined) return "";
-          return String(x);
-        }
-        function fmtNum(x) {
-          if (x === null || x === undefined || x === "") return "";
-          const n = Number(x);
-          if (!Number.isFinite(n)) return "";
-          return n.toLocaleString("en-US");
-        }
-        function fmtPct(x) {
-          const n = Number(x);
-          if (!Number.isFinite(n)) return "";
-          return (n * 100).toFixed(2) + "%";
-        }
-        function fillTbodySimple(tbody, rows) {
-          tbody.innerHTML = "";
-          for (const cells of rows) {
-            const tr = document.createElement("tr");
-            tr.innerHTML = cells.map(function (c) { return "<td>" + c + "</td>"; }).join("");
-            tbody.appendChild(tr);
-          }
-        }
-        function pill(text, tone) {
-          const cls = tone ? ("pill " + tone) : "pill";
-          return "<span class=\"" + cls + "\">" + fmt(text) + "</span>";
-        }
-        function modeToApi(mode) {
-          if (mode === "passive") return "defensive";
-          return mode;
-        }
-        function apiModeToUi(mode) {
-          const m = String(mode || "auto");
-          if (m === "defensive") return "passive";
-          if (m === "neutral") return "auto";
-          return m;
-        }
-
-        function renderStrategyTabs() {
-          strategyTabs.innerHTML = "";
-          for (const sid of STRATEGY_TABS) {
-            const b = document.createElement("button");
-            b.type = "button";
-            b.textContent = sid;
-            b.style.padding = "8px 10px";
-            b.style.border = "1px solid #cbd5e1";
-            b.style.borderRadius = "8px";
-            b.style.cursor = "pointer";
-            b.style.background = (sid === appState.selectedStrategy) ? "#0f172a" : "#fff";
-            b.style.color = (sid === appState.selectedStrategy) ? "#e2e8f0" : "#0f172a";
-            b.addEventListener("click", async function () {
-              appState.selectedStrategy = sid;
-              renderStrategyTabs();
-              await refreshMain({ refreshAccount: false });
-            });
-            strategyTabs.appendChild(b);
-          }
-        }
-
-        function renderTopStatusBar(status, autoStatus, marketMode) {
-          const canLive = !!(status && status.can_place_live_order);
-          const blockers = Array.isArray(status && status.pending_blocker_details) ? status.pending_blocker_details : [];
-          const one = blockers.length ? blockers[0] : null;
-          const blockedLine = one ? (String(one.code || "") + ": " + String(one.message || "")) : (String(status && status.warning_message || "") || "");
-
-          const autoEnabled = !!(autoStatus && autoStatus.state && autoStatus.state.enabled);
-          const sel = (autoStatus && autoStatus.state && autoStatus.state.selected_strategy) ? String(autoStatus.state.selected_strategy) : "";
-          const tickAt = (autoStatus && autoStatus.state && autoStatus.state.last_tick_at_utc) ? String(autoStatus.state.last_tick_at_utc) : "";
-          const buyCnt = (autoStatus && autoStatus.state) ? Number(autoStatus.state.daily_buy_count || 0) : 0;
-          const sellCnt = (autoStatus && autoStatus.state) ? Number(autoStatus.state.daily_sell_count || 0) : 0;
-          const emergency = !!(status && status.live_emergency_stop);
-          const pr = autoStatus && autoStatus.safety && autoStatus.safety.paper_readiness ? autoStatus.safety.paper_readiness : null;
-          const bypass = !!(pr && pr.bypassed);
-          const mm = apiModeToUi(marketMode && marketMode.manual_market_mode_override);
-          const bypassReq = !!(status && status.live_unlock_bypass_requested);
-          const bypassEff = !!(status && status.live_unlock_bypass_effective);
-          const bypassConfirmEnv = !!(status && status.live_unlock_bypass_confirm_env);
-
-          topStatusBar.className = "panel " + (canLive ? "ok" : "warn");
-          if (bypass) {
-            topStatusBar.style.borderColor = "#fb923c";
-            topStatusBar.style.background = "#fff7ed";
-            topStatusBar.style.color = "#9a3412";
-          } else {
-            topStatusBar.style.borderColor = "";
-            topStatusBar.style.background = "";
-            topStatusBar.style.color = "";
-          }
-          const lines = [];
-          lines.push("LIVE 주문 가능 여부: " + (canLive ? "가능" : "차단") + (canLive ? "" : (" · " + (blockedLine || "차단됨"))));
-          lines.push("자동매매: " + (autoEnabled ? "실행중" : "정지") + " · 전략: " + (sel || appState.selectedStrategy) + " · Market Mode: " + mm);
-          lines.push("최근 Tick: " + (tickAt || "-") + " · 오늘 매수/매도: " + buyCnt + "/" + sellCnt + " · Emergency Stop: " + (emergency ? "ON" : "OFF"));
-          if (bypass) lines.push("경고: 검증 우회 중(LIVE_UNLOCK_BYPASS)");
-          if (bypassReq && !bypassEff && !bypassConfirmEnv) {
-            lines.push("검증 우회를 요청했지만 LIVE_UNLOCK_BYPASS_CONFIRM=true가 없어 적용되지 않았습니다.");
-            lines.push("실주문 테스트(Render) 필요 ENV: LIVE_UNLOCK_BYPASS=true, LIVE_UNLOCK_BYPASS_CONFIRM=true");
-          }
-          topStatusBar.textContent = lines.join("\n");
-        }
-
-        function renderStrategyControl(strategyId) {
-          const meta = STRATEGY_META[strategyId] || { title: strategyId, desc: "", window: "" };
-          const st = appState.lastAutoStatus && appState.lastAutoStatus.state ? appState.lastAutoStatus.state : {};
-          const loop = appState.lastAutoStatus && appState.lastAutoStatus.loop ? appState.lastAutoStatus.loop : {};
-          const loopRunning = !!(loop && loop.running);
-          const autoEnabled = !!(st && st.enabled);
-          const canPlace = !!(appState.lastAutoStatus && appState.lastAutoStatus.can_place_auto_order);
-          const safetyOk = !!(appState.lastAutoStatus && appState.lastAutoStatus.safety && appState.lastAutoStatus.safety.ok);
-          const cooldown = st && st.cooldown_until_utc ? String(st.cooldown_until_utc) : "";
-          const buys = Number(st && st.daily_buy_count || 0);
-          const sells = Number(st && st.daily_sell_count || 0);
-          const mm = apiModeToUi(appState.lastMarketMode && appState.lastMarketMode.manual_market_mode_override);
-          const selectedMode = appState.selectedModeByStrategy[strategyId] || mm || "auto";
-          appState.selectedModeByStrategy[strategyId] = selectedMode;
-
-          const buttons = [
-            { id: "btnShadow", label: "후보만 보기", tone: "" },
-            { id: "btnStart", label: "자동매매 시작", tone: "" },
-            { id: "btnStop", label: "자동매매 중지", tone: "" },
-            { id: "btnTick", label: "지금 한 번 판단", tone: "" },
-          ];
-          strategyControlCard.innerHTML =
-            "<div class=\"row\" style=\"justify-content: space-between; align-items: flex-start\">" +
-              "<div>" +
-                "<div style=\"font-weight: 800; font-size: 1.05rem\">" + fmt(meta.title) + "</div>" +
-                "<div class=\"muted\" style=\"margin-top: 4px\">" + fmt(meta.desc) + "</div>" +
-                "<div class=\"muted\" style=\"margin-top: 2px\">추천 사용 시간: " + fmt(meta.window) + "</div>" +
-              "</div>" +
-              "<div class=\"row\" style=\"gap: 8px\">" +
-                "<label style=\"margin-top: 0\">Mode</label>" +
-                "<select id=\"modeSelect\" style=\"padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px\">" +
-                  MODE_OPTIONS.map(function (o) {
-                    const v = o.value === "defensive" ? "passive" : o.value;
-                    const sel = (v === selectedMode) ? " selected" : "";
-                    return "<option value=\"" + v + "\"" + sel + ">" + o.label + "</option>";
-                  }).join("") +
-                "</select>" +
-                "<button id=\"modeSaveBtn\" type=\"button\">모드 저장</button>" +
-              "</div>" +
-            "</div>" +
-            "<div class=\"row\" style=\"margin-top: 10px\">" +
-              buttons.map(function (b) { return "<button id=\"" + b.id + "\" type=\"button\">" + b.label + "</button>"; }).join("") +
-              "<span class=\"muted\" style=\"margin-left: 8px\">Auto Loop: " + (loopRunning ? "ON" : "OFF") + "</span>" +
-            "</div>" +
-            "<div class=\"row\" style=\"margin-top: 10px\">" +
-              pill("auto " + (autoEnabled ? "실행중" : "정지")) +
-              pill("실주문 가능 " + (canPlace ? "YES" : "NO"), canPlace ? "" : "warn") +
-              pill("safety " + (safetyOk ? "ok" : "blocked"), safetyOk ? "" : "warn") +
-              pill("cooldown " + (cooldown ? "ON" : "OFF")) +
-              pill("daily buy " + buys) +
-              pill("daily sell " + sells) +
-            "</div>";
-
-          document.getElementById("modeSelect").addEventListener("change", function (ev) {
-            appState.selectedModeByStrategy[strategyId] = String(ev.target.value || "auto");
-          });
-          document.getElementById("modeSaveBtn").addEventListener("click", async function () {
-            const want = appState.selectedModeByStrategy[strategyId] || "auto";
-            const payload = { manual_market_mode: String(modeToApi(want)) };
-            await authFetch(backendUrl + "/api/live-trading/market-mode", {
-              method: "POST",
-              headers: await authHeaders({ "Content-Type": "application/json" }),
-              body: JSON.stringify(payload),
-            });
-            await refreshMain({ refreshAccount: false });
-          });
-
-          document.getElementById("btnShadow").addEventListener("click", async function () { await runShadow(strategyId); });
-          document.getElementById("btnStart").addEventListener("click", async function () { await startAuto(strategyId); });
-          document.getElementById("btnStop").addEventListener("click", async function () { await stopAuto(); });
-          document.getElementById("btnTick").addEventListener("click", async function () { await tickAuto(strategyId); });
-        }
-
-        function renderShadowCandidates(strategyId, data) {
-          const rows = [];
-          const now = new Date().toISOString();
-          if (!data || !data.ok) {
-            shadowEmpty.style.display = "block";
-            shadowEmpty.textContent = "현재 조건을 만족한 후보가 없습니다.\n이유: " + fmt((data && (data.message || data.error)) || "데이터 부족");
-            fillTbodySimple(shadowTbody, []);
-            return;
-          }
-
-          const type = data._type || "";
-          if (type === "final_betting") {
-            const items = Array.isArray(data.items) ? data.items : [];
-            const sh = data.shadow || {};
-            const asof = String(sh.asof_utc || data.asof_utc || now);
-            for (const c of items) {
-              const sym = fmt(c.symbol);
-              const side = String(c.side || "");
-              rows.push([
-                "후보",
-                sym,
-                side === "buy" ? "매수" : (side === "sell" ? "매도" : side),
-                fmtNum(c.quantity),
-                fmtNum(c.price),
-                fmt(c.score),
-                fmt(c.rationale),
-                asof,
-              ]);
-            }
-            if (!rows.length) {
-              shadowEmpty.style.display = "block";
-              const br = sh && sh.strategy_breakdown ? sh.strategy_breakdown : {};
-              const ew = br && br.entry_window ? String(br.entry_window) : "";
-              const r1 = ew && String(ew).toLowerCase() === "closed" ? "시간대 아님" : "조건 미충족/데이터 부족";
-              shadowEmpty.textContent = "현재 조건을 만족한 후보가 없습니다.\n이유: " + r1;
-            } else {
-              shadowEmpty.style.display = "none";
-              shadowEmpty.textContent = "";
-            }
-            fillTbodySimple(shadowTbody, rows);
-            return;
-          }
-
-          const asof = String(data.asof_utc || now);
-          const orders = Array.isArray(data.generated_orders) ? data.generated_orders : [];
-          const diags = Array.isArray(data.last_diagnostics) ? data.last_diagnostics : [];
-          const diagBy = {};
-          for (const d of diags) {
-            if (d && d.symbol && !diagBy[d.symbol]) diagBy[d.symbol] = d;
-          }
-          for (const o of orders) {
-            const sym = fmt(o.symbol);
-            const side = String(o.side || "");
-            const diag = diagBy[sym] || {};
-            const score = diag && (diag.momentum_path_hits || diag.reversal_path_hits || diag.hit_count || diag.v2_hit_count) ? (diag.momentum_path_hits || diag.reversal_path_hits || diag.hit_count || diag.v2_hit_count) : "";
-            rows.push([
-              "후보",
-              sym,
-              side === "buy" ? "매수" : (side === "sell" ? "매도" : side),
-              fmtNum(o.quantity),
-              fmtNum(o.price),
-              fmt(score),
-              fmt(o.signal_reason || ""),
-              asof,
-            ]);
-          }
-          if (!rows.length) {
-            shadowEmpty.style.display = "block";
-            shadowEmpty.textContent = "현재 조건을 만족한 후보가 없습니다.\n이유: 조건 미충족/데이터 부족";
-          } else {
-            shadowEmpty.style.display = "none";
-            shadowEmpty.textContent = "";
-          }
-          fillTbodySimple(shadowTbody, rows);
-        }
-
-        function renderShadowFromAutoStatus(strategyId, autoStatus) {
-          const st = autoStatus && autoStatus.state ? autoStatus.state : {};
-          const ev = st && st.last_eval_summary ? st.last_eval_summary : null;
-          const evalAt = st && st.last_eval_at_utc ? String(st.last_eval_at_utc) : "";
-          const candidates = Array.isArray(st && st.last_eval_candidates) ? st.last_eval_candidates : [];
-          const candSet = new Set();
-          for (const c of candidates) {
-            if (!c) continue;
-            const sid = String(c.source_strategy || c.strategy_id || "");
-            const sym = String(c.symbol || "");
-            if (sid && sym) candSet.add(sid + "::" + sym);
-          }
-          if (!ev || !Array.isArray(ev.strategies)) {
-            shadowEmpty.style.display = "block";
-            shadowEmpty.textContent = "현재 조건을 만족한 후보가 없습니다.\n이유: 아직 평가 결과가 없습니다.";
-            fillTbodySimple(shadowTbody, []);
-            return;
-          }
-          const rows = [];
-          for (const s of ev.strategies) {
-            if (!s) continue;
-            const sid = String(s.strategy_id || "");
-            if (strategyId !== "multi" && sid !== strategyId) continue;
-            const xs = Array.isArray(s.inspected_symbols) ? s.inspected_symbols : [];
-            for (const x of xs) {
-              const sym = x && x.symbol ? String(x.symbol) : "";
-              if (!sym) continue;
-              const key = sid + "::" + sym;
-              const isCand = candSet.has(key);
-              rows.push([
-                isCand ? "후보" : "검토/탈락",
-                sym,
-                "",
-                "",
-                "",
-                "",
-                "",
-                evalAt || "",
-              ]);
-            }
-          }
-          if (!rows.length) {
-            shadowEmpty.style.display = "block";
-            shadowEmpty.textContent = "현재 조건을 만족한 후보가 없습니다.\n이유: inspected 목록이 비어 있습니다.";
-            fillTbodySimple(shadowTbody, []);
-            return;
-          }
-          shadowEmpty.style.display = "none";
-          shadowEmpty.textContent = "";
-          fillTbodySimple(shadowTbody, rows.slice(0, 120));
-        }
-
-        function renderAutoCandidates(strategyId, data) {
-          const rows = [];
-          const st = data && data.state ? data.state : {};
-          const when = (st && st.last_eval_at_utc) ? String(st.last_eval_at_utc) : ((data && data.evaluation && data.evaluation.now_kst) ? String(data.evaluation.now_kst) : (st && st.last_tick_at_utc ? String(st.last_tick_at_utc) : ""));
-          const candidates = Array.isArray(st && st.last_eval_candidates) ? st.last_eval_candidates : (Array.isArray(data && data.evaluated_candidates) ? data.evaluated_candidates : []);
-          const blocked = !!(data && data.blocked_before_order);
-          const safetyBlockers = Array.isArray(data && data.safety_blockers) ? data.safety_blockers : [];
-          const canPlace = !!(data && data.can_place_auto_order);
-          if (!canPlace && candidates.length) {
-            autoNotice.style.display = "block";
-            autoNotice.textContent = "후보 평가는 완료됐지만 실주문은 차단되었습니다.";
-          } else {
-            autoNotice.style.display = "none";
-            autoNotice.textContent = "";
-          }
-
-          const subs = data && data.submitted ? data.submitted : {};
-          const buys = Array.isArray(subs && subs.buys) ? subs.buys : [];
-          const submittedSet = new Set();
-          for (const b of buys) {
-            const sym = fmt(b.symbol);
-            const sid = fmt(b.source_strategy || "");
-            submittedSet.add(sid + "::" + sym);
-            rows.push([
-              "주문됨",
-              sid || strategyId,
-              sym,
-              "매수",
-              fmtNum(b.quantity),
-              "",
-              fmt(b.score),
-              "",
-              fmt(b.order_id),
-              when,
-            ]);
-          }
-
-          for (const c of candidates) {
-            const sid = fmt(c.source_strategy || c.strategy_id || "");
-            const sym = fmt(c.symbol);
-            if (!sid || !sym) continue;
-            if (strategyId !== "multi" && sid !== strategyId) continue;
-            const key = sid + "::" + sym;
-            if (submittedSet.has(key)) continue;
-            const qty = Number(c.quantity || 0);
-            const px = (c.price === null || c.price === undefined) ? null : Number(c.price);
-            const amt = (px && qty) ? (px * qty) : null;
-            const sc = (c.score === null || c.score === undefined) ? null : Number(c.score);
-            let status = "후보";
-            let reason = fmt(c.rationale || "");
-            if (blocked) {
-              status = "차단";
-              reason = safetyBlockers.length ? ("차단: " + safetyBlockers.join(",")) : "차단";
-            }
-            rows.push([
-              status,
-              sid,
-              sym,
-              "매수",
-              fmtNum(qty),
-              amt ? fmtNum(amt) : "",
-              sc !== null && Number.isFinite(sc) ? sc.toFixed(3) : "",
-              reason,
-              "",
-              when,
-            ]);
-          }
-
-          if (!rows.length) {
-            rows.push([blocked ? "차단" : "대기", strategyId, "-", "-", "-", "-", "-", blocked ? ("차단: " + safetyBlockers.join(",")) : "후보 없음", "-", when]);
-          }
-          fillTbodySimple(autoTbody, rows);
-        }
-
-        function renderAccountSnapshot(data) {
-          const pos = Array.isArray(data && data.positions) ? data.positions : [];
-          const oo = Array.isArray(data && data.open_orders) ? data.open_orders : [];
-          const ff = Array.isArray(data && data.recent_fills) ? data.recent_fills : [];
-
-          fillTbodySimple(posTbody, pos.map(function (p) {
-            const sym = fmt(p.symbol);
-            const qty = Number(p.quantity || 0);
-            const avg = Number(p.average_price || 0);
-            const cur = Number(p.current_price || p.last_price || 0);
-            const mv = (qty && cur) ? (qty * cur) : null;
-            const pnlPct = (avg && cur) ? ((cur - avg) / avg) : null;
-            return [sym, fmtNum(qty), fmtNum(avg), fmtNum(cur), mv ? fmtNum(mv) : "", pnlPct !== null ? fmtPct(pnlPct) : ""];
-          }));
-          fillTbodySimple(ooTbody, oo.map(function (o) {
-            return [fmt(o.order_id), fmt(o.symbol), fmt(o.side), fmtNum(o.remaining_quantity), fmtNum(o.price), fmt(o.created_at)];
-          }));
-          fillTbodySimple(fillsTbody, ff.map(function (f) {
-            return [fmt(f.symbol), fmt(f.side), fmtNum(f.quantity), fmtNum(f.fill_price), fmt(f.order_id), fmt(f.filled_at)];
-          }));
-        }
-
-        async function runShadow(strategyId) {
-          shadowEmpty.style.display = "none";
-          shadowEmpty.textContent = "";
-          if (strategyId === "multi") {
-            const outs = {};
-            for (const sid of ["final_betting_v1", "scalp_rsi_flag_hf_v1", "scalp_macd_rsi_3m_v1", "swing_relaxed_v2"]) {
-              try {
-                outs[sid] = await fetchShadowOne(sid);
-              } catch (e) {
-                outs[sid] = { ok: false, error: String(e || "error") };
-              }
-            }
-            const merged = { ok: true, _type: "multi", items: [], generated_orders: [], asof_utc: new Date().toISOString() };
-            for (const sid of Object.keys(outs)) {
-              const d = outs[sid];
-              if (!d || !d.ok) continue;
-              if (d._type === "final_betting") {
-                for (const c of (Array.isArray(d.items) ? d.items : [])) merged.items.push(Object.assign({ _sid: sid }, c));
-              } else {
-                for (const o of (Array.isArray(d.generated_orders) ? d.generated_orders : [])) merged.generated_orders.push(Object.assign({ _sid: sid }, o));
-              }
-            }
-            appState.latestShadowByStrategy[strategyId] = merged;
-            renderShadowCandidates(strategyId, merged);
-            return;
-          }
-          const out = await fetchShadowOne(strategyId);
-          appState.latestShadowByStrategy[strategyId] = out;
-          renderShadowCandidates(strategyId, out);
-        }
-
-        async function fetchShadowOne(strategyId) {
-          if (strategyId === "final_betting_v1") {
-            const r = await authFetch(backendUrl + "/api/live-prep/final-betting/generate?limit=5", { method: "POST", headers: await authHeaders() });
-            const d = await r.json().catch(function () { return {}; });
-            if (!r.ok) return Object.assign({ ok: false }, d.detail || d);
-            return { ok: true, _type: "final_betting", items: d.items || [], shadow: d.shadow || {} };
-          }
-          if (strategyId === "swing_relaxed_v2") {
-            const r = await authFetch(backendUrl + "/api/live-prep/swing-shadow/generate", { method: "POST", headers: await authHeaders() });
-            const d = await r.json().catch(function () { return {}; });
-            if (!r.ok) return Object.assign({ ok: false }, d.detail || d);
-            return d;
-          }
-          const r = await authFetch(backendUrl + "/api/live-prep/hf-shadow/generate?strategy_id=" + encodeURIComponent(strategyId), { method: "POST", headers: await authHeaders() });
-          const d = await r.json().catch(function () { return {}; });
-          if (!r.ok) return Object.assign({ ok: false }, d.detail || d);
-          return d;
-        }
-
-        async function startAuto(strategyId) {
-          const payload = { actor: "desktop-user", reason: "auto_start", strategy: String(strategyId) };
-          await authFetch(backendUrl + "/api/live-exec/auto-guarded/start", {
-            method: "POST",
-            headers: await authHeaders({ "Content-Type": "application/json" }),
-            body: JSON.stringify(payload),
-          });
-          await refreshMain({ refreshAccount: false });
-        }
-
-        async function stopAuto() {
-          await authFetch(backendUrl + "/api/live-exec/auto-guarded/stop", { method: "POST", headers: await authHeaders() });
-          await refreshMain({ refreshAccount: false });
-        }
-
-        async function tickAuto(strategyId) {
-          const r = await authFetch(backendUrl + "/api/live-exec/auto-guarded/tick?strategy=" + encodeURIComponent(strategyId), { method: "POST", headers: await authHeaders() });
-          const d = await r.json().catch(function () { return {}; });
-          appState.latestAutoByStrategy[strategyId] = r.ok ? d : (d.detail || d);
-          renderAutoCandidates(strategyId, appState.latestAutoByStrategy[strategyId]);
-          await refreshMain({ refreshAccount: true });
-        }
-
-        async function refreshMain(opts) {
-          const opt = opts || {};
-          const [stR, agR, mmR] = await Promise.all([
-            authFetch(backendUrl + "/api/live-trading/status", { headers: await authHeaders() }),
-            authFetch(backendUrl + "/api/live-exec/auto-guarded/status", { headers: await authHeaders() }),
-            authFetch(backendUrl + "/api/live-trading/market-mode", { headers: await authHeaders() }),
-          ]);
-          const st = await stR.json().catch(function () { return {}; });
-          const ag = await agR.json().catch(function () { return {}; });
-          const mm = await mmR.json().catch(function () { return {}; });
-          appState.lastLiveStatus = stR.ok ? st : (st.detail || st);
-          appState.lastAutoStatus = agR.ok ? ag : (ag.detail || ag);
-          appState.lastMarketMode = mmR.ok ? mm : (mm.detail || mm);
-
-          renderStrategyTabs();
-          renderTopStatusBar(appState.lastLiveStatus, appState.lastAutoStatus, appState.lastMarketMode);
-          renderStrategyControl(appState.selectedStrategy);
-
-          const sh = appState.latestShadowByStrategy[appState.selectedStrategy];
-          if (sh) {
-            renderShadowCandidates(appState.selectedStrategy, sh);
-          } else {
-            renderShadowFromAutoStatus(appState.selectedStrategy, appState.lastAutoStatus);
-          }
-          renderAutoCandidates(appState.selectedStrategy, appState.lastAutoStatus);
-          autoBadges.innerHTML = "";
-
-          if (opt.refreshAccount) {
-            const execMode = "live_shadow";
-            const ar = await authFetch(backendUrl + "/api/live-prep/dashboard-data?execution_mode=" + encodeURIComponent(execMode), { headers: await authHeaders() });
-            const ad = await ar.json().catch(function () { return {}; });
-            appState.lastAccount = ar.ok ? ad : (ad.detail || ad);
-          }
-          if (appState.lastAccount && appState.lastAccount.positions) {
-            renderAccountSnapshot(appState.lastAccount);
-          }
-        }
-
-        const statusPre = document.getElementById("statusPre");
-        const savedIntentPre = document.getElementById("savedIntentPre");
-        const effectiveBlockersPre = document.getElementById("effectiveBlockersPre");
-        const runtimePre = document.getElementById("runtimePre");
-        const paperPre = document.getElementById("paperReadinessPre");
-        const healthPre = document.getElementById("readinessHealthPre");
-        const readinessBuilderPre = document.getElementById("readinessBuilderPre");
-        const marketModePre = document.getElementById("liveMarketModePreDebug");
-        const liveDashMetaPre = document.getElementById("liveDashboardMetaPre");
-        const livePositionsBody = document.getElementById("livePositionsBody");
-        const liveOpenOrdersBody = document.getElementById("liveOpenOrdersBody");
-        const liveFillsBody = document.getElementById("liveFillsBody");
-        const saveMessage = document.getElementById("saveMessage");
-        const warn = document.getElementById("liveWarnPanel");
-        const candidatesMetaPre = document.getElementById("candidatesMetaPre");
-        const candidateErrorBanner = document.getElementById("candidateErrorBanner");
-        const finalBettingInfoBanner = document.getElementById("finalBettingInfoBanner");
-        const candidatesFetchSummaryPre = document.getElementById("candidatesFetchSummaryPre");
-        const candidatesDiagnosticsPre = document.getElementById("candidatesDiagnosticsPre");
-        const candidatesRejectionsPre = document.getElementById("candidatesRejectionsPre");
-        const candidatesTbody = document.getElementById("candidatesTbody");
-        const candidateActionMsg = document.getElementById("candidateActionMsg");
-        const hfShadowMetaPre = document.getElementById("hfShadowMetaPre");
-        const hfShadowTbody = document.getElementById("hfShadowTbody");
-        const sellOnlyArmPre = document.getElementById("sellOnlyArmPre");
-        const liquidationPre = document.getElementById("liquidationPre");
-        const liveExecPre = document.getElementById("liveExecPre");
-        const liveExecMsg = document.getElementById("liveExecMsg");
-        const autoGuardedPre = document.getElementById("autoGuardedPre");
-        const autoGuardedBanner = document.getElementById("autoGuardedBanner");
-        const paperBypassBadge = document.getElementById("paperBypassBadge");
-        const readinessBuilderBanner = document.getElementById("readinessBuilderBanner");
-        const autoStrategySelect = document.getElementById("autoStrategySelect");
-        const autoGuardedSummary = document.getElementById("autoGuardedSummary");
-        const autoInspectTbody = document.getElementById("autoInspectTbody");
-        let latestPlanId = "";
-        let latestFinalBettingEntryWindow = null;
-
-        async function refresh() {
-          const [stR, rtR, prR, ksR, dhR, rbR] = await Promise.all([
-            authFetch(backendUrl + "/api/live-trading/status"),
-            authFetch(backendUrl + "/api/live-trading/runtime-safety-validation"),
-            authFetch(backendUrl + "/api/live-trading/paper-readiness"),
-            authFetch(backendUrl + "/api/live-trading/kill-switch-status"),
-            authFetch(backendUrl + "/api/live-trading/paper-readiness-diagnostics"),
-            authFetch(backendUrl + "/api/live-trading/readiness-builder/status"),
-          ]);
-          const st = await stR.json().catch(function () { return {}; });
-          const rt = await rtR.json().catch(function () { return {}; });
-          const pr = await prR.json().catch(function () { return {}; });
-          const ks = await ksR.json().catch(function () { return {}; });
-          const dh = await dhR.json().catch(function () { return {}; });
-          const rb = await rbR.json().catch(function () { return {}; });
-          statusPre.textContent = JSON.stringify(st, null, 2);
-          savedIntentPre.textContent = JSON.stringify({
-            requested_live_trading_flag: st.requested_live_trading_flag,
-            requested_secondary_confirm_flag: st.requested_secondary_confirm_flag,
-            requested_extra_approval_flag: st.requested_extra_approval_flag,
-            settings_saved_but_not_effective: st.settings_saved_but_not_effective,
-            unlock_pending_due_to_paper_readiness: st.unlock_pending_due_to_paper_readiness,
-          }, null, 2);
-          effectiveBlockersPre.textContent = JSON.stringify({
-            effective_can_place_live_order: st.effective_can_place_live_order,
-            can_place_live_order: st.can_place_live_order,
-            pending_blockers: st.pending_blockers,
-            pending_blocker_details: st.pending_blocker_details,
-          }, null, 2);
-          runtimePre.textContent = JSON.stringify(rt, null, 2);
-          paperPre.textContent = JSON.stringify(pr, null, 2) + "\n\nkill_switch:\n" + JSON.stringify(ks, null, 2);
-          healthPre.textContent = JSON.stringify(dh, null, 2);
-          readinessBuilderPre.textContent = JSON.stringify(rb, null, 2);
-          document.getElementById("flagLive").checked = !!st.live_trading_flag;
-          document.getElementById("flagConfirm2").checked = !!st.secondary_confirm_flag;
-          document.getElementById("flagExtra").checked = !!st.extra_approval_flag;
-          if (!!st.env_live_trading && !st.operator_intent_has_history) document.getElementById("flagLive").checked = true;
-          if (!!st.env_live_trading_confirm && !st.operator_intent_has_history) document.getElementById("flagConfirm2").checked = true;
-          if (!!st.env_live_trading_extra_confirm && !st.operator_intent_has_history) document.getElementById("flagExtra").checked = true;
-          document.getElementById("flagEmergency").checked = !!st.live_emergency_stop;
-          const can = !!st.can_place_live_order;
-          warn.className = "panel " + (can ? "ok" : "warn");
-          if (can) {
-            warn.textContent = "LIVE 주문 가능 상태";
-          } else {
-            const detail = Array.isArray(st.pending_blocker_details) ? st.pending_blocker_details : [];
-            const lines = [];
-            lines.push(st.warning_message || "LIVE 주문 잠금 상태");
-            if (detail.length) {
-              lines.push("");
-              lines.push("Blockers:");
-              for (const d of detail) {
-                const code = d && d.code ? String(d.code) : "";
-                const msg = d && d.message ? String(d.message) : "";
-                lines.push("- " + (code ? (code + ": ") : "") + msg);
-              }
-            }
-            if (!!st.env_live_trading && !!st.env_live_trading_confirm && !!st.env_live_trading_extra_confirm && !st.operator_intent_has_history) {
-              lines.push("");
-              lines.push("ENV는 true 입니다. 아래 체크박스가 자동으로 켜져 보이면 Save를 눌러 APP 승인 플래그를 저장하세요.");
-            }
-            warn.textContent = lines.join("\n");
-          }
-        }
-
-        async function refreshLiveMarketMode() {
-          const r = await authFetch(backendUrl + "/api/live-trading/market-mode", { headers: await authHeaders() });
-          const d = await r.json().catch(function () { return {}; });
-          marketModePre.textContent = JSON.stringify(d, null, 2);
-          if (r.ok && d && d.manual_market_mode_override) {
-            document.getElementById("liveMarketMode").value = String(d.manual_market_mode_override);
-          }
-        }
-
-        async function saveLiveMarketMode() {
-          const payload = { manual_market_mode: String(document.getElementById("liveMarketMode").value || "auto") };
-          const r = await authFetch(backendUrl + "/api/live-trading/market-mode", {
-            method: "POST",
-            headers: await authHeaders({ "Content-Type": "application/json" }),
-            body: JSON.stringify(payload),
-          });
-          const d = await r.json().catch(function () { return {}; });
-          marketModePre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
-        }
-
-        function fillTbody(tbody, rowsHtml) {
-          tbody.innerHTML = "";
-          for (const h of rowsHtml) {
-            const tr = document.createElement("tr");
-            tr.innerHTML = h;
-            tbody.appendChild(tr);
-          }
-        }
-
-        async function refreshLiveDashboard() {
-          const execMode = String(document.getElementById("liveExecMode").value || "");
-          const r = await authFetch(backendUrl + "/api/live-prep/dashboard-data?execution_mode=" + encodeURIComponent(execMode), { headers: await authHeaders() });
-          const d = await r.json().catch(function () { return {}; });
-          if (!r.ok) {
-            liveDashMetaPre.textContent = JSON.stringify(d.detail || d, null, 2);
-            fillTbody(livePositionsBody, []);
-            fillTbody(liveOpenOrdersBody, []);
-            fillTbody(liveFillsBody, []);
-            return;
-          }
-          liveDashMetaPre.textContent = JSON.stringify({
-            asof_utc: d.asof_utc,
-            counts: d.counts,
-            manual_market_mode_override: d.manual_market_mode_override,
-          }, null, 2);
-          const pos = Array.isArray(d.positions) ? d.positions : [];
-          fillTbody(livePositionsBody, pos.map(function (p) {
-            return "<td>" + fmt(p.symbol) + "</td><td>" + fmt(p.quantity) + "</td><td>" + fmt(p.average_price) + "</td>";
-          }));
-          const oo = Array.isArray(d.open_orders) ? d.open_orders : [];
-          fillTbody(liveOpenOrdersBody, oo.map(function (o) {
-            return "<td>" + fmt(o.order_id) + "</td><td>" + fmt(o.symbol) + "</td><td>" + fmt(o.side) + "</td><td>" + fmt(o.remaining_quantity) + "</td><td>" + fmt(o.price) + "</td><td>" + fmt(o.created_at) + "</td>";
-          }));
-          const ff = Array.isArray(d.recent_fills) ? d.recent_fills : [];
-          fillTbody(liveFillsBody, ff.map(function (f) {
-            return "<td>" + fmt(f.symbol) + "</td><td>" + fmt(f.side) + "</td><td>" + fmt(f.quantity) + "</td><td>" + fmt(f.fill_price) + "</td><td>" + fmt(f.order_id) + "</td><td>" + fmt(f.filled_at) + "</td>";
-          }));
-        }
-
-        async function refreshLiveExec() {
-          const r = await authFetch(backendUrl + "/api/live-exec/status", { headers: await authHeaders() });
-          const d = await r.json().catch(function () { return {}; });
-          liveExecPre.textContent = JSON.stringify(d, null, 2);
-          if (!r.ok) {
-            liveExecMsg.textContent = JSON.stringify(d.detail || d, null, 2);
-            return;
-          }
-          const sess = d && d.session ? d.session : null;
-          if (sess) {
-            document.getElementById("liveStrategyId").value = String(sess.strategy_id || document.getElementById("liveStrategyId").value);
-            document.getElementById("liveExecMode").value = String(sess.execution_mode || document.getElementById("liveExecMode").value);
-            document.getElementById("liveMarket").value = String(sess.market || document.getElementById("liveMarket").value);
-          }
-          const startBlockers = (d.blocked && d.blocked.start_blockers) ? d.blocked.start_blockers : [];
-          const submitBlockers = (d.blocked && d.blocked.submit_blockers) ? d.blocked.submit_blockers : [];
-          const counts = d && d.counts ? d.counts : {};
-          const lines = [];
-          lines.push("running=" + String(!!d.session_running));
-          if (sess) {
-            lines.push("strategy_id=" + String(sess.strategy_id || ""));
-            lines.push("market=" + String(sess.market || ""));
-            lines.push("execution_mode=" + String(sess.execution_mode || ""));
-            lines.push("started_at_utc=" + String(sess.started_at_utc || ""));
-            lines.push("last_tick_at_utc=" + String(sess.last_tick_at_utc || ""));
-            if (sess.last_error) lines.push("last_error=" + String(sess.last_error || ""));
-          }
-          lines.push("candidate_count=" + String(counts.final_betting_candidates || 0));
-          lines.push("pending_approvals=" + String(counts.final_betting_pending_approvals || 0));
-          if (startBlockers && startBlockers.length) lines.push("\nStart blockers:\n- " + startBlockers.join("\n- "));
-          if (submitBlockers && submitBlockers.length) lines.push("\nSubmit blockers:\n- " + submitBlockers.join("\n- "));
-          liveExecMsg.textContent = lines.join("\n");
-          if (sess && sess.last_error) {
-            candidateErrorBanner.style.display = "block";
-            candidateErrorBanner.textContent = "last_error:\n" + String(sess.last_error || "");
-          } else {
-            candidateErrorBanner.style.display = "none";
-            candidateErrorBanner.textContent = "";
-          }
-        }
-
-        function renderAutoGuardedBanner(d) {
-          const blockers = (d && d.safety && Array.isArray(d.safety.blockers)) ? d.safety.blockers : [];
-          const hasReadiness = blockers.some(function (x) { return String(x || "").indexOf("PAPER_READINESS_FAILED") >= 0; });
-          const pr = (d && d.safety && d.safety.paper_readiness) ? d.safety.paper_readiness : {};
-          const bypassed = !!(pr && pr.bypassed);
-          if (bypassed) {
-            paperBypassBadge.style.display = "block";
-            paperBypassBadge.textContent = "위험: paper readiness 우회 중";
-          } else {
-            paperBypassBadge.style.display = "none";
-            paperBypassBadge.textContent = "";
-          }
-          if (d && d.blocked_before_order) {
-            autoGuardedBanner.style.display = "block";
-            autoGuardedBanner.textContent = "주문은 차단됨, 후보 평가는 완료됨";
-            return;
-          }
-          if (d && d.state && d.state.enabled && d.can_place_auto_order === false && hasReadiness) {
-            autoGuardedBanner.style.display = "block";
-            autoGuardedBanner.textContent = "Auto Guarded는 켜졌지만, 실거래 사전검증 데이터가 부족해서 주문은 아직 차단되어 있습니다. 자동 준비 작업을 실행 중입니다.";
-            return;
-          }
-          autoGuardedBanner.style.display = "none";
-          autoGuardedBanner.textContent = "";
-        }
-
-        async function refreshAutoGuarded() {
-          const r = await authFetch(backendUrl + "/api/live-exec/auto-guarded/status", { headers: await authHeaders() });
-          const d = await r.json().catch(function () { return {}; });
-          autoGuardedPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
-          if (r.ok) {
-            try {
-              await refreshLiveMarketMode();
-            } catch (e) {
-            }
-            if (d && d.final_betting_entry_window) latestFinalBettingEntryWindow = d.final_betting_entry_window;
-            renderAutoGuardedBanner(d);
-            try {
-              const sel = d && d.state ? (d.state.selected_strategy || "") : "";
-              if (sel) autoStrategySelect.value = String(sel);
-            } catch (e) {
-            }
-            const st = d && d.state ? d.state : {};
-            const loop = d && d.loop ? d.loop : {};
-            const ev = st && st.last_eval_summary ? st.last_eval_summary : null;
-            const mode = String(document.getElementById("liveMarketMode").value || "auto");
-            const modeLbl = mode === "defensive" ? "passive(defensive)" : mode;
-            const enabled = !!(st && st.enabled);
-            const loopRunning = !!(loop && loop.running);
-            const canPlace = !!(d && d.can_place_auto_order);
-            const canTick = !!(d && d.can_tick);
-            const evalAt = st && st.last_eval_at_utc ? String(st.last_eval_at_utc) : "";
-            const effectiveStrategy = st && st.selected_strategy ? String(st.selected_strategy) : (d && d.config ? String(d.config.live_auto_strategy_env || "") : "");
-            const lines = [];
-            lines.push("running=" + (enabled ? "YES" : "NO") + " (loop=" + (loopRunning ? "ON" : "OFF") + ")  can_tick=" + (canTick ? "YES" : "NO"));
-            lines.push("strategy=" + (effectiveStrategy || "unknown") + "  mode=" + modeLbl + "  can_place_auto_order=" + (canPlace ? "YES" : "NO"));
-            if (evalAt) lines.push("last_eval_at_utc=" + evalAt);
-            if (ev && Array.isArray(ev.strategies)) {
-              const parts = [];
-              for (const s of ev.strategies) {
-                if (!s) continue;
-                parts.push(
-                  String(s.strategy_id || "") +
-                  ": evaluated=" + String(!!s.evaluated) +
-                  " cand=" + String(s.candidate_count || 0) +
-                  " rej=" + String(s.rejected_count || 0) +
-                  " sub=" + String(s.submitted_count || 0) +
-                  (s.skipped_reason ? (" (" + String(s.skipped_reason || "") + ")") : "")
-                );
-              }
-              if (parts.length) lines.push("summary=" + parts.join(" | "));
-            }
-            autoGuardedSummary.textContent = lines.join("\n");
-
-            const candSet = new Set();
-            try {
-              const cs = Array.isArray(st.last_eval_candidates) ? st.last_eval_candidates : [];
-              for (const c of cs) {
-                if (!c) continue;
-                const sid = String(c.source_strategy || c.strategy_id || "");
-                const sym = String(c.symbol || "");
-                if (sid && sym) candSet.add(sid + "::" + sym);
-              }
-            } catch (e) {
-            }
-            const seen = new Set();
-            const rowsHtml = [];
-            if (ev && Array.isArray(ev.strategies)) {
-              for (const s of ev.strategies) {
-                if (!s) continue;
-                const sid = String(s.strategy_id || "");
-                const xs = Array.isArray(s.inspected_symbols) ? s.inspected_symbols : [];
-                for (const x of xs) {
-                  const sym = x && x.symbol ? String(x.symbol) : "";
-                  const uid = x && x.uid ? String(x.uid) : (sym ? ("sym:" + sym) : "");
-                  if (!sid || !sym) continue;
-                  const key = sid + "::" + sym;
-                  if (seen.has(key)) continue;
-                  seen.add(key);
-                  const isCand = candSet.has(key);
-                  rowsHtml.push(
-                    "<td>" + sid + "</td>" +
-                    "<td>" + sym + "</td>" +
-                    "<td>" + uid + "</td>" +
-                    "<td>" + (isCand ? "<span class=\"pill\">YES</span>" : "<span class=\"pill\">NO</span>") + "</td>"
-                  );
-                  if (rowsHtml.length >= 120) break;
-                }
-                if (rowsHtml.length >= 120) break;
-              }
-            }
-            fillTbody(autoInspectTbody, rowsHtml);
-          }
-        }
-
-        async function refreshReadinessBuilder() {
-          const mk = String(document.getElementById("liveMarket").value || "domestic");
-          const r = await authFetch(backendUrl + "/api/live-trading/readiness-builder/status?market=" + encodeURIComponent(mk), { headers: await authHeaders() });
-          const d = await r.json().catch(function () { return {}; });
-          readinessBuilderPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
-          const st = d && d.state ? d.state : null;
-          const lad = st && st.last_action_detail ? st.last_action_detail : null;
-          const det = lad && lad.detail ? lad.detail : null;
-          if (det && String(det.type || "") === "kis_token_failed") {
-            readinessBuilderBanner.style.display = "block";
-            const sc = det.status_code != null ? String(det.status_code) : "unknown";
-            const ec = det.error_code ? String(det.error_code) : "unknown";
-            const base = det.kis_base_url ? String(det.kis_base_url) : (det.base_url_selected ? String(det.base_url_selected) : "");
-            const pth = det.kis_http_path ? String(det.kis_http_path) : "";
-            const kind = det.base_url_kind ? String(det.base_url_kind) : "";
-            const hint = det.hint ? String(det.hint) : "";
-            const nextRetry = det.next_retry_at_utc ? String(det.next_retry_at_utc) : "";
-            readinessBuilderBanner.textContent =
-              "Readiness Builder: KIS 토큰 발급 실패\n" +
-              "- base_url=" + base + (kind ? (" (" + kind + ")") : "") + "\n" +
-              "- endpoint=" + (base && pth ? (base + pth) : pth) + "\n" +
-              "- status_code=" + sc + "\n" +
-              "- error_code=" + ec + "\n" +
-              "- hint=" + (hint || "없음") + (nextRetry ? ("\n- next_retry_at_utc=" + nextRetry) : "");
-          } else {
-            readinessBuilderBanner.style.display = "none";
-            readinessBuilderBanner.textContent = "";
-          }
-        }
-
-        async function startReadinessBuilder() {
-          const mk = String(document.getElementById("liveMarket").value || "domestic");
-          const r = await authFetch(backendUrl + "/api/live-trading/readiness-builder/start?market=" + encodeURIComponent(mk), { method: "POST", headers: await authHeaders() });
-          const d = await r.json().catch(function () { return {}; });
-          readinessBuilderPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
-          await refreshReadinessBuilder();
-        }
-
-        async function stopReadinessBuilder() {
-          const r = await authFetch(backendUrl + "/api/live-trading/readiness-builder/stop", { method: "POST", headers: await authHeaders() });
-          const d = await r.json().catch(function () { return {}; });
-          readinessBuilderPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
-          await refreshReadinessBuilder();
-        }
-
-        async function tickReadinessBuilder() {
-          const mk = String(document.getElementById("liveMarket").value || "domestic");
-          const r = await authFetch(backendUrl + "/api/live-trading/readiness-builder/tick?market=" + encodeURIComponent(mk), { method: "POST", headers: await authHeaders() });
-          const d = await r.json().catch(function () { return {}; });
-          readinessBuilderPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
-          await refreshReadinessBuilder();
-          await refresh();
-        }
-
-        async function startAutoGuarded() {
-          const payload = { actor: "desktop-user", reason: String(document.getElementById("reasonInput").value || "start_auto"), strategy: String(autoStrategySelect.value || "") };
-          const r = await authFetch(backendUrl + "/api/live-exec/auto-guarded/start", {
-            method: "POST",
-            headers: await authHeaders({ "Content-Type": "application/json" }),
-            body: JSON.stringify(payload),
-          });
-          const d = await r.json().catch(function () { return {}; });
-          autoGuardedPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
-          if (r.ok) renderAutoGuardedBanner(d);
-          await refreshAutoGuarded();
-        }
-
-        async function stopAutoGuarded() {
-          const payload = { actor: "desktop-user", reason: String(document.getElementById("reasonInput").value || "stop_auto") };
-          const r = await authFetch(backendUrl + "/api/live-exec/auto-guarded/stop", {
-            method: "POST",
-            headers: await authHeaders({ "Content-Type": "application/json" }),
-            body: JSON.stringify(payload),
-          });
-          const d = await r.json().catch(function () { return {}; });
-          autoGuardedPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
-          if (r.ok) renderAutoGuardedBanner(d);
-          await refreshAutoGuarded();
-        }
-
-        async function tickAutoGuarded() {
-          try {
-            const stR = await authFetch(backendUrl + "/api/live-exec/auto-guarded/status", { headers: await authHeaders() });
-            const stD = await stR.json().catch(function () { return {}; });
-            if (stR.ok && stD && stD.state && stD.state.enabled === false) {
-              autoGuardedBanner.style.display = "block";
-              autoGuardedBanner.textContent = "Auto Guarded가 꺼져 있습니다. Start를 먼저 누르세요.";
-              return;
-            }
-          } catch (e) {
-          }
-          const stSel = String(autoStrategySelect.value || "");
-          const r = await authFetch(backendUrl + "/api/live-exec/auto-guarded/tick?strategy=" + encodeURIComponent(stSel), { method: "POST", headers: await authHeaders() });
-          const d = await r.json().catch(function () { return {}; });
-          autoGuardedPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
-          if (r.ok) renderAutoGuardedBanner(d);
-          await refreshAutoGuarded();
-          await refreshLiveDashboard();
-        }
-
-        async function startLiveSession() {
-          liveExecMsg.textContent = "(starting)";
-          const payload = {
-            strategy_id: String(document.getElementById("liveStrategyId").value || ""),
-            execution_mode: String(document.getElementById("liveExecMode").value || ""),
-            market: String(document.getElementById("liveMarket").value || "domestic"),
-            actor: "desktop-user",
-            reason: String(document.getElementById("reasonInput").value || "start"),
-          };
-          const r = await authFetch(backendUrl + "/api/live-exec/start", {
-            method: "POST",
-            headers: await authHeaders({ "Content-Type": "application/json" }),
-            body: JSON.stringify(payload),
-          });
-          const d = await r.json().catch(function () { return {}; });
-          liveExecMsg.textContent = r.ok ? "Started" : JSON.stringify(d.detail || d, null, 2);
-          await refreshLiveExec();
-        }
-
-        async function stopLiveSession() {
-          liveExecMsg.textContent = "(stopping)";
-          const payload = {
-            actor: "desktop-user",
-            reason: String(document.getElementById("reasonInput").value || "stop"),
-          };
-          const r = await authFetch(backendUrl + "/api/live-exec/stop", {
-            method: "POST",
-            headers: await authHeaders({ "Content-Type": "application/json" }),
-            body: JSON.stringify(payload),
-          });
-          const d = await r.json().catch(function () { return {}; });
-          liveExecMsg.textContent = r.ok ? "Stopped" : JSON.stringify(d.detail || d, null, 2);
-          await refreshLiveExec();
-        }
-
-        function _fetchCounts(fetchSummary) {
-          const fs = Array.isArray(fetchSummary) ? fetchSummary : [];
-          const searched = fs.length;
-          let okBars = 0;
-          let blocked = 0;
-          for (const row of fs) {
-            const bars = row && row.bars_1m != null ? Number(row.bars_1m) : 0;
-            const err = row && row.fetch_error ? String(row.fetch_error) : "";
-            if (!err && bars > 0) okBars += 1;
-            if (err && String(err).indexOf("FETCH_SKIPPED") === 0) blocked += 1;
-          }
-          return { searched_symbols: searched, fetch_success_symbols: okBars, fetch_blocked_symbols: blocked };
-        }
-
-        function _reasonLabel(code, mmActive) {
-          const c = String(code || "");
-          const mm = String(mmActive || "").toLowerCase();
-          if (!c) return "—";
-          if (c === "already_holding") return "이미 보유 중";
-          if (c === "not_in_entry_window") return "entry window 아님";
-          if (c === "final_betting_disabled") return "final betting disabled";
-          if (c === "min_trade_value" || c === "spread" || c.indexOf("liquidity_") === 0) return "liquidity 부족";
-          if (c === "insufficient_budget_for_min_allocation" || c === "config_max_pct_lt_min_allocation") return "cash 부족";
-          if (c.indexOf("FETCH_") === 0 || c.indexOf("fetch") >= 0) return "fetch blocked";
-          if (mm === "defensive" && (c === "market_filter_blocked_1430" || c === "soft_regime_entry_not_allowed" || c === "index_filter_risk_off")) {
-            return "market mode defensive";
-          }
-          return "RSI/ATR/flow 조건 미충족 (" + c + ")";
-        }
-
-        function renderFinalBettingShadowResult(out) {
-          const shadow = out && out.shadow ? out.shadow : {};
-          const fs = shadow.fetch_summary || [];
-          const diags = shadow.last_diagnostics || [];
-          const rej = shadow.rejection_reasons_by_symbol || {};
-          const mm = out && out.market_mode ? out.market_mode : (shadow.market_mode || {});
-          const mmActive = mm && mm.market_mode_active ? String(mm.market_mode_active) : "";
-          const brk = shadow && shadow.strategy_breakdown ? shadow.strategy_breakdown : {};
-          const entryWindow = brk && brk.entry_window ? String(brk.entry_window) : "";
-          const notInEntryWindow = (String(entryWindow).toLowerCase() === "closed") || (String(brk.blocked || "") === "not_in_entry_window");
-          let nowKst = "";
-          try {
-            nowKst = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Seoul" }).replace(" ", "T") + "+09:00";
-          } catch (e) {
-            nowKst = "";
-          }
-          if (notInEntryWindow && (out && Number(out.candidate_count || 0) === 0)) {
-            finalBettingInfoBanner.style.display = "block";
-            let nowHhmm = "";
-            try {
-              nowHhmm = String(nowKst || "").slice(11, 16);
-            } catch (e) {
-              nowHhmm = "";
-            }
-            let win = "14:30~15:20";
-            if (latestFinalBettingEntryWindow && latestFinalBettingEntryWindow.window_start_hhmm && latestFinalBettingEntryWindow.window_end_hhmm) {
-              const s = String(latestFinalBettingEntryWindow.window_start_hhmm || "");
-              const e2 = String(latestFinalBettingEntryWindow.window_end_hhmm || "");
-              if (s.length >= 4 && e2.length >= 4) win = s.slice(0, 2) + ":" + s.slice(2, 4) + "~" + e2.slice(0, 2) + ":" + e2.slice(2, 4);
-            }
-            finalBettingInfoBanner.textContent = "후보 0개는 정상입니다.\n현재 " + (nowHhmm || "KST") + ", 진입 구간 " + win;
-          } else {
-            finalBettingInfoBanner.style.display = "none";
-            finalBettingInfoBanner.textContent = "";
-          }
-
-          const counts = _fetchCounts(fs);
-          const diagSyms = new Set();
-          for (const d of Array.isArray(diags) ? diags : []) {
-            if (d && d.symbol) diagSyms.add(String(d.symbol));
-          }
-          candidatesMetaPre.textContent = JSON.stringify(
-            {
-              now_kst: nowKst,
-              ok: !!(out && out.ok),
-              candidate_count: out && out.candidate_count != null ? out.candidate_count : 0,
-              entry_window: entryWindow || undefined,
-              not_in_entry_window: notInEntryWindow,
-              searched_symbols: counts.searched_symbols,
-              fetch_success_symbols: counts.fetch_success_symbols,
-              diagnosed_symbols: diagSyms.size,
-              market_mode_active: mmActive,
-              manual_market_mode_override: mm && mm.manual_market_mode_override ? mm.manual_market_mode_override : undefined,
-              token_cache: out && out.token_cache ? out.token_cache : undefined,
-              blocked: shadow && shadow.strategy_breakdown ? shadow.strategy_breakdown.blocked : undefined,
-            },
-            null,
-            2
-          );
-          candidatesFetchSummaryPre.textContent = JSON.stringify(fs, null, 2);
-          candidatesDiagnosticsPre.textContent = JSON.stringify((Array.isArray(diags) ? diags.slice(-20) : []), null, 2);
-
-          const rows = [];
-          const keys = Object.keys(rej || {}).sort();
-          for (const k of keys) {
-            const v = rej[k];
-            rows.push({ symbol: k, reason: _reasonLabel(v, mmActive), reason_code: String(v || "") });
-          }
-          candidatesRejectionsPre.textContent = JSON.stringify(rows, null, 2);
-        }
-
-        async function tickLiveSession() {
-          liveExecMsg.textContent = "(tick)";
-          const r = await authFetch(backendUrl + "/api/live-exec/tick", { method: "POST", headers: await authHeaders() });
-          const d = await r.json().catch(function () { return {}; });
-          liveExecMsg.textContent = r.ok ? ("Tick OK\n" + JSON.stringify(d.counts || {}, null, 2)) : JSON.stringify(d.detail || d, null, 2);
-          if (r.ok && d && d.result && d.result.shadow) {
-            renderFinalBettingShadowResult(d.result);
-            if (d.result && d.result.ok === false && (d.result.message || d.result.error)) {
-              candidateErrorBanner.style.display = "block";
-              candidateErrorBanner.textContent = "final_betting tick 실패:\n" + String(d.result.message || d.result.error || "");
-            }
-          }
-          await refreshLiveExec();
-          await refreshCandidates();
-          await refreshLiveDashboard();
-        }
-
-        function fmt(v) {
-          if (v === null || v === undefined) return "";
-          return String(v);
-        }
-
-        async function refreshCandidates() {
-          const execMode = String(document.getElementById("liveExecMode").value || "");
-          const r = await authFetch(
-            backendUrl + "/api/live-prep/candidates?strategy_id=final_betting_v1&limit=50&execution_mode=" + encodeURIComponent(execMode),
-            { headers: await authHeaders() }
-          );
-          const d = await r.json().catch(function () { return {}; });
-          if (!r.ok) {
-            candidatesMetaPre.textContent = JSON.stringify(d.detail || d, null, 2);
-            candidatesTbody.innerHTML = "";
-            return;
-          }
-          if ((candidatesFetchSummaryPre.textContent || "").indexOf("(loading)") === 0) {
-            candidatesFetchSummaryPre.textContent = "Tick Now(후보 생성) 실행 후 표시됩니다.";
-          }
-          if ((candidatesDiagnosticsPre.textContent || "").indexOf("(loading)") === 0) {
-            candidatesDiagnosticsPre.textContent = "Tick Now(후보 생성) 실행 후 표시됩니다.";
-          }
-          if ((candidatesRejectionsPre.textContent || "").indexOf("(loading)") === 0) {
-            candidatesRejectionsPre.textContent = "Tick Now(후보 생성) 실행 후 표시됩니다.";
-          }
-          const items = Array.isArray(d.items) ? d.items : [];
-          candidatesTbody.innerHTML = "";
-          for (const it of items) {
-            const tr = document.createElement("tr");
-            tr.innerHTML = `
-              <td><span class="pill">${fmt(it.status)}</span></td>
-              <td>${fmt(it.symbol)}</td>
-              <td>${fmt(it.quantity)}</td>
-              <td>${fmt(it.price)}</td>
-              <td>${fmt(it.stop_loss_pct)}</td>
-              <td>${fmt(it.score)}</td>
-              <td>${fmt(it.rationale)}</td>
-              <td>
-                <button data-act="approve" data-id="${fmt(it.candidate_id)}">Approve</button>
-                <button data-act="reject" data-id="${fmt(it.candidate_id)}">Reject</button>
-                <button data-act="submit" data-id="${fmt(it.candidate_id)}">Approve+Submit</button>
-              </td>
-            `;
-            candidatesTbody.appendChild(tr);
-          }
-        }
-
-        async function refreshHfShadow() {
-          const execMode = String(document.getElementById("liveExecMode").value || "");
-          const sid = String(document.getElementById("hfStrategyId").value || "");
-          hfShadowMetaPre.textContent = "(loading)";
-          const r = await authFetch(
-            backendUrl + "/api/live-prep/hf-shadow/generate?strategy_id=" + encodeURIComponent(sid) + "&execution_mode=" + encodeURIComponent(execMode),
-            { method: "POST", headers: await authHeaders() }
-          );
-          const d = await r.json().catch(function () { return {}; });
-          if (!r.ok) {
-            hfShadowMetaPre.textContent = JSON.stringify(d.detail || d, null, 2);
-            hfShadowTbody.innerHTML = "";
-            return;
-          }
-          const mm = d.market_mode ? d.market_mode : {};
-          const orders = Array.isArray(d.generated_orders) ? d.generated_orders : [];
-          const buySyms = [];
-          const sellSyms = [];
-          for (const o of orders) {
-            if (String(o.side) === "buy") buySyms.push(String(o.symbol || ""));
-            if (String(o.side) === "sell") sellSyms.push(String(o.symbol || ""));
-          }
-          hfShadowMetaPre.textContent = JSON.stringify({
-            asof_utc: d.asof_utc,
-            strategy_id: d.strategy_id,
-            generated_order_count: d.generated_order_count,
-            market_mode_active: mm.market_mode_active,
-            manual_market_mode_override: mm.manual_market_mode_override,
-            status_line: mm.status_line,
-            buy_symbols: Array.from(new Set(buySyms)).slice(0, 20),
-            sell_symbols: Array.from(new Set(sellSyms)).slice(0, 20),
-          }, null, 2);
-          hfShadowTbody.innerHTML = "";
-          for (const o of orders.slice(0, 80)) {
-            const tr = document.createElement("tr");
-            tr.innerHTML = `
-              <td><span class="pill">${fmt(o.side)}</span></td>
-              <td>${fmt(o.symbol)}</td>
-              <td>${fmt(o.quantity)}</td>
-              <td>${fmt(o.price)}</td>
-              <td>${fmt(o.strategy_id)}</td>
-              <td>${fmt(o.signal_reason)}</td>
-            `;
-            hfShadowTbody.appendChild(tr);
-          }
-        }
-
-        async function refreshSellOnlyArm() {
-          const execMode = String(document.getElementById("liveExecMode").value || "");
-          const r = await authFetch(
-            backendUrl + "/api/live-prep/sell-only-arm/status?execution_mode=" + encodeURIComponent(execMode),
-            { headers: await authHeaders() }
-          );
-          const d = await r.json().catch(function () { return {}; });
-          sellOnlyArmPre.textContent = JSON.stringify(d, null, 2);
-          const st = d && d.state ? d.state : null;
-          document.getElementById("sellOnlyEnabled").checked = !!(st && st.enabled);
-          if (st && st.armed_for_kst_date) document.getElementById("sellOnlyDate").value = String(st.armed_for_kst_date);
-        }
-
-        async function saveSellOnlyArm() {
-          const payload = {
-            enabled: !!document.getElementById("sellOnlyEnabled").checked,
-            armed_for_kst_date: String(document.getElementById("sellOnlyDate").value || ""),
-            actor: "desktop-user",
-            reason: String(document.getElementById("reasonInput").value || "arm"),
-            execution_mode: String(document.getElementById("liveExecMode").value || ""),
-          };
-          const r = await authFetch(backendUrl + "/api/live-prep/sell-only-arm", {
-            method: "POST",
-            headers: await authHeaders({ "Content-Type": "application/json" }),
-            body: JSON.stringify(payload),
-          });
-          const d = await r.json().catch(function () { return {}; });
-          sellOnlyArmPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
-          await refreshSellOnlyArm();
-        }
-
-        async function refreshLiquidationPlans() {
-          const execMode = String(document.getElementById("liveExecMode").value || "");
-          const r = await authFetch(
-            backendUrl + "/api/live-prep/batch-liquidation/plans?limit=5&execution_mode=" + encodeURIComponent(execMode),
-            { headers: await authHeaders() }
-          );
-          const d = await r.json().catch(function () { return {}; });
-          liquidationPre.textContent = JSON.stringify(d, null, 2);
-          const plans = d && Array.isArray(d.plans) ? d.plans : [];
-          latestPlanId = plans.length ? String(plans[0].plan_id || "") : "";
-        }
-
-        async function prepareLiquidation() {
-          const payload = {
-            use_market_order: !!document.getElementById("liqUseMarket").checked,
-            actor: "desktop-user",
-            reason: String(document.getElementById("reasonInput").value || "prepare"),
-            execution_mode: String(document.getElementById("liveExecMode").value || ""),
-          };
-          const r = await authFetch(backendUrl + "/api/live-prep/batch-liquidation/prepare", {
-            method: "POST",
-            headers: await authHeaders({ "Content-Type": "application/json" }),
-            body: JSON.stringify(payload),
-          });
-          const d = await r.json().catch(function () { return {}; });
-          liquidationPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
-          const plan = d && d.plan ? d.plan : null;
-          if (plan && plan.plan_id) latestPlanId = String(plan.plan_id);
-        }
-
-        async function executeLatestLiquidation() {
-          if (!latestPlanId) {
-            liquidationPre.textContent = "No prepared plan.";
-            return;
-          }
-          const payload = {
-            confirm: String(document.getElementById("liqConfirm").value || ""),
-            actor: "desktop-user",
-            reason: String(document.getElementById("reasonInput").value || "execute"),
-            execution_mode: String(document.getElementById("liveExecMode").value || ""),
-          };
-          const r = await authFetch(backendUrl + "/api/live-prep/batch-liquidation/" + latestPlanId + "/execute", {
-            method: "POST",
-            headers: await authHeaders({ "Content-Type": "application/json" }),
-            body: JSON.stringify(payload),
-          });
-          const d = await r.json().catch(function () { return {}; });
-          liquidationPre.textContent = r.ok ? JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
-          await refreshLiquidationPlans();
-          await refresh();
-        }
-
-        async function candidateAction(action, candidateId) {
-          candidateActionMsg.textContent = "(working)";
-          const payload = { actor: "desktop-user", reason: "manual_approval", execution_mode: String(document.getElementById("liveExecMode").value || "") };
-          async function post(path) {
-            const r = await authFetch(backendUrl + path, {
-              method: "POST",
-              headers: await authHeaders({ "Content-Type": "application/json" }),
-              body: JSON.stringify(payload),
-            });
-            const d = await r.json().catch(function () { return {}; });
-            return { ok: r.ok, data: d };
-          }
-          let result;
-          if (action === "approve") {
-            result = await post("/api/live-prep/candidates/" + candidateId + "/approve");
-          } else if (action === "reject") {
-            result = await post("/api/live-prep/candidates/" + candidateId + "/reject");
-          } else {
-            const a = await post("/api/live-prep/candidates/" + candidateId + "/approve");
-            if (!a.ok && String(a.data || "").indexOf("already_approved") < 0) {
-              candidateActionMsg.textContent = JSON.stringify(a.data.detail || a.data, null, 2);
-              await refreshCandidates();
-              return;
-            }
-            result = await post("/api/live-prep/candidates/" + candidateId + "/submit");
-          }
-          candidateActionMsg.textContent = result.ok ? "OK\n" + JSON.stringify(result.data, null, 2) : JSON.stringify(result.data.detail || result.data, null, 2);
-          await refreshCandidates();
-          await refresh();
-        }
-
-        candidatesTbody.addEventListener("click", function (ev) {
-          const t = ev.target;
-          if (!t || !t.getAttribute) return;
-          const act = t.getAttribute("data-act");
-          const id = t.getAttribute("data-id");
-          if (!act || !id) return;
-          candidateAction(act, id);
-        });
-
-        document.getElementById("saveBtn").addEventListener("click", async function () {
-          const payload = {
-            live_trading_flag: !!document.getElementById("flagLive").checked,
-            secondary_confirm_flag: !!document.getElementById("flagConfirm2").checked,
-            extra_approval_flag: !!document.getElementById("flagExtra").checked,
-            reason: String(document.getElementById("reasonInput").value || "운영자 수동 승인"),
-            actor: "desktop-user",
-          };
-          const r = await authFetch(backendUrl + "/api/live-trading/settings", {
-            method: "POST",
-            headers: await authHeaders({ "Content-Type": "application/json" }),
-            body: JSON.stringify(payload),
-          });
-          const d = await r.json().catch(function () { return {}; });
-          if (!r.ok) {
-            saveMessage.textContent = JSON.stringify(d.detail || d, null, 2);
-            await refresh();
-            return;
-          }
-          const can = !!d.can_place_live_order;
-          const pending = !!d.unlock_pending_due_to_paper_readiness;
-          const msg = can
-            ? "설정 저장 완료. 현재 LIVE 주문 가능 상태입니다."
-            : (pending ? "설정 저장 완료. Paper readiness 통과 후 실거래 제출이 가능합니다." : "설정 저장 완료. 실거래 제출은 아직 잠금 상태입니다.");
-          saveMessage.textContent = msg + "\n\n" + JSON.stringify({
-            settings_saved: d.settings_saved,
-            settings_saved_but_not_effective: d.settings_saved_but_not_effective,
-            unlock_pending_due_to_paper_readiness: d.unlock_pending_due_to_paper_readiness,
-            pending_blockers: d.pending_blockers,
-          }, null, 2);
-          await refresh();
-        });
-        document.getElementById("saveEmergencyBtn").addEventListener("click", async function () {
-          const payload = {
-            enabled: !!document.getElementById("flagEmergency").checked,
-            reason: String(document.getElementById("reasonInput").value || "운영자 수동 승인"),
-            actor: "desktop-user",
-          };
-          const r = await authFetch(backendUrl + "/api/live-trading/emergency-stop", {
-            method: "POST",
-            headers: await authHeaders({ "Content-Type": "application/json" }),
-            body: JSON.stringify(payload),
-          });
-          const d = await r.json().catch(function () { return {}; });
-          saveMessage.textContent = r.ok ? "저장 완료\n" + JSON.stringify(d, null, 2) : JSON.stringify(d.detail || d, null, 2);
-          await refresh();
-        });
-
-        function onClick(id, fn) {
-          const el = document.getElementById(id);
-          if (!el) return;
-          el.addEventListener("click", fn);
-        }
-
-        onClick("saveLiveMarketModeBtn", async function () {
-          await saveLiveMarketMode();
-          await refreshLiveMarketMode();
-        });
-        onClick("refreshLiveMarketModeBtn", async function () {
-          await refreshLiveMarketMode();
-        });
-        onClick("refreshAccountBtn", async function () {
-          await refreshMain({ refreshAccount: true });
-        });
-        onClick("refreshLiveDashboardBtn", async function () {
-          await refreshLiveDashboard();
-        });
-        onClick("genHfShadowBtn", async function () {
-          await refreshHfShadow();
-        });
-        onClick("autoStatusBtn", async function () { await refreshAutoGuarded(); });
-        onClick("autoStartBtn", async function () { await startAutoGuarded(); });
-        onClick("autoStopBtn", async function () { await stopAutoGuarded(); });
-        onClick("autoTickBtn", async function () { await tickAutoGuarded(); });
-        onClick("rbRefreshBtn", async function () { await refreshReadinessBuilder(); });
-        onClick("rbStartBtn", async function () { await startReadinessBuilder(); });
-        onClick("rbStopBtn", async function () { await stopReadinessBuilder(); });
-        onClick("rbTickBtn", async function () { await tickReadinessBuilder(); });
-        onClick("refreshBtn", refresh);
-        onClick("refreshCandidatesBtn", refreshCandidates);
-        onClick("liveExecRefreshBtn", refreshLiveExec);
-        onClick("liveStartBtn", startLiveSession);
-        onClick("liveStopBtn", stopLiveSession);
-        onClick("liveTickBtn", tickLiveSession);
-        onClick("refreshSellOnlyArmBtn", refreshSellOnlyArm);
-        onClick("saveSellOnlyArmBtn", saveSellOnlyArm);
-        onClick("prepareLiquidationBtn", prepareLiquidation);
-        onClick("refreshLiquidationBtn", refreshLiquidationPlans);
-        onClick("executeLiquidationBtn", executeLatestLiquidation);
-        onClick("genFinalBettingBtn", async function () {
-          await tickLiveSession();
-        });
-
-        onClick("dashboardBtn", function () { window.location.href = "./dashboard.html"; });
-        onClick("domesticPaperBtn", function () { window.location.href = "./paper-trading.html"; });
-        onClick("usPaperBtn", function () { window.location.href = "./us-paper-trading.html"; });
-        onClick("domesticLiveBtn", function () { window.location.href = "./live-trading.html"; });
-        onClick("usLiveBtn", function () { window.location.href = "./us-live-trading.html"; });
-        onClick("performanceBtn", function () { window.location.href = "./performance.html"; });
-        onClick("brokerSettingsBtn", function () { window.location.href = "./broker-settings.html"; });
-        onClick("logoutBtn", async function () { await clearDesktopSession(); window.location.href = "./login.html"; });
-
-        await refreshMain({ refreshAccount: true });
-        await refresh();
-        await refreshLiveMarketMode();
-        await refreshLiveExec();
-        await refreshAutoGuarded();
-        await refreshReadinessBuilder();
-        await refreshCandidates();
-        await refreshLiveDashboard();
-        await refreshHfShadow();
-        await refreshSellOnlyArm();
-        await refreshLiquidationPlans();
-      })();
-    </script>
   </body>
 </html>

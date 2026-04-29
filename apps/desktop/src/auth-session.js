@@ -177,11 +177,12 @@ let _refreshSingleFlight = null;
 
 async function ensureFreshAccessToken(backendUrl, opts) {
   const minTtlSec = opts && typeof opts.minTtlSec === "number" ? opts.minTtlSec : 120;
+  const forceRefresh = !!(opts && opts.forceRefresh);
   const base = String(backendUrl || effectiveBackendUrl()).replace(/\/$/, "");
   const session = await resolveDesktopSession();
   if (!session || !session.accessToken) return { ok: false, kind: "no_session" };
   const exp = jwtPayloadExpSec(session.accessToken);
-  if (exp) {
+  if (exp && !forceRefresh) {
     const nowSec = Math.floor(Date.now() / 1000);
     if (exp - nowSec > minTtlSec) return { ok: true, kind: "fresh", accessToken: session.accessToken };
   }
@@ -218,7 +219,7 @@ async function authFetch(url, options, opts) {
   let res = await fetch(url, { ...opt, headers: h });
   if (res.status !== 401) return res;
 
-  const ensured2 = await ensureFreshAccessToken(base, { minTtlSec: 0 });
+  const ensured2 = await ensureFreshAccessToken(base, { minTtlSec: 0, forceRefresh: true });
   if (!ensured2.ok) {
     await clearDesktopSession();
     window.location.href = "./login.html";
@@ -235,8 +236,11 @@ async function authFetch(url, options, opts) {
 }
 
 try {
-  const g = typeof window !== "undefined" ? window : globalThis;
-  if (g) {
+  const targets = [];
+  if (typeof globalThis !== "undefined") targets.push(globalThis);
+  if (typeof window !== "undefined") targets.push(window);
+  for (const g of targets) {
+    if (!g) continue;
     g.persistDesktopTokenPayload = persistDesktopTokenPayload;
     g.resolveDesktopSession = resolveDesktopSession;
     g.effectiveBackendUrl = effectiveBackendUrl;

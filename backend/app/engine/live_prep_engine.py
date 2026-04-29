@@ -13,7 +13,12 @@ from app.brokers.live_broker import LiveBroker
 from app.config import get_settings as get_app_settings
 from app.scheduler.intraday_jobs import fetch_quotes_throttled
 from app.scheduler.kis_intraday import IntradayChartCache, build_intraday_universe_1m
-from app.scheduler.kis_universe import build_kospi_index_series, build_mock_sp500_proxy_from_kospi, build_mock_volatility_series
+from app.scheduler.kis_universe import (
+    build_kis_stock_universe,
+    build_kospi_index_series,
+    build_mock_sp500_proxy_from_kospi,
+    build_mock_volatility_series,
+)
 from app.strategy.final_betting_v1_strategy import FinalBettingV1Strategy, set_final_betting_debug_now
 from app.strategy.intraday_common import analyze_krx_intraday_session
 from app.strategy.intraday_paper_state import IntradayPaperStateStore
@@ -783,5 +788,99 @@ def generate_swing_relaxed_v2_shadow_report(
         "last_diagnostics": list(getattr(strategy, "last_diagnostics", []) or [])[-50:],
         "fetch_summary": [],
         "token_cache": token_cache,
+    }
+
+
+def generate_swing_shadow_report(
+    *,
+    broker_service: BrokerSecretService,
+    backend_settings: BackendSettings,
+    user_id: str,
+    strategy_id: str,
+    symbols_override: list[str] | None = None,
+) -> dict[str, Any]:
+    sid = (strategy_id or "").strip().lower()
+    if sid != "swing_relaxed_v2":
+        return {"ok": False, "error": "unsupported_strategy_id", "message": f"지원되지 않는 strategy_id={strategy_id}"}
+
+    app_key, app_secret, account_no, product_code, mode = broker_service.get_plain_credentials(user_id)
+    if (mode or "").strip().lower() != "live":
+        return {"ok": False, "error": "broker_account_not_live", "message": "브로커 계정이 live 모드가 아닙니다."}
+
+    tok = broker_service.ensure_cached_token_for_paper_start(user_id)
+    if not tok.ok or not tok.access_token:
+        return {"ok": False, "error": tok.failure_code or "token_not_ready", "message": tok.message}
+
+    api_base = broker_service._resolve_kis_api_base(mode)  # type: ignore[attr-defined]
+    client = build_kis_client_for_live_user(
+        base_url=api_base,
+        access_token=tok.access_token,
+        app_key=app_key,
+        app_secret=app_secret,
+        live_execution_unlocked=False,
+    )
+
+    cfg = get_app_settings()
+    symbols = list(symbols_override) if symbols_override is not None else cfg.resolved_final_betting_symbol_list()
+    symbols = [s.strip() for s in symbols if s and str(s).strip()]
+    if not symbols:
+        return {"ok": False, "error": "empty_symbols", "message": "swing 유니버스 심볼 리스트가 비어 있습니다."}
+
+    lookback = max(int(cfg.paper_kis_chart_lookback_days), 180)
+    prices = build_kis_stock_universe(client, symbols, lookback_calendar_days=lookback, logger=logger)
+    kospi = build_kospi_index_series(client, lookback_calendar_days=lookback, logger=logger)
+    sp500 = build_mock_sp500_proxy_from_kospi(kospi)
+    vol = build_mock_volatility_series(kospi)
+
+    client2, broker, err = _build_live_client_and_broker(
+        broker_service=broker_service,
+        backend_settings=backend_settings,
+        user_id=user_id,
+        live_execution_unlocked=False,
+    )
+    if broker is None or client2 is None:
+        return {"ok": False, "error": err, "message": err}
+
+    positions = broker.get_positions()
+    portfolio_df = _build_positions_df(positions)
+
+    from app.strategy.swing_relaxed_v2_strategy import SwingRelaxedV2Strategy
+
+    strategy = SwingRelaxedV2Strategy()
+    state_path = _intraday_state_store_path(backend_settings, user_tag=user_id[:12], suffix="swing_relaxed_v2_tp1")
+    setattr(strategy, "_swing_v2_tp1_state_path", str(state_path))
+
+    context = StrategyContext(
+        prices=prices,
+        kospi_index=kospi,
+        sp500_index=sp500,
+        volatility_index=vol,
+        portfolio=portfolio_df,
+    )
+    signals = strategy.generate_signals(context)
+
+    orders: list[OrderRequest] = []
+    for s in signals:
+        orders.append(
+            OrderRequest(
+                symbol=str(s.symbol),
+                side=str(s.side),
+                quantity=int(s.quantity),
+                price=None if s.price is None else float(s.price),
+                stop_loss_pct=None if s.stop_loss_pct is None else float(s.stop_loss_pct),
+                strategy_id=sid,
+                signal_reason=str(s.reason or ""),
+            )
+        )
+
+    return {
+        "ok": True,
+        "asof_utc": _utc_now_iso(),
+        "market": "domestic",
+        "strategy_id": sid,
+        "order_allowed": False,
+        "generated_order_count": len(orders),
+        "generated_orders": [_order_to_dict(o) for o in orders],
+        "last_diagnostics": list(getattr(strategy, "last_diagnostics", []) or [])[-50:],
     }
 

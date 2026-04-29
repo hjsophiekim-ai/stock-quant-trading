@@ -166,3 +166,143 @@ export interface LiveExecTickResponse {
   result: Record<string, unknown>;
   counts?: { final_betting_candidates?: number; final_betting_pending_approvals?: number };
 }
+
+export type LiveAutoMode = "aggressive" | "auto" | "passive";
+
+export interface LiveAutoGuardedStartRequest {
+  strategy_id: string;
+  mode: LiveAutoMode;
+  actor?: string;
+  reason?: string;
+}
+
+export interface LiveAutoGuardedStopRequest {
+  actor?: string;
+  reason?: string;
+}
+
+export interface LiveAutoGuardedModeUpdateRequest {
+  strategy_id: string;
+  mode: LiveAutoMode;
+  actor?: string;
+  reason?: string;
+}
+
+export interface LiveAutoGuardedCandidateRow {
+  status: string;
+  strategy_id: string;
+  symbol: string;
+  side: "buy" | "sell" | "";
+  quantity: number;
+  price: number | null;
+  score: number | null;
+  reason: string;
+  order_id: string | null;
+  ts_utc: string | null;
+}
+
+export interface LiveAutoGuardedStatusResponse {
+  ok: boolean;
+  enabled: boolean;
+  selected_strategy: string | null;
+  effective_selected_strategy: string;
+  supported_strategies: string[];
+  mode_by_strategy: Record<string, LiveAutoMode>;
+  mode_effective: LiveAutoMode;
+  last_tick_at_utc: string | null;
+  last_eval_at_utc: string | null;
+  last_eval_strategies: string[];
+  last_eval_candidates: LiveAutoGuardedCandidateRow[];
+  submitted: { buys: Array<Record<string, unknown>>; sells: Array<Record<string, unknown>> };
+  last_decision: string;
+  last_reason: string;
+  daily_buy_count: number;
+  daily_sell_count: number;
+}
+
+export interface LiveAutoGuardedStartResponse {
+  ok: boolean;
+  enabled: boolean;
+  selected_strategy: string | null;
+  mode: LiveAutoMode;
+}
+
+export interface LiveAutoGuardedStopResponse {
+  ok: boolean;
+  enabled: boolean;
+}
+
+export interface LiveAutoGuardedTickResponse {
+  ok: boolean;
+  enabled: boolean;
+  selected_strategy: string | null;
+  effective_selected_strategy: string;
+  mode_effective: LiveAutoMode;
+  last_eval_strategies: string[];
+  last_eval_candidates: LiveAutoGuardedCandidateRow[];
+  submitted: { buys: Array<Record<string, unknown>>; sells: Array<Record<string, unknown>> };
+  daily_buy_count: number;
+  daily_sell_count: number;
+  safety: RuntimeSafetyValidationResponse;
+  meta_by_strategy?: Record<string, Record<string, unknown>>;
+}
+
+export interface LiveCompactPositionRow {
+  symbol: string;
+  quantity: number;
+  average_price: number;
+  current_price: number | null;
+  market_value: number | null;
+  pnl_pct: number | null;
+}
+
+export interface LiveCompactOpenOrderRow {
+  order_id: string;
+  symbol: string;
+  side: string;
+  remaining_quantity: number;
+  price: number | null;
+  created_at_utc: string;
+}
+
+export interface LiveCompactFillRow {
+  symbol: string;
+  side: string;
+  quantity: number;
+  price: number;
+  order_id: string;
+  filled_at_utc: string;
+}
+
+export interface LiveTradingCompactDashboardResponse {
+  live: {
+    can_place_live_order: boolean;
+    blockers: string[];
+    bypass: boolean;
+    emergency_stop: boolean;
+    warning_message: string;
+  };
+  auto: {
+    enabled: boolean;
+    can_place_auto_order: boolean;
+    selected_strategy: string;
+    mode: LiveAutoMode;
+    last_tick_at_utc: string | null;
+    last_eval_at_utc: string | null;
+    last_decision: string;
+    last_reason: string;
+    daily_buy_count: number;
+    daily_sell_count: number;
+    last_eval_candidates: LiveAutoGuardedCandidateRow[];
+    submitted: { buys: Array<Record<string, unknown>>; sells: Array<Record<string, unknown>> };
+  };
+  strategies: Record<string, { shadow_candidates: unknown[]; auto_candidates: unknown[]; summary: Record<string, unknown> }>;
+  account: {
+    ok: boolean;
+    error: string;
+    positions: LiveCompactPositionRow[];
+    open_orders: LiveCompactOpenOrderRow[];
+    recent_fills: LiveCompactFillRow[];
+  };
+  raw?: Record<string, unknown>;
+}

@@ -143,6 +143,7 @@ Mock/실제 연동 구분:
 - `docs/app_architecture.md` : 앱/서버/공유모듈 아키텍처 상세
 - `docs/trading_rules.md` : 전략/리스크/국면별 운영 규칙
 - `docs/live_trading_checklist.md` : 실거래 전 필수 체크리스트
+- `docs/requirements_live_trading_domestic_ui.md` : 국내 Live 화면(전략 탭/후보/자동매매/계좌 표) 요구사항
 - `docs/backtest_method.md` : 과최적화 방지 검증 방법론
 - `docs/deployment_mobile.md` : 모바일 빌드/배포 가이드
 - `docs/deployment_desktop.md` : 데스크톱(Windows) 빌드/배포 가이드

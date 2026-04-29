@@ -178,6 +178,7 @@ class BackendSettings(BaseSettings):
         default="backend_data/live_trading/market_mode_prefs.json",
         alias="LIVE_MARKET_MODE_STORE_JSON",
     )
+    live_auto_strategy: str = Field(default="", alias="LIVE_AUTO_STRATEGY")
 
     portfolio_data_dir: str = Field(default="backend_data/portfolio", alias="PORTFOLIO_DATA_DIR")
     portfolio_equity_tracker_path: str = Field(

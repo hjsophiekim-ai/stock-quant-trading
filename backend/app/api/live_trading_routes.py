@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -17,10 +17,19 @@ from backend.app.engine.live_readiness_builder import (
 from backend.app.services.live_readiness_builder_store import LiveReadinessBuilderStore
 
 from ..core.config import BackendSettings, get_backend_settings
+from ..clients.kis_client import build_kis_client_for_live_user
+from ..services.broker_secret_service import BrokerSecretService
+from ..services.live_auto_guarded_state_store import LiveAutoGuardedState, LiveAutoGuardedStateStore, LiveAutoMode
 from ..services.live_safety_state_store import LiveSafetyHistoryItem, LiveSafetyState, LiveSafetyStateStore
 from ..services.live_market_mode_store import LiveMarketModeStore
 
 from .auth_routes import get_current_user_from_auth_header
+from .broker_routes import get_broker_service
+from ..engine.live_prep_engine import (
+    generate_final_betting_shadow_candidates,
+    generate_intraday_shadow_report,
+    generate_swing_shadow_report,
+)
 
 router = APIRouter(prefix="/live-trading", tags=["live-trading"])
 
@@ -438,14 +447,8 @@ def kill_switch_status(authorization: str | None = Header(default=None)) -> dict
     _ = _current_user(authorization)
     return _kill_switch_payload()
 
-
 class LiveMarketModeBody(BaseModel):
-    manual_market_mode: str = Field(
-        default="auto",
-        description="auto | aggressive | neutral | defensive",
-        min_length=2,
-        max_length=16,
-    )
+    manual_market_mode: str = Field(default="auto", description="auto | aggressive | neutral | defensive", min_length=2, max_length=16)
 
 
 @router.get("/market-mode")
@@ -458,12 +461,7 @@ def get_live_market_mode(
     slot = str(market or "domestic").strip().lower()
     slot = "us" if slot == "us" else "domestic"
     manual = _mode_store(cfg).get(getattr(user, "id"), market=slot)
-    return {
-        "ok": True,
-        "market": slot,
-        "manual_market_mode_override": manual,
-        "allowed": ["auto", "aggressive", "neutral", "defensive"],
-    }
+    return {"ok": True, "market": slot, "manual_market_mode_override": manual, "allowed": ["auto", "aggressive", "neutral", "defensive"]}
 
 
 @router.post("/market-mode")
@@ -479,17 +477,495 @@ def set_live_market_mode(
     manual = _mode_store(cfg).set(getattr(user, "id"), market=slot, manual_market_mode=str(body.manual_market_mode or "auto"))
     append_risk_event(
         cfg.risk_events_jsonl,
-        {
-            "ts_utc": datetime.now(timezone.utc).isoformat(),
-            "event_type": "LIVE_MARKET_MODE_UPDATED",
-            "actor": getattr(user, "id"),
-            "market": slot,
-            "manual_market_mode_override": manual,
-        },
+        {"ts_utc": datetime.now(timezone.utc).isoformat(), "event_type": "LIVE_MARKET_MODE_UPDATED", "actor": getattr(user, "id"), "market": slot, "manual_market_mode_override": manual},
     )
+    return {"ok": True, "market": slot, "manual_market_mode_override": manual, "allowed": ["auto", "aggressive", "neutral", "defensive"]}
+
+
+def _auto_store(cfg: BackendSettings) -> LiveAutoGuardedStateStore:
+    return LiveAutoGuardedStateStore(cfg.live_auto_guarded_state_store_json)
+
+
+def _supported_auto_strategies() -> list[str]:
+    return ["final_betting_v1", "scalp_rsi_flag_hf_v1", "scalp_macd_rsi_3m_v1", "swing_relaxed_v2", "multi"]
+
+
+def _pick_selected_strategy(cfg: BackendSettings, st: LiveAutoGuardedState) -> str:
+    supported = set(_supported_auto_strategies())
+    s1 = (st.selected_strategy or "").strip()
+    if s1 in supported:
+        return s1
+    env = (cfg.live_auto_strategy or "").strip()
+    if env in supported:
+        return env
+    return "final_betting_v1"
+
+
+def _mode_for_strategy(st: LiveAutoGuardedState, strategy_id: str) -> LiveAutoMode:
+    raw = (st.mode_by_strategy or {}).get(strategy_id)
+    m = (str(raw) if raw is not None else "").strip().lower()
+    if m in {"aggressive", "auto", "passive"}:
+        return m  # type: ignore[return-value]
+    return "auto"
+
+
+class LiveAutoGuardedStartRequest(BaseModel):
+    strategy_id: str = Field(min_length=3, max_length=80)
+    mode: LiveAutoMode = "auto"
+    actor: str = Field(default="user", min_length=1, max_length=64)
+    reason: str = Field(default="start_auto_guarded", min_length=3, max_length=240)
+
+
+class LiveAutoGuardedStopRequest(BaseModel):
+    actor: str = Field(default="user", min_length=1, max_length=64)
+    reason: str = Field(default="stop_auto_guarded", min_length=3, max_length=240)
+
+
+class LiveAutoGuardedModeUpdateRequest(BaseModel):
+    strategy_id: str = Field(min_length=3, max_length=80)
+    mode: LiveAutoMode
+    actor: str = Field(default="user", min_length=1, max_length=64)
+    reason: str = Field(default="update_auto_mode", min_length=3, max_length=240)
+
+
+@router.get("/auto-guarded/status")
+def auto_guarded_status(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    cfg = get_backend_settings()
+    user = _current_user(authorization)
+    st = _auto_store(cfg).get(getattr(user, "id"))
+    LiveAutoGuardedStateStore.ensure_daily_rollover(st)
+    _auto_store(cfg).upsert(st)
+    selected = _pick_selected_strategy(cfg, st)
     return {
         "ok": True,
-        "market": slot,
-        "manual_market_mode_override": manual,
-        "allowed": ["auto", "aggressive", "neutral", "defensive"],
+        "enabled": bool(st.enabled),
+        "selected_strategy": st.selected_strategy,
+        "effective_selected_strategy": selected,
+        "supported_strategies": _supported_auto_strategies(),
+        "mode_by_strategy": dict(st.mode_by_strategy or {}),
+        "mode_effective": _mode_for_strategy(st, selected),
+        "last_tick_at_utc": st.last_tick_at_utc,
+        "last_eval_at_utc": st.last_eval_at_utc,
+        "last_eval_strategies": list(st.last_eval_strategies or []),
+        "last_eval_candidates": list(st.last_eval_candidates or []),
+        "submitted": st.submitted,
+        "last_decision": st.last_decision,
+        "last_reason": st.last_reason,
+        "daily_buy_count": int(st.daily_buy_count),
+        "daily_sell_count": int(st.daily_sell_count),
     }
+
+
+@router.post("/auto-guarded/start")
+def auto_guarded_start(payload: LiveAutoGuardedStartRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    cfg = get_backend_settings()
+    user = _current_user(authorization)
+    sid = (payload.strategy_id or "").strip()
+    if sid not in set(_supported_auto_strategies()):
+        raise HTTPException(status_code=400, detail={"error": "unsupported_strategy_id", "strategy_id": sid})
+    st_store = _auto_store(cfg)
+    st = st_store.get(getattr(user, "id"))
+    LiveAutoGuardedStateStore.ensure_daily_rollover(st)
+    st.enabled = True
+    st.selected_strategy = sid
+    st.mode_by_strategy[sid] = payload.mode
+    st_store.upsert(st)
+    append_risk_event(
+        cfg.risk_events_jsonl,
+        {
+            "ts_utc": datetime.now(timezone.utc).isoformat(),
+            "event_type": "LIVE_AUTO_GUARDED_STARTED",
+            "actor": getattr(user, "id"),
+            "app_actor": payload.actor,
+            "strategy_id": sid,
+            "mode": payload.mode,
+            "reason": payload.reason,
+        },
+    )
+    return {"ok": True, "enabled": bool(st.enabled), "selected_strategy": st.selected_strategy, "mode": payload.mode}
+
+
+@router.post("/auto-guarded/stop")
+def auto_guarded_stop(payload: LiveAutoGuardedStopRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    cfg = get_backend_settings()
+    user = _current_user(authorization)
+    st_store = _auto_store(cfg)
+    st = st_store.get(getattr(user, "id"))
+    LiveAutoGuardedStateStore.ensure_daily_rollover(st)
+    st.enabled = False
+    st_store.upsert(st)
+    append_risk_event(
+        cfg.risk_events_jsonl,
+        {
+            "ts_utc": datetime.now(timezone.utc).isoformat(),
+            "event_type": "LIVE_AUTO_GUARDED_STOPPED",
+            "actor": getattr(user, "id"),
+            "app_actor": payload.actor,
+            "strategy_id": st.selected_strategy,
+            "reason": payload.reason,
+        },
+    )
+    return {"ok": True, "enabled": bool(st.enabled)}
+
+
+@router.post("/auto-guarded/mode")
+def auto_guarded_update_mode(
+    payload: LiveAutoGuardedModeUpdateRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    cfg = get_backend_settings()
+    user = _current_user(authorization)
+    sid = (payload.strategy_id or "").strip()
+    if sid not in set(_supported_auto_strategies()):
+        raise HTTPException(status_code=400, detail={"error": "unsupported_strategy_id", "strategy_id": sid})
+    st_store = _auto_store(cfg)
+    st = st_store.get(getattr(user, "id"))
+    LiveAutoGuardedStateStore.ensure_daily_rollover(st)
+    st.mode_by_strategy[sid] = payload.mode
+    st_store.upsert(st)
+    append_risk_event(
+        cfg.risk_events_jsonl,
+        {
+            "ts_utc": datetime.now(timezone.utc).isoformat(),
+            "event_type": "LIVE_AUTO_GUARDED_MODE_UPDATED",
+            "actor": getattr(user, "id"),
+            "app_actor": payload.actor,
+            "strategy_id": sid,
+            "mode": payload.mode,
+            "reason": payload.reason,
+        },
+    )
+    return {"ok": True, "strategy_id": sid, "mode": payload.mode}
+
+
+def _candidate_rows_from_shadow(strategy_id: str, out: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    sid = str(strategy_id or "").strip()
+    rows: list[dict[str, Any]] = []
+    meta: dict[str, Any] = {
+        "strategy_id": sid,
+        "asof_utc": out.get("asof_utc"),
+        "ok": bool(out.get("ok")),
+    }
+    if sid == "final_betting_v1":
+        for c in list(out.get("candidates") or []):
+            if not isinstance(c, dict):
+                continue
+            rows.append(
+                {
+                    "status": "candidate",
+                    "strategy_id": sid,
+                    "symbol": str(c.get("symbol") or ""),
+                    "side": str(c.get("side") or ""),
+                    "quantity": int(c.get("quantity") or 0),
+                    "price": c.get("price"),
+                    "score": c.get("score"),
+                    "reason": str(c.get("rationale") or ""),
+                    "order_id": None,
+                    "ts_utc": out.get("asof_utc"),
+                }
+            )
+        return rows, meta
+
+    for o in list(out.get("generated_orders") or []):
+        if not isinstance(o, dict):
+            continue
+        px = o.get("price")
+        q = int(o.get("quantity") or 0)
+        rows.append(
+            {
+                "status": "candidate",
+                "strategy_id": sid,
+                "symbol": str(o.get("symbol") or ""),
+                "side": str(o.get("side") or ""),
+                "quantity": q,
+                "price": px,
+                "score": None,
+                "reason": str(o.get("signal_reason") or ""),
+                "order_id": None,
+                "ts_utc": out.get("asof_utc"),
+            }
+        )
+    return rows, meta
+
+
+def _submit_orders_if_allowed(
+    *,
+    broker_service: BrokerSecretService,
+    cfg: BackendSettings,
+    user_id: str,
+    candidates: list[dict[str, Any]],
+    mode: LiveAutoMode,
+    safety_ok: bool,
+    enabled: bool,
+) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]], str, str]:
+    if not enabled:
+        return candidates, {"buys": [], "sells": []}, "stopped", "enabled=false"
+    if not safety_ok:
+        return candidates, {"buys": [], "sells": []}, "blocked", "runtime_safety_not_ok"
+    if mode == "passive":
+        return candidates, {"buys": [], "sells": []}, "passive", "mode=passive"
+
+    app_key, app_secret, account_no, product_code, tmode = broker_service.get_plain_credentials(user_id)
+    if (tmode or "").strip().lower() != "live":
+        return candidates, {"buys": [], "sells": []}, "blocked", "broker_account_not_live"
+    tok = broker_service.ensure_cached_token_for_paper_start(user_id)
+    if not tok.ok or not tok.access_token:
+        return candidates, {"buys": [], "sells": []}, "blocked", str(tok.failure_code or "token_not_ready")
+
+    api_base = broker_service._resolve_kis_api_base(tmode)  # type: ignore[attr-defined]
+    client = build_kis_client_for_live_user(
+        base_url=api_base,
+        access_token=tok.access_token,
+        app_key=app_key,
+        app_secret=app_secret,
+        live_execution_unlocked=True,
+    )
+    from app.brokers.live_broker import LiveBroker
+    from app.orders.models import OrderRequest
+
+    broker = LiveBroker(kis_client=client, account_no=account_no, account_product_code=product_code, logger=None)
+    open_orders = broker.get_open_orders()
+    positions = broker.get_positions()
+    held = {str(getattr(p, "symbol", "") or "") for p in positions if int(getattr(p, "quantity", 0) or 0) > 0}
+
+    submitted: dict[str, list[dict[str, Any]]] = {"buys": [], "sells": []}
+    max_orders = 2 if mode == "aggressive" else 1
+    submitted_count = 0
+    out_rows: list[dict[str, Any]] = []
+    for row in candidates:
+        if submitted_count >= max_orders:
+            out_rows.append({**row, "status": "skipped", "reason": "max_orders_per_tick"})
+            continue
+        sym = str(row.get("symbol") or "")
+        side = str(row.get("side") or "")
+        q = int(row.get("quantity") or 0)
+        px = row.get("price")
+        if not sym or side not in {"buy", "sell"} or q <= 0:
+            out_rows.append({**row, "status": "rejected", "reason": "invalid_candidate"})
+            continue
+        if side == "buy":
+            if sym in held:
+                out_rows.append({**row, "status": "rejected", "reason": "already_holding"})
+                continue
+            dup = False
+            for oo in open_orders:
+                if str(getattr(oo, "symbol", "") or "") == sym and str(getattr(oo, "side", "") or "") == "buy":
+                    if int(getattr(oo, "remaining_quantity", 0) or 0) > 0:
+                        dup = True
+                        break
+            if dup:
+                out_rows.append({**row, "status": "rejected", "reason": "duplicate_open_buy"})
+                continue
+            if px is None and mode != "aggressive":
+                out_rows.append({**row, "status": "rejected", "reason": "price_missing_market_order_blocked"})
+                continue
+
+        order = OrderRequest(
+            symbol=sym,
+            side=side,  # type: ignore[arg-type]
+            quantity=q,
+            price=None if px is None else float(px),
+            strategy_id=str(row.get("strategy_id") or ""),
+            signal_reason=str(row.get("reason") or ""),
+        )
+        try:
+            res = broker.place_order(order)
+            submitted_count += 1
+            entry = {"symbol": sym, "side": side, "quantity": q, "order_id": res.order_id, "accepted": bool(res.accepted)}
+            submitted["buys" if side == "buy" else "sells"].append(entry)
+            out_rows.append({**row, "status": "submitted" if bool(res.accepted) else "rejected", "order_id": res.order_id})
+        except Exception as exc:
+            out_rows.append({**row, "status": "rejected", "reason": f"submit_error:{str(exc)[:200]}"})
+
+    reason = f"submitted={submitted_count} mode={mode}"
+    return out_rows, submitted, "ok", reason
+
+
+@router.post("/auto-guarded/tick")
+def auto_guarded_tick(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    cfg = get_backend_settings()
+    user = _current_user(authorization)
+    uid = getattr(user, "id")
+    st_store = _auto_store(cfg)
+    st = st_store.get(uid)
+    LiveAutoGuardedStateStore.ensure_daily_rollover(st)
+    selected = _pick_selected_strategy(cfg, st)
+    mode = _mode_for_strategy(st, selected)
+
+    svc = get_broker_service()
+    safety = runtime_safety_validation_for_user_id(cfg, uid)
+    safety_ok = bool(safety.get("ok"))
+
+    strategies = ["final_betting_v1", "scalp_rsi_flag_hf_v1", "scalp_macd_rsi_3m_v1", "swing_relaxed_v2"] if selected == "multi" else [selected]
+    candidates: list[dict[str, Any]] = []
+    meta_by_strategy: dict[str, Any] = {}
+    for sid in strategies:
+        if sid == "final_betting_v1":
+            out = generate_final_betting_shadow_candidates(broker_service=svc, backend_settings=cfg, user_id=uid, limit=10)
+        elif sid == "swing_relaxed_v2":
+            out = generate_swing_shadow_report(broker_service=svc, backend_settings=cfg, user_id=uid, strategy_id=sid)
+        else:
+            out = generate_intraday_shadow_report(broker_service=svc, backend_settings=cfg, user_id=uid, strategy_id=sid)
+        rows, meta = _candidate_rows_from_shadow(sid, out)
+        meta_by_strategy[sid] = meta
+        candidates.extend(rows)
+
+    out_rows, submitted, decision, reason = _submit_orders_if_allowed(
+        broker_service=svc,
+        cfg=cfg,
+        user_id=uid,
+        candidates=candidates,
+        mode=mode,
+        safety_ok=safety_ok,
+        enabled=bool(st.enabled),
+    )
+
+    st.last_tick_at_utc = datetime.now(timezone.utc).isoformat()
+    st.last_eval_at_utc = st.last_tick_at_utc
+    st.last_eval_strategies = list(strategies)
+    st.last_eval_candidates = list(out_rows)
+    st.submitted = submitted
+    st.last_decision = str(decision)
+    st.last_reason = str(reason)
+    for x in list(submitted.get("buys") or []):
+        if bool(x.get("accepted")):
+            st.daily_buy_count += 1
+    for x in list(submitted.get("sells") or []):
+        if bool(x.get("accepted")):
+            st.daily_sell_count += 1
+    st_store.upsert(st)
+
+    return {
+        "ok": True,
+        "enabled": bool(st.enabled),
+        "selected_strategy": st.selected_strategy,
+        "effective_selected_strategy": selected,
+        "mode_effective": mode,
+        "last_eval_strategies": list(st.last_eval_strategies),
+        "last_eval_candidates": list(st.last_eval_candidates),
+        "submitted": st.submitted,
+        "daily_buy_count": int(st.daily_buy_count),
+        "daily_sell_count": int(st.daily_sell_count),
+        "meta_by_strategy": meta_by_strategy,
+        "safety": safety,
+    }
+
+
+@router.get("/compact-dashboard")
+def compact_dashboard(
+    authorization: str | None = Header(default=None),
+    include_raw: bool = Query(default=False),
+) -> dict[str, Any]:
+    cfg = get_backend_settings()
+    user = _current_user(authorization)
+    uid = getattr(user, "id")
+    safety_state = _store(cfg).get(uid)
+    live_status_payload = _status_payload_for_user(cfg, safety_state)
+    safety = runtime_safety_validation_for_user_id(cfg, uid)
+
+    auto_state = _auto_store(cfg).get(uid)
+    LiveAutoGuardedStateStore.ensure_daily_rollover(auto_state)
+    _auto_store(cfg).upsert(auto_state)
+    selected = _pick_selected_strategy(cfg, auto_state)
+
+    svc = get_broker_service()
+    app_key, app_secret, account_no, product_code, tmode = svc.get_plain_credentials(uid)
+    positions: list[dict[str, Any]] = []
+    open_orders: list[dict[str, Any]] = []
+    recent_fills: list[dict[str, Any]] = []
+    account_ok = False
+    account_err = ""
+    try:
+        if (tmode or "").strip().lower() == "live":
+            tok = svc.ensure_cached_token_for_paper_start(uid)
+            if tok.ok and tok.access_token:
+                api_base = svc._resolve_kis_api_base(tmode)  # type: ignore[attr-defined]
+                client = build_kis_client_for_live_user(
+                    base_url=api_base,
+                    access_token=tok.access_token,
+                    app_key=app_key,
+                    app_secret=app_secret,
+                    live_execution_unlocked=False,
+                )
+                from app.brokers.live_broker import LiveBroker
+
+                broker = LiveBroker(kis_client=client, account_no=account_no, account_product_code=product_code, logger=None)
+                for p in broker.get_positions():
+                    positions.append(
+                        {
+                            "symbol": str(getattr(p, "symbol", "") or ""),
+                            "quantity": int(getattr(p, "quantity", 0) or 0),
+                            "average_price": float(getattr(p, "average_price", 0.0) or 0.0),
+                            "current_price": None,
+                            "market_value": None,
+                            "pnl_pct": None,
+                        }
+                    )
+                for o in broker.get_open_orders():
+                    open_orders.append(
+                        {
+                            "order_id": str(getattr(o, "order_id", "") or ""),
+                            "symbol": str(getattr(o, "symbol", "") or ""),
+                            "side": str(getattr(o, "side", "") or ""),
+                            "remaining_quantity": int(getattr(o, "remaining_quantity", 0) or 0),
+                            "price": float(getattr(o, "price", 0.0) or 0.0) if getattr(o, "price", None) is not None else None,
+                            "created_at_utc": getattr(o, "created_at", datetime.now(timezone.utc)).isoformat(),
+                        }
+                    )
+                for f in broker.get_fills()[-50:]:
+                    recent_fills.append(
+                        {
+                            "symbol": str(getattr(f, "symbol", "") or ""),
+                            "side": str(getattr(f, "side", "") or ""),
+                            "quantity": int(getattr(f, "quantity", 0) or 0),
+                            "order_id": str(getattr(f, "order_id", "") or ""),
+                            "price": float(getattr(f, "fill_price", 0.0) or 0.0),
+                            "filled_at_utc": getattr(f, "filled_at", datetime.now(timezone.utc)).isoformat(),
+                        }
+                    )
+                account_ok = True
+            else:
+                account_err = str(tok.failure_code or "token_not_ready")
+        else:
+            account_err = "broker_account_not_live"
+    except Exception as exc:
+        account_err = str(exc)
+
+    payload: dict[str, Any] = {
+        "live": {
+            "can_place_live_order": bool(live_status_payload.get("can_place_live_order")),
+            "blockers": list(safety.get("blockers") or []),
+            "bypass": bool(cfg.live_unlock_bypass),
+            "emergency_stop": bool(getattr(safety_state, "live_emergency_stop", False)),
+            "warning_message": str(live_status_payload.get("warning_message") or ""),
+        },
+        "auto": {
+            "enabled": bool(auto_state.enabled),
+            "can_place_auto_order": bool(safety.get("ok")) and bool(auto_state.enabled),
+            "selected_strategy": selected,
+            "mode": _mode_for_strategy(auto_state, selected),
+            "last_tick_at_utc": auto_state.last_tick_at_utc,
+            "last_eval_at_utc": auto_state.last_eval_at_utc,
+            "last_decision": auto_state.last_decision,
+            "last_reason": auto_state.last_reason,
+            "daily_buy_count": int(auto_state.daily_buy_count),
+            "daily_sell_count": int(auto_state.daily_sell_count),
+            "last_eval_candidates": list(auto_state.last_eval_candidates or []),
+            "submitted": auto_state.submitted,
+        },
+        "strategies": {sid: {"shadow_candidates": [], "auto_candidates": [], "summary": {}} for sid in _supported_auto_strategies() if sid != "multi"},
+        "account": {
+            "ok": bool(account_ok),
+            "error": account_err,
+            "positions": positions,
+            "open_orders": open_orders,
+            "recent_fills": recent_fills,
+        },
+    }
+    if include_raw:
+        payload["raw"] = {
+            "live_status": live_status_payload,
+            "runtime_safety": safety,
+            "auto_state": auto_state.__dict__,
+        }
+    return payload

@@ -15,6 +15,14 @@
 - `TRADING_MODE=live`
 - `EXECUTION_MODE=live_manual_approval` (후보 생성 + 승인 후 제출 가능)
 - `EXECUTION_MODE=live_shadow` (후보/신호 산출만, 제출 불가)
+- (옵션) `LIVE_AUTO_STRATEGY` (자동매매 기본 전략 힌트; UI에서 선택한 전략이 우선)
+
+## Auto Guarded(전략별 자동매매)와의 관계
+
+- Auto Guarded는 “선택 전략 저장 + tick 결과 유지 표시”를 목표로 하며, 모드에 따라 제출 여부가 달라집니다.
+- `passive` 모드: 후보/신호는 보여주되 제출은 하지 않습니다.
+- `auto/aggressive` 모드: runtime safety OK + 실주문 잠금 해제 조건이 모두 충족된 경우에만 제한적으로 제출될 수 있습니다.
+- 운영 원칙상, 초기 운영은 `passive`로 시작해 후보 품질/시간대/중복 가드/차단 사유가 안정적으로 보이는지 확인한 뒤 확장합니다.
 
 ## 내일 운용 절차(권장)
 

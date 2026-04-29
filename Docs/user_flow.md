@@ -88,29 +88,9 @@
 
 - 시스템 목표는 수익률 개선이지만, 최우선 제약은 손실 최소화입니다.
 - 월 15%는 연구 목표이며 보장 수익이 아닙니다.
- — 모드/시스템 상태/수익률/리스크 배너, 브로커·런타임·Paper 데모 요약
-2. 브로커 설정 — 한투 계정 정보 입력(서버 암호화 저장), 연결 테스트
-3. Paper Trading — 전략 선택, 시작/중지, 로그
-4. 성과 분석 — 수익률·포지션·거래내역
-5. Live Settings — 실거래 관련 잠금/경고(정책에 따름)
 
-## 6) 관리자 관점 운영 흐름
+## 국내 Live(데스크톱) 화면 운용
 
-1. 대시보드/운영 패널 모니터링
-2. Live Settings — 다중 승인 플래그, 변경 이력
-3. Runtime Safety Validation, Kill Switch 점검
-4. 필요 시 live 재잠금/운영 중단
-
-## 7) paper trading vs live trading
-
-- **paper trading**: 기본 모드, 검증·리허설, 실주문 없음
-- **live trading**: 명시적 다단계 승인, 손실 제한/kill switch 미충족 시 차단
-
-## 8) Mock vs 실제 API
-
-- **실제 연동**: Auth, Broker CRUD/test/status, Paper, Dashboard, Performance, Recent trades 등
-- 일부 대시보드/성과 지표는 **추정치**를 포함하며, API 응답의 `value_sources`/`data_quality`로 구분 가능
-
-## 9) 정책 고지
-
-- 최우선 제약은 **손실 최소화**이며, 월 15%는 연구 목표일 뿐 보장 수익이 아닙니다.
+- 국내 Live 화면은 전략 탭(전략별 후보/자동매매/계좌 표)을 중심으로 구성됩니다.
+- 후보만 보기(Shadow)는 실주문 제출 없이 후보/신호만 표시합니다.
+- 자동매매(Auto Guarded)는 선택 전략을 서버 상태에 저장하고, tick 결과를 “마지막 판단 결과”로 유지해 표시합니다.
