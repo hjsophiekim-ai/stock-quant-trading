@@ -116,6 +116,43 @@ def test_save_full_unlock_intent_becomes_effective_when_paper_readiness_passes(m
     assert data["can_place_live_order"] is True
 
 
+def test_env_unlock_flags_apply_even_without_operator_history(monkeypatch, tmp_path) -> None:
+    from backend.app.api import live_trading_routes
+    from backend.app.core.config import BackendSettings
+    from backend.app.risk.live_unlock_gate import PaperReadinessResult
+
+    cfg = BackendSettings(
+        trading_mode="live",
+        execution_mode="live_shadow",
+        live_trading=True,
+        live_trading_confirm=True,
+        live_trading_extra_confirm=True,
+        risk_events_jsonl=str(tmp_path / "events.jsonl"),
+        live_trading_safety_state_store_json=str(tmp_path / "safety_state.json"),
+    )
+    monkeypatch.setattr(live_trading_routes, "get_backend_settings", lambda: cfg)
+    monkeypatch.setattr(live_trading_routes, "get_current_user_from_auth_header", lambda _h: type("U", (), {"id": "u1"})())
+    monkeypatch.setattr(
+        live_trading_routes,
+        "evaluate_paper_readiness",
+        lambda _cfg: PaperReadinessResult(ok=True, bypassed=False, user_message_ko="OK", technical_summary="OK"),
+    )
+    monkeypatch.setattr(live_trading_routes, "paper_readiness_to_dict", lambda _pr: {"ok": True, "bypassed": False})
+
+    c = TestClient(app)
+    s = c.get("/api/live-trading/status", headers={"Authorization": "Bearer t"})
+    assert s.status_code == 200
+    d = s.json()
+    assert d["operator_intent_has_history"] is False
+    assert d["requested_live_trading_flag"] is True
+    assert d["requested_secondary_confirm_flag"] is True
+    assert d["requested_extra_approval_flag"] is True
+    assert d["effective_live_trading_flag"] is True
+    assert d["effective_secondary_confirm_flag"] is True
+    assert d["effective_extra_approval_flag"] is True
+    assert d["can_place_live_order"] is True
+
+
 def test_partial_save_persists_and_does_not_trigger_pending_readiness(monkeypatch, tmp_path) -> None:
     from backend.app.api import live_trading_routes
     from backend.app.core.config import BackendSettings

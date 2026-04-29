@@ -30,6 +30,7 @@ from ..engine.live_prep_engine import (
     generate_intraday_shadow_report,
     generate_swing_shadow_report,
 )
+from app.strategy.intraday_common import kst_now, parse_krx_hhmm
 
 router = APIRouter(prefix="/live-trading", tags=["live-trading"])
 
@@ -84,11 +85,14 @@ def _status_payload_for_user(cfg: BackendSettings, st: LiveSafetyState) -> dict[
     requested_live = st.live_trading_flag if has_operator_intent else bool(cfg.live_trading)
     requested_confirm = st.secondary_confirm_flag if has_operator_intent else bool(cfg.live_trading_confirm)
     requested_extra = st.extra_approval_flag if has_operator_intent else bool(cfg.live_trading_extra_confirm)
+    effective_live_flag = bool(st.live_trading_flag or requested_live)
+    effective_confirm_flag = bool(st.secondary_confirm_flag or requested_confirm)
+    effective_extra_flag = bool(st.extra_approval_flag or requested_extra)
     can_place = (
         cfg.trading_mode == "live"
-        and st.live_trading_flag
-        and st.secondary_confirm_flag
-        and st.extra_approval_flag
+        and effective_live_flag
+        and effective_confirm_flag
+        and effective_extra_flag
         and (not st.live_emergency_stop)
         and cfg.live_trading
         and cfg.live_trading_confirm
@@ -106,11 +110,11 @@ def _status_payload_for_user(cfg: BackendSettings, st: LiveSafetyState) -> dict[
             missing.append("ENV LIVE_TRADING_CONFIRM=true")
         if not bool(cfg.live_trading_extra_confirm):
             missing.append("ENV LIVE_TRADING_EXTRA_CONFIRM=true")
-        if not bool(st.live_trading_flag):
+        if not bool(effective_live_flag):
             missing.append("APP live_trading_flag=true")
-        if not bool(st.secondary_confirm_flag):
+        if not bool(effective_confirm_flag):
             missing.append("APP secondary_confirm_flag=true")
-        if not bool(st.extra_approval_flag):
+        if not bool(effective_extra_flag):
             missing.append("APP extra_approval_flag=true")
         if missing:
             warning = "LIVE 주문 잠금 상태: 아래 항목이 필요합니다.\n- " + "\n- ".join(missing)
@@ -136,6 +140,9 @@ def _status_payload_for_user(cfg: BackendSettings, st: LiveSafetyState) -> dict[
         "live_trading_flag": st.live_trading_flag,
         "secondary_confirm_flag": st.secondary_confirm_flag,
         "extra_approval_flag": st.extra_approval_flag,
+        "effective_live_trading_flag": bool(effective_live_flag),
+        "effective_secondary_confirm_flag": bool(effective_confirm_flag),
+        "effective_extra_approval_flag": bool(effective_extra_flag),
         "requested_live_trading_flag": bool(requested_live),
         "requested_secondary_confirm_flag": bool(requested_confirm),
         "requested_extra_approval_flag": bool(requested_extra),
@@ -352,6 +359,13 @@ def readiness_builder_tick(
 
 def runtime_safety_validation_for_user_id(cfg: BackendSettings, user_id: str) -> dict[str, object]:
     st = _store(cfg).get(user_id)
+    has_operator_intent = bool(getattr(st, "history", None)) and len(list(getattr(st, "history") or [])) > 0
+    requested_live = st.live_trading_flag if has_operator_intent else bool(cfg.live_trading)
+    requested_confirm = st.secondary_confirm_flag if has_operator_intent else bool(cfg.live_trading_confirm)
+    requested_extra = st.extra_approval_flag if has_operator_intent else bool(cfg.live_trading_extra_confirm)
+    effective_live_flag = bool(st.live_trading_flag or requested_live)
+    effective_confirm_flag = bool(st.secondary_confirm_flag or requested_confirm)
+    effective_extra_flag = bool(st.extra_approval_flag or requested_extra)
     blockers: list[str] = []
     blocker_details: list[dict[str, str]] = []
 
@@ -367,11 +381,11 @@ def runtime_safety_validation_for_user_id(cfg: BackendSettings, user_id: str) ->
         _add("ENV_LIVE_TRADING_CONFIRM_OFF", "ENV LIVE_TRADING_CONFIRM is not true")
     if not cfg.live_trading_extra_confirm:
         _add("ENV_LIVE_TRADING_EXTRA_CONFIRM_OFF", "ENV LIVE_TRADING_EXTRA_CONFIRM is not true")
-    if not st.live_trading_flag:
+    if not effective_live_flag:
         _add("APP_LIVE_TRADING_FLAG_OFF", "APP live trading flag is not enabled")
-    if not st.secondary_confirm_flag:
+    if not effective_confirm_flag:
         _add("APP_SECONDARY_CONFIRM_MISSING", "APP secondary confirmation is missing")
-    if not st.extra_approval_flag:
+    if not effective_extra_flag:
         _add("APP_EXTRA_APPROVAL_MISSING", "APP extra approval is missing")
     if st.live_emergency_stop:
         _add("APP_EMERGENCY_STOP_ON", "APP emergency stop is enabled")
@@ -867,6 +881,13 @@ def compact_dashboard(
     LiveAutoGuardedStateStore.ensure_daily_rollover(auto_state)
     _auto_store(cfg).upsert(auto_state)
     selected = _pick_selected_strategy(cfg, auto_state)
+    market_closed_notice = ""
+    try:
+        now = kst_now().time()
+        if not (parse_krx_hhmm("090000") <= now <= parse_krx_hhmm("152000")):
+            market_closed_notice = "장 종료로 신규 후보 평가 제한"
+    except Exception:
+        market_closed_notice = ""
 
     svc = get_broker_service()
     app_key, app_secret, account_no, product_code, tmode = svc.get_plain_credentials(uid)
@@ -938,6 +959,12 @@ def compact_dashboard(
             "bypass": bool(cfg.live_unlock_bypass),
             "emergency_stop": bool(getattr(safety_state, "live_emergency_stop", False)),
             "warning_message": str(live_status_payload.get("warning_message") or ""),
+            "live_trading_flag": bool(live_status_payload.get("live_trading_flag")),
+            "secondary_confirm_flag": bool(live_status_payload.get("secondary_confirm_flag")),
+            "extra_approval_flag": bool(live_status_payload.get("extra_approval_flag")),
+            "effective_live_trading_flag": bool(live_status_payload.get("effective_live_trading_flag")),
+            "effective_secondary_confirm_flag": bool(live_status_payload.get("effective_secondary_confirm_flag")),
+            "effective_extra_approval_flag": bool(live_status_payload.get("effective_extra_approval_flag")),
         },
         "auto": {
             "enabled": bool(auto_state.enabled),
@@ -952,6 +979,7 @@ def compact_dashboard(
             "daily_sell_count": int(auto_state.daily_sell_count),
             "last_eval_candidates": list(auto_state.last_eval_candidates or []),
             "submitted": auto_state.submitted,
+            "market_notice": market_closed_notice,
         },
         "strategies": {sid: {"shadow_candidates": [], "auto_candidates": [], "summary": {}} for sid in _supported_auto_strategies() if sid != "multi"},
         "account": {

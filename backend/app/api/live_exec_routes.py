@@ -424,9 +424,6 @@ def live_auto_guarded_start(payload: LiveAutoGuardedStartRequest, authorization:
         raise HTTPException(status_code=403, detail="TRADING_MODE=live required")
     if (cfg.execution_mode or "").strip().lower() != "live_auto_guarded":
         raise HTTPException(status_code=403, detail="EXECUTION_MODE=live_auto_guarded required")
-    sess = _store(cfg).get_active(user.id)
-    if sess is not None:
-        raise HTTPException(status_code=409, detail="live_exec_session_running")
     st = _auto_store(cfg).get(user.id)
     st.enabled = True
     st.selected_strategy = str(payload.strategy_id or "").strip() or None
@@ -510,5 +507,9 @@ def live_auto_guarded_tick(
         requested_strategy_id=(str(payload.strategy_id).strip() if payload.strategy_id is not None else None),
         requested_mode=(str(payload.mode).strip() if payload.mode is not None else None),
     )
+    if isinstance(out, dict):
+        s = out.get("state")
+        if isinstance(s, dict):
+            out["selected_strategy"] = s.get("selected_strategy")
     return out
 

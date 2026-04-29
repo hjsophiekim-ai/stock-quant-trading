@@ -180,6 +180,7 @@ async function refreshCompact(includeRaw) {
 
   const blockers = (d.live && d.live.blockers) || [];
   $("statusLine").textContent = (d.live && d.live.warning_message) || "";
+  $("marketNoticeLine").textContent = (d.auto && d.auto.market_notice) || "";
   $("bypassBadge").style.display = d.live && d.live.bypass ? "inline-block" : "none";
 
   $("liveOrderValue").textContent = d.live && d.live.can_place_live_order ? "가능" : "차단";
@@ -189,6 +190,9 @@ async function refreshCompact(includeRaw) {
   $("lastTickValue").textContent = fmtUtc(d.auto && d.auto.last_tick_at_utc);
   $("dailyCountsValue").textContent = String((d.auto && d.auto.daily_buy_count) || 0) + " / " + String((d.auto && d.auto.daily_sell_count) || 0);
   $("blockersValue").textContent = blockers.length ? blockers[0] : "-";
+  $("liveFlagChk").checked = !!(d.live && d.live.live_trading_flag);
+  $("secondaryChk").checked = !!(d.live && d.live.secondary_confirm_flag);
+  $("extraChk").checked = !!(d.live && d.live.extra_approval_flag);
 
   $("autoLoopBadge").textContent = d.auto && d.auto.enabled ? "자동 루프 ON" : "자동 루프 OFF";
   $("autoLoopBadge").className = "badge " + (d.auto && d.auto.enabled ? "ok" : "bad");
@@ -203,6 +207,30 @@ async function refreshCompact(includeRaw) {
 
   renderAutoTable((d.auto && d.auto.last_eval_candidates) || []);
   renderAccountTables(acc);
+}
+
+async function saveUnlockSettings() {
+  const base = effectiveBackendUrl().replace(/\/$/, "");
+  const body = {
+    live_trading_flag: !!$("liveFlagChk").checked,
+    secondary_confirm_flag: !!$("secondaryChk").checked,
+    extra_approval_flag: !!$("extraChk").checked,
+    actor: "desktop-user",
+    reason: "ui_unlock_flags_update",
+  };
+  const out = await fetchJson(base + "/api/live-trading/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (out.can_place_live_order) {
+    $("unlockSaveMsg").textContent = "설정 저장 완료. 현재 LIVE 주문 가능 상태입니다.";
+  } else if (out.unlock_pending_due_to_paper_readiness) {
+    $("unlockSaveMsg").textContent = "설정 저장 완료. Paper readiness 통과 후 실거래 제출이 가능합니다.";
+  } else {
+    $("unlockSaveMsg").textContent = "설정 저장 완료. 실거래 제출은 아직 잠금 상태입니다.";
+  }
+  await refreshCompact(true);
 }
 
 async function fetchShadowForStrategy(strategyId) {
@@ -472,6 +500,7 @@ function wireNav() {
   $("stopAutoBtn").addEventListener("click", stopAuto);
   $("tickBtn").addEventListener("click", tickOnce);
   $("saveModeBtn").addEventListener("click", saveMode);
+  $("saveUnlockBtn").addEventListener("click", saveUnlockSettings);
   $("emergencyStopBtn").addEventListener("click", toggleEmergencyStop);
   $("diagRefreshBtn").addEventListener("click", async () => {
     await refreshCompact(true);

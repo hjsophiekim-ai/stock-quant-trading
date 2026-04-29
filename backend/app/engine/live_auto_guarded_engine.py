@@ -425,6 +425,10 @@ def tick_live_auto_guarded(
     now_kst = kst_now()
     manual = LiveMarketModeStore(getattr(cfg, "live_market_mode_store_json")).get(user_id, market="domestic")
     effective_strategies = _resolve_effective_auto_strategies(cfg, st, requested_strategy_id)
+    if requested_strategy_id is not None:
+        st.selected_strategy = str(requested_strategy_id or "").strip() or st.selected_strategy
+    elif not str(st.selected_strategy or "").strip():
+        st.selected_strategy = str(getattr(cfg, "live_auto_strategy", "") or "").strip() or "final_betting_v1"
     per_strategy: list[dict[str, Any]] = []
     all_candidates: list[dict[str, Any]] = []
     merged_fetch_summary: list[dict[str, Any]] = []
