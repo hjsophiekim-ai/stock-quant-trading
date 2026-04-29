@@ -219,6 +219,18 @@ Paper처럼 Live 세션을 시작/중지하고, Tick을 통해 **수동 실행(�
 - `POST /tick` (Authorization: Bearer)
   - res: `{ ok: true, session: LiveExecSession, result: object, counts }`
 
+### 8c-1) Live Auto Guarded (Execution-mode: live_auto_guarded)
+
+- `POST /auto-guarded/start` (Authorization: Bearer)
+  - req: `{ strategy_id: string, mode: "aggressive"|"auto"|"passive", actor?: string, reason?: string }`
+  - res: `{ ok: true, state: LiveAutoGuardedState, loop?: object, safety?: object, readiness_builder?: object }`
+- `POST /auto-guarded/stop` (Authorization: Bearer)
+  - req: `{ actor?: string, reason?: string }`
+  - res: `{ ok: true, state: LiveAutoGuardedState, loop?: object }`
+- `POST /auto-guarded/tick` (Authorization: Bearer)
+  - req: `{ strategy_id?: string, mode?: "aggressive"|"auto"|"passive" }`
+  - res: `{ ok: true, state: LiveAutoGuardedState, submitted: object, evaluation: object, ... }`
+
 ## 9) OpenAPI 자동생성 전환 가이드
 
 - 필드명 규칙(snake_case)과 enum literal을 shared 모델에서 먼저 고정
