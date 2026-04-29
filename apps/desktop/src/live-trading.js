@@ -52,9 +52,11 @@ function renderShadowTable(rows, reasonText) {
     return;
   }
   empty.style.display = "none";
-  for (const r of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
     const tr = document.createElement("tr");
     tr.appendChild(td(r.status || "candidate"));
+    tr.appendChild(td(i + 1));
     tr.appendChild(td(r.symbol || ""));
     tr.appendChild(td(r.side || ""));
     tr.appendChild(td(r.quantity || ""));
@@ -76,12 +78,14 @@ function renderAutoTable(rows) {
     return;
   }
   empty.style.display = "none";
-  for (const r of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
     const tr = document.createElement("tr");
     const px = r.price == null ? null : Number(r.price);
     const qty = Number(r.quantity || 0);
     const notional = px != null && Number.isFinite(px) ? px * qty : null;
     tr.appendChild(td(r.status || ""));
+    tr.appendChild(td(i + 1));
     tr.appendChild(td(r.strategy_id || ""));
     tr.appendChild(td(r.symbol || ""));
     tr.appendChild(td(r.side || ""));
@@ -207,17 +211,22 @@ async function fetchShadowForStrategy(strategyId) {
     const out = await fetchJson(base + "/api/live-prep/final-betting/generate", { method: "POST" });
     lastShadow = out;
     $("rawShadow").textContent = JSON.stringify(out, null, 2);
-    const rows = (out.candidates || []).map((c) => ({
+    const rows = (out.items || []).map((c) => ({
       status: "candidate",
       symbol: c.symbol,
       side: c.side,
       quantity: c.quantity,
       price: c.price,
       score: c.score,
-      reason: c.rationale,
-      ts_utc: out.asof_utc,
+      reason: c.rationale || "",
+      ts_utc: c.created_at_utc,
     }));
-    renderShadowTable(rows, out.ok ? "" : (out.message || out.error || ""));
+    const inspected = (out.shadow && out.shadow.fetch_summary && out.shadow.fetch_summary.length) || 0;
+    const rejected = (out.shadow && out.shadow.rejection_reasons_by_symbol && Object.keys(out.shadow.rejection_reasons_by_symbol).length) || 0;
+    const msg = rows.length
+      ? ""
+      : ("현재 조건을 만족한 후보가 없습니다. " + "(검사 " + String(inspected) + " / 탈락 " + String(rejected) + ")");
+    renderShadowTable(rows, out.ok ? msg : (out.message || out.error || msg));
     return;
   }
   if (strategyId === "swing_relaxed_v2") {
@@ -245,15 +254,15 @@ async function fetchShadowForStrategy(strategyId) {
         const raw = lastShadow;
         const rows =
           sid === "final_betting_v1"
-            ? (raw.candidates || []).map((c) => ({
+            ? (raw.items || []).map((c) => ({
                 status: "candidate",
                 symbol: c.symbol,
                 side: c.side,
                 quantity: c.quantity,
                 price: c.price,
                 score: c.score,
-                reason: c.rationale,
-                ts_utc: raw.asof_utc,
+                reason: c.rationale || "",
+                ts_utc: c.created_at_utc,
               }))
             : (raw.generated_orders || []).map((o) => ({
                 status: "candidate",
@@ -293,10 +302,10 @@ async function fetchShadowForStrategy(strategyId) {
 async function startAuto() {
   const base = effectiveBackendUrl().replace(/\/$/, "");
   const mode = $("modeSelect").value || "auto";
-  const out = await fetchJson(base + "/api/live-trading/auto-guarded/start", {
+  const out = await fetchJson(base + "/api/live-exec/auto-guarded/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ strategy_id: activeStrategyId, mode, actor: "user", reason: "ui_start_auto_guarded" }),
+    body: JSON.stringify({ strategy_id: activeStrategyId, mode, actor: "desktop-user", reason: "ui_start_auto_guarded" }),
   });
   lastTick = out;
   $("rawTick").textContent = JSON.stringify(out, null, 2);
@@ -305,10 +314,10 @@ async function startAuto() {
 
 async function stopAuto() {
   const base = effectiveBackendUrl().replace(/\/$/, "");
-  const out = await fetchJson(base + "/api/live-trading/auto-guarded/stop", {
+  const out = await fetchJson(base + "/api/live-exec/auto-guarded/stop", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ actor: "user", reason: "ui_stop_auto_guarded" }),
+    body: JSON.stringify({ actor: "desktop-user", reason: "ui_stop_auto_guarded" }),
   });
   lastTick = out;
   $("rawTick").textContent = JSON.stringify(out, null, 2);
@@ -330,10 +339,15 @@ async function saveMode() {
 
 async function tickOnce() {
   const base = effectiveBackendUrl().replace(/\/$/, "");
-  const out = await fetchJson(base + "/api/live-trading/auto-guarded/tick", { method: "POST" });
+  const mode = $("modeSelect").value || "auto";
+  const out = await fetchJson(base + "/api/live-exec/auto-guarded/tick", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ strategy_id: activeStrategyId, mode }),
+  });
   lastTick = out;
   $("rawTick").textContent = JSON.stringify(out, null, 2);
-  renderAutoTable(out.last_eval_candidates || []);
+  renderAutoTable(((out.state && out.state.last_eval_candidates) || out.last_eval_candidates || []));
   await refreshCompact(true);
 }
 

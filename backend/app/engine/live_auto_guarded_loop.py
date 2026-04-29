@@ -11,7 +11,7 @@ from backend.app.core.config import BackendSettings
 from backend.app.engine.live_auto_guarded_engine import tick_live_auto_guarded
 from backend.app.risk.audit import append_risk_event
 from backend.app.services.broker_secret_service import BrokerSecretService
-from backend.app.services.live_auto_guarded_store import LiveAutoGuardedStore
+from backend.app.services.live_auto_guarded_state_store import LiveAutoGuardedStateStore
 
 logger = logging.getLogger("backend.app.engine.live_auto_guarded_loop")
 
@@ -69,7 +69,7 @@ def start_live_auto_guarded_loop(
     *,
     cfg: BackendSettings,
     broker_service: BrokerSecretService,
-    store: LiveAutoGuardedStore,
+    store: LiveAutoGuardedStateStore,
     user_id: str,
     tick_func: Callable[..., dict[str, Any]] = tick_live_auto_guarded,
     safety_func: Callable[[BackendSettings, str], dict[str, Any]] = runtime_safety_validation_for_user_id,
@@ -193,7 +193,7 @@ def install_live_auto_guarded_loop_manager(
     if not bool(getattr(settings, "live_auto_loop_auto_resume", False)):
         return
 
-    store = LiveAutoGuardedStore(settings.live_auto_guarded_state_store_json)
+    store = LiveAutoGuardedStateStore(settings.live_auto_guarded_state_store_json)
     for st in store.list_enabled()[:20]:
         start_live_auto_guarded_loop(cfg=settings, broker_service=broker_service, store=store, user_id=str(st.user_id or ""))
 

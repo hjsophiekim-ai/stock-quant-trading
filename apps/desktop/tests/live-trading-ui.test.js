@@ -11,5 +11,13 @@ test("live-trading.html hides raw diagnostics by default", () => {
   const idxDetails = html.indexOf("<details>");
   const idxRaw = html.indexOf("Raw compact-dashboard");
   assert.ok(idxRaw > idxDetails);
+  assert.ok(html.includes("<th>순위</th>"));
+});
+
+test("live-trading.js uses live-exec auto-guarded endpoints", () => {
+  const p = path.join(__dirname, "..", "src", "live-trading.js");
+  const js = fs.readFileSync(p, "utf-8");
+  assert.ok(js.includes("/api/live-exec/auto-guarded/start"));
+  assert.ok(js.includes("/api/live-exec/auto-guarded/tick"));
 });
 

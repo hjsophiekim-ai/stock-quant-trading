@@ -11,7 +11,7 @@ from backend.app.core.config import BackendSettings, get_backend_settings
 from backend.app.risk.audit import append_risk_event
 from backend.app.services.live_exec_session_store import LiveExecSession, LiveExecSessionStore
 from backend.app.services.live_market_mode_store import LiveMarketModeStore
-from backend.app.services.live_auto_guarded_store import LiveAutoGuardedStore
+from backend.app.services.live_auto_guarded_state_store import LiveAutoGuardedStateStore
 
 from .auth_routes import get_current_user_from_auth_header
 from .broker_routes import get_broker_service
@@ -46,21 +46,26 @@ class LiveExecStopRequest(BaseModel):
 
 
 class LiveAutoGuardedStartRequest(BaseModel):
+    strategy_id: str = Field(min_length=3, max_length=80)
+    mode: Literal["aggressive", "auto", "passive"] = "auto"
     actor: str = Field(default="user", min_length=1, max_length=64)
     reason: str = Field(default="start_live_auto_guarded", min_length=3, max_length=240)
-    strategy: str | None = None
 
 
 class LiveAutoGuardedStopRequest(BaseModel):
     actor: str = Field(default="user", min_length=1, max_length=64)
     reason: str = Field(default="stop_live_auto_guarded", min_length=3, max_length=240)
 
+class LiveAutoGuardedTickRequest(BaseModel):
+    strategy_id: str | None = Field(default=None, min_length=3, max_length=80)
+    mode: Literal["aggressive", "auto", "passive"] | None = None
+
 
 def _store(cfg: BackendSettings) -> LiveExecSessionStore:
     return LiveExecSessionStore(cfg.live_exec_sessions_store_json)
 
-def _auto_store(cfg: BackendSettings) -> LiveAutoGuardedStore:
-    return LiveAutoGuardedStore(cfg.live_auto_guarded_state_store_json)
+def _auto_store(cfg: BackendSettings) -> LiveAutoGuardedStateStore:
+    return LiveAutoGuardedStateStore(cfg.live_auto_guarded_state_store_json)
 
 
 def _candidate_store(cfg: BackendSettings) -> LiveCandidateStore:
@@ -424,8 +429,8 @@ def live_auto_guarded_start(payload: LiveAutoGuardedStartRequest, authorization:
         raise HTTPException(status_code=409, detail="live_exec_session_running")
     st = _auto_store(cfg).get(user.id)
     st.enabled = True
-    if payload.strategy is not None:
-        st.selected_strategy = str(payload.strategy or "").strip() or None
+    st.selected_strategy = str(payload.strategy_id or "").strip() or None
+    st.mode_by_strategy[str(st.selected_strategy or "")] = str(payload.mode)
     st.started_at_utc = datetime.now(timezone.utc).isoformat()
     st.stopped_at_utc = None
     st.updated_at_utc = datetime.now(timezone.utc).isoformat()
@@ -488,8 +493,8 @@ def live_auto_guarded_stop(payload: LiveAutoGuardedStopRequest, authorization: s
 
 @router.post("/auto-guarded/tick")
 def live_auto_guarded_tick(
+    payload: LiveAutoGuardedTickRequest,
     authorization: str | None = Header(default=None),
-    strategy: str | None = Query(default=None),
 ) -> dict[str, Any]:
     cfg = get_backend_settings()
     user = _current_user(authorization)
@@ -497,12 +502,13 @@ def live_auto_guarded_tick(
         raise HTTPException(status_code=403, detail="EXECUTION_MODE=live_auto_guarded required")
     safety = runtime_safety_validation_for_user_id(cfg, user.id)
     svc = get_broker_service()
-    if strategy is not None:
-        astore = _auto_store(cfg)
-        st = astore.get(user.id)
-        st.selected_strategy = str(strategy or "").strip() or None
-        st.updated_at_utc = datetime.now(timezone.utc).isoformat()
-        astore.upsert(st)
-    out = tick_live_auto_guarded(cfg=cfg, broker_service=svc, user_id=user.id, safety=safety)
+    out = tick_live_auto_guarded(
+        cfg=cfg,
+        broker_service=svc,
+        user_id=user.id,
+        safety=safety,
+        requested_strategy_id=(str(payload.strategy_id).strip() if payload.strategy_id is not None else None),
+        requested_mode=(str(payload.mode).strip() if payload.mode is not None else None),
+    )
     return out
 

@@ -14,7 +14,7 @@ from backend.app.clients.kis_client import build_kis_client_for_live_user
 from backend.app.risk.audit import append_risk_event
 from backend.app.risk.live_exit_rules import evaluate_exit_for_position, set_cooldown_after_loss, should_skip_due_to_cooldown
 from backend.app.services.broker_secret_service import BrokerSecretService
-from backend.app.services.live_auto_guarded_store import LiveAutoGuardedState, LiveAutoGuardedStore
+from backend.app.services.live_auto_guarded_state_store import LiveAutoGuardedState, LiveAutoGuardedStateStore
 from backend.app.services.live_market_mode_store import LiveMarketModeStore
 from backend.app.strategy.live_candidate_scoring import score_candidate
 from backend.app.strategy.live_performance_scoring import get_performance_signal
@@ -45,16 +45,6 @@ def _market_open_ok(require_open: bool) -> tuple[bool, str]:
     if not (t0 <= t <= t1):
         return False, f"market_closed now_kst={now.isoformat()}"
     return True, ""
-
-
-def _reset_daily_counts_if_needed(state: LiveAutoGuardedState) -> None:
-    now = kst_now()
-    day = now.strftime("%Y%m%d")
-    if state.daily_kst_date != day:
-        state.daily_kst_date = day
-        state.daily_buy_count = 0
-        state.daily_sell_count = 0
-        state.recent_submits = {}
 
 
 def _dup_key(side: str, symbol: str) -> str:
@@ -104,8 +94,10 @@ def _parse_strategy_list(raw: str) -> list[str]:
     return out
 
 
-def _resolve_effective_auto_strategies(cfg: Any, state: LiveAutoGuardedState) -> list[str]:
-    sel = str(getattr(state, "selected_strategy", "") or "").strip()
+def _resolve_effective_auto_strategies(cfg: Any, state: LiveAutoGuardedState, requested_strategy_id: str | None) -> list[str]:
+    sel = str(requested_strategy_id or "").strip()
+    if not sel:
+        sel = str(getattr(state, "selected_strategy", "") or "").strip()
     if not sel:
         sel = str(getattr(cfg, "live_auto_strategy", "") or "").strip() or "final_betting_v1"
     if sel == "multi":
@@ -187,10 +179,18 @@ def tick_live_auto_guarded(
     broker_service: BrokerSecretService,
     user_id: str,
     safety: dict[str, Any],
+    requested_strategy_id: str | None = None,
+    requested_mode: str | None = None,
 ) -> dict[str, Any]:
-    store = LiveAutoGuardedStore(getattr(cfg, "live_auto_guarded_state_store_json"))
+    store = LiveAutoGuardedStateStore(getattr(cfg, "live_auto_guarded_state_store_json"))
     st = store.get(user_id)
-    _reset_daily_counts_if_needed(st)
+    LiveAutoGuardedStateStore.ensure_daily_rollover(st)
+    if requested_strategy_id is not None:
+        st.selected_strategy = str(requested_strategy_id or "").strip() or None
+    if requested_mode is not None and st.selected_strategy:
+        m = str(requested_mode or "").strip().lower()
+        if m in {"aggressive", "auto", "passive"}:
+            st.mode_by_strategy[str(st.selected_strategy)] = m  # type: ignore[assignment]
     st.last_tick_at_utc = _utc_now_iso()
     st.updated_at_utc = _utc_now_iso()
     orders_allowed = bool(safety.get("ok"))
@@ -424,7 +424,7 @@ def tick_live_auto_guarded(
     buy_submitted: list[dict[str, Any]] = []
     now_kst = kst_now()
     manual = LiveMarketModeStore(getattr(cfg, "live_market_mode_store_json")).get(user_id, market="domestic")
-    effective_strategies = _resolve_effective_auto_strategies(cfg, st)
+    effective_strategies = _resolve_effective_auto_strategies(cfg, st, requested_strategy_id)
     per_strategy: list[dict[str, Any]] = []
     all_candidates: list[dict[str, Any]] = []
     merged_fetch_summary: list[dict[str, Any]] = []
@@ -649,7 +649,7 @@ def tick_live_auto_guarded(
     st.last_eval_at_utc = _utc_now_iso()
     st.last_eval_strategies = list(effective_strategies)
     st.last_eval_summary = {"strategies": per_strategy, "evaluated_candidate_count": len(all_candidates)}
-    st.last_eval_candidates = list(all_candidates)[:50]
+    st.last_eval_candidates = []
 
     if bool(getattr(cfg, "live_auto_buy_enabled", False)):
         if st.daily_buy_count < int(getattr(cfg, "live_auto_max_daily_buy_count", 3)):
@@ -828,6 +828,52 @@ def tick_live_auto_guarded(
 
     st.last_decision = "ok"
     st.last_reason = f"sell_submitted={len(sell_submitted)} buy_submitted={len(buy_submitted)}"
+    decision_rows: list[dict[str, Any]] = []
+    for c in all_candidates:
+        if not isinstance(c, dict):
+            continue
+        decision_rows.append(
+            {
+                "status": "candidate",
+                "strategy_id": str(c.get("strategy_id") or ""),
+                "symbol": str(c.get("symbol") or ""),
+                "side": str(c.get("side") or ""),
+                "quantity": int(c.get("quantity") or 0),
+                "price": c.get("price"),
+                "score": c.get("score"),
+                "reason": str(c.get("rationale") or ""),
+                "order_id": None,
+                "ts_utc": st.last_eval_at_utc,
+            }
+        )
+    for s in sell_submitted:
+        if not isinstance(s, dict):
+            continue
+        decision_rows.append(
+            {
+                "status": "submitted" if bool(s.get("accepted")) else "rejected",
+                "strategy_id": "live_auto_guarded",
+                "symbol": str(s.get("symbol") or ""),
+                "side": "sell",
+                "quantity": int(s.get("quantity") or 0),
+                "price": None,
+                "score": None,
+                "reason": str(s.get("reason") or ""),
+                "order_id": s.get("order_id"),
+                "ts_utc": st.last_eval_at_utc,
+            }
+        )
+    for b in buy_submitted:
+        if not isinstance(b, dict):
+            continue
+        sym = str(b.get("symbol") or "")
+        oid = b.get("order_id")
+        for r in decision_rows:
+            if str(r.get("symbol") or "") == sym and str(r.get("side") or "") == "buy":
+                r["status"] = "submitted" if bool(b.get("accepted")) else "rejected"
+                r["order_id"] = oid
+                break
+    st.last_eval_candidates = decision_rows[:80]
     store.upsert(st)
     _event(
         "LIVE_AUTO_TICK_FINISHED",

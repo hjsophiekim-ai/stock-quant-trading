@@ -16,6 +16,8 @@ LiveAutoMode = Literal["aggressive", "auto", "passive"]
 class LiveAutoGuardedState:
     user_id: str
     enabled: bool = False
+    started_at_utc: str | None = None
+    stopped_at_utc: str | None = None
     selected_strategy: str | None = None
     mode_by_strategy: dict[str, LiveAutoMode] = field(default_factory=dict)
 
@@ -23,9 +25,13 @@ class LiveAutoGuardedState:
     last_eval_at_utc: str | None = None
     last_eval_strategies: list[str] = field(default_factory=list)
     last_eval_candidates: list[dict[str, Any]] = field(default_factory=list)
+    last_eval_summary: dict[str, Any] = field(default_factory=dict)
     submitted: dict[str, list[dict[str, Any]]] = field(default_factory=lambda: {"buys": [], "sells": []})
     last_decision: str = ""
     last_reason: str = ""
+
+    cooldown_until_utc: str | None = None
+    recent_submits: dict[str, str] = field(default_factory=dict)
 
     daily_kst_date: str = ""
     daily_buy_count: int = 0
@@ -44,7 +50,19 @@ class LiveAutoGuardedStateStore:
             return {}
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
-            return raw if isinstance(raw, dict) else {}
+            if isinstance(raw, dict):
+                return raw
+            if isinstance(raw, list):
+                out: dict[str, Any] = {}
+                for r in raw:
+                    if not isinstance(r, dict):
+                        continue
+                    uid = str(r.get("user_id") or "").strip()
+                    if not uid:
+                        continue
+                    out[uid] = r
+                return out
+            return {}
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             return {}
 
@@ -62,6 +80,8 @@ class LiveAutoGuardedStateStore:
             st = LiveAutoGuardedState(user_id=uid)
             if isinstance(row, dict):
                 st.enabled = bool(row.get("enabled", False))
+                st.started_at_utc = row.get("started_at_utc") or None
+                st.stopped_at_utc = row.get("stopped_at_utc") or None
                 st.selected_strategy = row.get("selected_strategy") if row.get("selected_strategy") else None
                 mb = row.get("mode_by_strategy") if isinstance(row.get("mode_by_strategy"), dict) else {}
                 st.mode_by_strategy = {str(k): str(v) for k, v in mb.items()} if isinstance(mb, dict) else {}
@@ -69,9 +89,12 @@ class LiveAutoGuardedStateStore:
                 st.last_eval_at_utc = row.get("last_eval_at_utc") or None
                 st.last_eval_strategies = list(row.get("last_eval_strategies") or [])
                 st.last_eval_candidates = list(row.get("last_eval_candidates") or [])
+                st.last_eval_summary = dict(row.get("last_eval_summary") or {})
                 st.submitted = row.get("submitted") if isinstance(row.get("submitted"), dict) else {"buys": [], "sells": []}
                 st.last_decision = str(row.get("last_decision") or "")
                 st.last_reason = str(row.get("last_reason") or "")
+                st.cooldown_until_utc = row.get("cooldown_until_utc") or None
+                st.recent_submits = dict(row.get("recent_submits") or {})
                 st.daily_kst_date = str(row.get("daily_kst_date") or "")
                 st.daily_buy_count = int(row.get("daily_buy_count") or 0)
                 st.daily_sell_count = int(row.get("daily_sell_count") or 0)
@@ -87,6 +110,21 @@ class LiveAutoGuardedStateStore:
             raw[str(st.user_id)] = asdict(st)
             self._write_all(raw)
 
+    def list_enabled(self) -> list[LiveAutoGuardedState]:
+        with self._lock:
+            raw = self._read_all()
+        out: list[LiveAutoGuardedState] = []
+        if not isinstance(raw, dict):
+            return out
+        for uid, row in raw.items():
+            if not isinstance(uid, str) or not isinstance(row, dict):
+                continue
+            if not bool(row.get("enabled")):
+                continue
+            out.append(self.get(uid))
+        out.sort(key=lambda x: (str(x.user_id), str(x.updated_at_utc)))
+        return out
+
     @staticmethod
     def ensure_daily_rollover(st: LiveAutoGuardedState) -> None:
         today = now_kst().strftime("%Y-%m-%d")
@@ -94,3 +132,4 @@ class LiveAutoGuardedStateStore:
             st.daily_kst_date = today
             st.daily_buy_count = 0
             st.daily_sell_count = 0
+            st.recent_submits = {}

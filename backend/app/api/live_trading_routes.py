@@ -962,6 +962,40 @@ def compact_dashboard(
             "recent_fills": recent_fills,
         },
     }
+
+    try:
+        by_id: dict[str, Any] = {}
+        summ = auto_state.last_eval_summary if isinstance(auto_state.last_eval_summary, dict) else {}
+        for row in list(summ.get("strategies") or []) if isinstance(summ, dict) else []:
+            if not isinstance(row, dict):
+                continue
+            sid = str(row.get("strategy_id") or "").strip()
+            if sid:
+                by_id[sid] = row
+
+        to_fill = ["final_betting_v1", "scalp_rsi_flag_hf_v1", "scalp_macd_rsi_3m_v1", "swing_relaxed_v2"] if selected == "multi" else [selected]
+        for sid in to_fill:
+            if sid not in payload["strategies"]:
+                continue
+            payload["strategies"][sid]["auto_candidates"] = [c for c in list(auto_state.last_eval_candidates or []) if isinstance(c, dict) and str(c.get("strategy_id") or "") == sid]
+            payload["strategies"][sid]["summary"] = dict(by_id.get(sid) or {})
+            try:
+                if sid == "final_betting_v1":
+                    out = generate_final_betting_shadow_candidates(broker_service=svc, backend_settings=cfg, user_id=uid, limit=10)
+                elif sid == "swing_relaxed_v2":
+                    out = generate_swing_shadow_report(broker_service=svc, backend_settings=cfg, user_id=uid, strategy_id=sid)
+                else:
+                    out = generate_intraday_shadow_report(broker_service=svc, backend_settings=cfg, user_id=uid, strategy_id=sid)
+                rows, meta = _candidate_rows_from_shadow(sid, out if isinstance(out, dict) else {})
+                payload["strategies"][sid]["shadow_candidates"] = rows
+                if not payload["strategies"][sid]["summary"]:
+                    payload["strategies"][sid]["summary"] = meta
+            except Exception as exc:
+                if not payload["strategies"][sid]["summary"]:
+                    payload["strategies"][sid]["summary"] = {"strategy_id": sid, "ok": False, "error": str(exc)[:200]}
+    except Exception:
+        pass
+
     if include_raw:
         payload["raw"] = {
             "live_status": live_status_payload,
