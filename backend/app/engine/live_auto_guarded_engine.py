@@ -8,11 +8,13 @@ from typing import Any
 
 from app.orders.models import OrderRequest
 from app.scheduler.equity_tracker import EquityTracker
+from app.scheduler.kis_intraday import IntradayChartCache, build_intraday_universe_1m
 from app.strategy.intraday_common import kst_now, parse_krx_hhmm
+from app.strategy.rsi_flag_helpers import evaluate_rsi_blue_flag_sell
 
 from backend.app.clients.kis_client import build_kis_client_for_live_user
 from backend.app.risk.audit import append_risk_event
-from backend.app.risk.live_exit_rules import evaluate_exit_for_position, set_cooldown_after_loss, should_skip_due_to_cooldown
+from backend.app.risk.live_exit_rules import ExitDecision, evaluate_exit_for_position, set_cooldown_after_loss, should_skip_due_to_cooldown
 from backend.app.services.broker_secret_service import BrokerSecretService
 from backend.app.services.live_auto_guarded_state_store import LiveAutoGuardedState, LiveAutoGuardedStateStore
 from backend.app.services.live_market_mode_store import LiveMarketModeStore
@@ -20,6 +22,7 @@ from backend.app.strategy.live_candidate_scoring import score_candidate
 from backend.app.strategy.live_performance_scoring import get_performance_signal
 
 logger = logging.getLogger("backend.app.engine.live_auto_guarded_engine")
+_FINAL_BETTING_EXIT_CHART_CACHE = IntradayChartCache()
 
 
 def _utc_now_iso() -> str:
@@ -191,6 +194,8 @@ def tick_live_auto_guarded(
         m = str(requested_mode or "").strip().lower()
         if m in {"aggressive", "auto", "passive"}:
             st.mode_by_strategy[str(st.selected_strategy)] = m  # type: ignore[assignment]
+    if not str(st.selected_strategy or "").strip():
+        st.selected_strategy = str(getattr(cfg, "live_auto_strategy", "") or "").strip() or "final_betting_v1"
     st.last_tick_at_utc = _utc_now_iso()
     st.updated_at_utc = _utc_now_iso()
     orders_allowed = bool(safety.get("ok"))
@@ -374,6 +379,33 @@ def tick_live_auto_guarded(
         return {"ok": True, "skipped": True, "reason": st.last_reason, "state": asdict(st), "pnl": {"daily_pct": daily_pct, "total_pct": total_pct}}
 
     sell_submitted: list[dict[str, Any]] = []
+    rsi_sell_by_symbol: dict[str, dict[str, Any]] = {}
+    try:
+        now_kst = kst_now().time()
+        if str(st.selected_strategy or "").strip() == "final_betting_v1" and positions and parse_krx_hhmm("090000") <= now_kst <= parse_krx_hhmm("110000"):
+            syms = [str(getattr(p, "symbol", "") or "").strip() for p in positions]
+            syms = [s for s in syms if s]
+            uni_1m, _fs = build_intraday_universe_1m(
+                client,
+                syms,
+                target_bars_per_symbol=120,
+                logger=logger,
+                cache=_FINAL_BETTING_EXIT_CHART_CACHE,
+                intraday_fetch_allowed=True,
+                session_state="regular",
+                order_allowed=False,
+            )
+            for s in syms:
+                sub = uni_1m[uni_1m["symbol"] == s].copy() if not uni_1m.empty else None
+                if sub is None or sub.empty:
+                    continue
+                try:
+                    rsi_diag = evaluate_rsi_blue_flag_sell(sub)
+                except Exception:
+                    rsi_diag = {"rsi_blue_flag_sell": False, "rsi_blue_flag_reason": "calc_failed"}
+                rsi_sell_by_symbol[s] = dict(rsi_diag)
+    except Exception:
+        rsi_sell_by_symbol = {}
     if bool(getattr(cfg, "live_auto_sell_enabled", True)):
         for p in positions:
             sym = str(getattr(p, "symbol", "") or "")
@@ -382,16 +414,36 @@ def tick_live_auto_guarded(
                 continue
             avg = float(getattr(p, "average_price", 0.0) or 0.0)
             px = float(latest_prices.get(sym) or 0.0)
-            decision = evaluate_exit_for_position(
-                symbol=sym,
-                quantity=q,
-                average_price=avg,
-                last_price=px,
-                state=st.__dict__,
-                stop_loss_enabled=bool(getattr(cfg, "live_auto_stop_loss_enabled", True)),
-                take_profit_enabled=True,
-                trailing_enabled=True,
-            )
+            diag = rsi_sell_by_symbol.get(sym) if isinstance(rsi_sell_by_symbol.get(sym), dict) else {}
+            if bool(diag.get("rsi_blue_flag_sell")) and avg > 0 and px > avg:
+                decision = evaluate_exit_for_position(
+                    symbol=sym,
+                    quantity=q,
+                    average_price=avg,
+                    last_price=px,
+                    state=st.__dict__,
+                    stop_loss_enabled=bool(getattr(cfg, "live_auto_stop_loss_enabled", True)),
+                    take_profit_enabled=False,
+                    trailing_enabled=True,
+                )
+                if not decision.should_sell:
+                    decision = ExitDecision(
+                        should_sell=True,
+                        symbol=sym,
+                        quantity=q,
+                        reason=f"rsi_flag_take_profit {str(diag.get('rsi_blue_flag_reason') or '')}".strip(),
+                    )
+            else:
+                decision = evaluate_exit_for_position(
+                    symbol=sym,
+                    quantity=q,
+                    average_price=avg,
+                    last_price=px,
+                    state=st.__dict__,
+                    stop_loss_enabled=bool(getattr(cfg, "live_auto_stop_loss_enabled", True)),
+                    take_profit_enabled=True,
+                    trailing_enabled=True,
+                )
             if not decision.should_sell:
                 continue
             if st.daily_sell_count >= int(getattr(cfg, "live_auto_max_daily_sell_count", 10)):

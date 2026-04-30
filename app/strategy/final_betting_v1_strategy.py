@@ -29,6 +29,7 @@ from app.strategy.final_betting_rebound import (
 from app.strategy.market_regime import MarketRegimeConfig, MarketRegimeInputs, classify_market_regime
 from app.strategy.paper_position_sizing import compute_intraday_buy_quantity
 from app.strategy.regime_soft import compute_soft_regime
+from app.strategy.rsi_flag_helpers import evaluate_rsi_blue_flag_sell
 from app.strategy.strategy_fill_performance import (
     apply_fb_dynamic_cooldown,
     fb_health_size_multiplier,
@@ -767,6 +768,7 @@ class FinalBettingV1Strategy(BaseStrategy):
         self.last_intraday_signal_breakdown["symbol_stopout_count_today"] = dict(_meta_fb.get("stopout_counts") or {})
         scale_start = time(9, 5)
         scale_end = time(9, 30)
+        loss_cutoff_hhmm = time(9, 30)
 
         for sym, (qty, avg) in list(pos_symbols.items()):
             sub = prices[prices["symbol"] == sym].sort_values("date") if not prices.empty else pd.DataFrame()
@@ -825,6 +827,11 @@ class FinalBettingV1Strategy(BaseStrategy):
                     and last_px < avg * 0.9905
                     and last_px < open_px * 0.996
                 )
+
+                pnl_pct = (last_px / avg - 1.0) * 100.0 if avg > 0 else 0.0
+                loss_cutoff_ready = bool(now.time() >= time(9, 0) and now.time() <= loss_cutoff_hhmm and pnl_pct < 0.0)
+                if loss_cutoff_ready and exit_reason is None:
+                    exit_reason = "loss_cutoff_0930"
                 if gap_immediate or gap_delayed_ok:
                     exit_reason = "gap_down_stop_atr_delayed"
                 elif morning_weak:
@@ -883,6 +890,15 @@ class FinalBettingV1Strategy(BaseStrategy):
                             meta["runner_exit_reason"] = "score_fail"
                     else:
                         meta["runner_hold_reason"] = "followthrough_ok"
+                        try:
+                            rsi_diag = evaluate_rsi_blue_flag_sell(morning_bars)
+                        except Exception:
+                            rsi_diag = {"rsi_blue_flag_sell": False, "rsi_blue_flag_reason": "calc_failed"}
+                        meta["rsi_blue_flag_sell"] = bool(rsi_diag.get("rsi_blue_flag_sell"))
+                        meta["rsi_blue_flag_reason"] = str(rsi_diag.get("rsi_blue_flag_reason") or "")
+                        if bool(meta["rsi_blue_flag_sell"]) and last_px > avg:
+                            exit_reason = "rsi_flag_take_profit"
+                            exit_qty = qty
                 elif now.time() >= time(10, 0) and last_px < avg * 1.01:
                     vwap = ft_metrics.get("vwap")
                     allow_hold = bool(
@@ -913,6 +929,8 @@ class FinalBettingV1Strategy(BaseStrategy):
                     meta["early_low"] = round(float(ft_metrics.get("early_low") or 0.0), 4)
                 meta["pullback_from_high_pct"] = round(float(ft_metrics.get("pullback_from_high_pct") or 0.0), 4)
                 meta["gap_pct"] = round(float(gap_pct), 4)
+                meta.setdefault("rsi_blue_flag_sell", False)
+                meta.setdefault("rsi_blue_flag_reason", "")
                 fb_positions[sym] = meta
 
             if exit_reason:

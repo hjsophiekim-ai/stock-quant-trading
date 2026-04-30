@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.strategy.intraday_common import kst_now, parse_krx_hhmm
+
 
 @dataclass(frozen=True)
 class ExitDecision:
@@ -55,6 +57,21 @@ def evaluate_exit_for_position(
         return ExitDecision(should_sell=False, symbol=sym, quantity=0, reason="invalid_position")
 
     pnl_pct = (px / avg) - 1.0
+
+    selected = str(state.get("selected_strategy") or "").strip()
+    if selected == "final_betting_v1":
+        now = kst_now().time()
+        t0 = parse_krx_hhmm("090000")
+        t1 = parse_krx_hhmm("093000")
+        if t0 <= now <= t1:
+            if pnl_pct < 0:
+                return ExitDecision(
+                    should_sell=True,
+                    symbol=sym,
+                    quantity=q,
+                    reason=f"final_betting_loss_cutoff_0930 pnl_pct={pnl_pct:.4f} avg={avg:.2f} last={px:.2f}",
+                )
+        take_profit_enabled = False
 
     if stop_loss_enabled and pnl_pct <= -abs(float(stop_loss_pct)):
         return ExitDecision(
