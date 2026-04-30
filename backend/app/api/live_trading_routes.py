@@ -655,10 +655,38 @@ def auto_guarded_update_mode(
 def _candidate_rows_from_shadow(strategy_id: str, out: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     sid = str(strategy_id or "").strip()
     rows: list[dict[str, Any]] = []
+    shadow = out.get("shadow") if isinstance(out.get("shadow"), dict) else {}
+    rej_by_sym = shadow.get("rejection_reasons_by_symbol") if isinstance(shadow, dict) else {}
+    if not isinstance(rej_by_sym, dict):
+        rej_by_sym = {}
+
+    def _rej_reason_to_key(v: Any) -> str:
+        if v is None:
+            return ""
+        if isinstance(v, str):
+            return v.strip()
+        if isinstance(v, dict):
+            k = v.get("reason") or v.get("code") or v.get("blocked_reason")
+            return str(k or "").strip()
+        if isinstance(v, list) and v:
+            return str(v[0]).strip()
+        return str(v).strip()
+
+    top_counts: dict[str, int] = {}
+    for _, vv in rej_by_sym.items():
+        k = _rej_reason_to_key(vv)
+        if not k:
+            continue
+        top_counts[k] = top_counts.get(k, 0) + 1
+    top_reasons = [{"reason": k, "count": int(v)} for k, v in sorted(top_counts.items(), key=lambda x: (-x[1], x[0]))[:3]]
+
     meta: dict[str, Any] = {
         "strategy_id": sid,
         "asof_utc": out.get("asof_utc"),
         "ok": bool(out.get("ok")),
+        "inspected_symbols": sorted([str(s).strip() for s in rej_by_sym.keys() if str(s).strip()]),
+        "rejected_count": int(len(rej_by_sym)),
+        "top_rejection_reasons": top_reasons,
     }
     if sid == "final_betting_v1":
         for c in list(out.get("candidates") or []):

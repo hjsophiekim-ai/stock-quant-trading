@@ -193,6 +193,28 @@ async function fetchJson(url, init) {
   return d;
 }
 
+function updateInspectLinesFromSummary(summary) {
+  const inspected = (summary && summary.inspected_symbols) || [];
+  const rejCnt = summary && Number.isFinite(Number(summary.rejected_count)) ? Number(summary.rejected_count) : 0;
+  const top = (summary && summary.top_rejection_reasons) || [];
+  const skipped = summary && (summary.skipped_reason || summary.skippedReason);
+
+  if (Array.isArray(inspected) && inspected.length) {
+    const shown = inspected.slice(0, 12).join(", ");
+    $("inspectLine").textContent = "현재 검토 중: " + shown + (inspected.length > 12 ? " …" : "");
+  } else {
+    $("inspectLine").textContent = "현재 검토 중: -";
+  }
+
+  const parts = [];
+  if (skipped) parts.push(String(skipped));
+  if (rejCnt) parts.push("탈락 " + String(rejCnt));
+  if (Array.isArray(top) && top.length) {
+    parts.push(top.map((r) => String(r.reason || "") + "(" + String(r.count || 0) + ")").join(", "));
+  }
+  $("rejectLine").textContent = parts.length ? ("조건 미충족: " + parts.join(" · ")) : "조건 미충족: -";
+}
+
 async function refreshCompact(includeRaw) {
   const base = effectiveBackendUrl().replace(/\/$/, "");
   const url = base + "/api/live-trading/compact-dashboard" + (includeRaw ? "?include_raw=true" : "");
@@ -239,6 +261,8 @@ async function refreshCompact(includeRaw) {
 
   const shadowRows = (d.strategies && d.strategies[sid] && d.strategies[sid].shadow_candidates) || [];
   renderShadowTable(shadowRows, emptyReasonFromCompact(d, sid, "shadow"));
+  const summary = (d.strategies && d.strategies[sid] && d.strategies[sid].summary) || {};
+  updateInspectLinesFromSummary(summary);
   renderAccountTables(acc);
 }
 
@@ -284,6 +308,12 @@ async function fetchShadowForStrategy(strategyId) {
     }));
     const inspected = (out.shadow && out.shadow.fetch_summary && out.shadow.fetch_summary.length) || 0;
     const rejected = (out.shadow && out.shadow.rejection_reasons_by_symbol && Object.keys(out.shadow.rejection_reasons_by_symbol).length) || 0;
+    const rejBySym = (out.shadow && out.shadow.rejection_reasons_by_symbol) || {};
+    const inspectedSyms = rejBySym && typeof rejBySym === "object" ? Object.keys(rejBySym) : [];
+    $("inspectLine").textContent = inspectedSyms.length
+      ? ("현재 검토 중: " + inspectedSyms.slice(0, 12).join(", ") + (inspectedSyms.length > 12 ? " …" : ""))
+      : "현재 검토 중: -";
+    $("rejectLine").textContent = rejected ? ("조건 미충족: 검사 " + String(inspected) + " · 탈락 " + String(rejected)) : "조건 미충족: -";
     const msg = rows.length
       ? ""
       : ("현재 조건을 만족한 후보가 없습니다. " + "(검사 " + String(inspected) + " / 탈락 " + String(rejected) + ")");
@@ -304,6 +334,12 @@ async function fetchShadowForStrategy(strategyId) {
       reason: o.signal_reason,
       ts_utc: out.asof_utc,
     }));
+    const rejBySym = (out.shadow && out.shadow.rejection_reasons_by_symbol) || {};
+    const inspectedSyms = rejBySym && typeof rejBySym === "object" ? Object.keys(rejBySym) : [];
+    $("inspectLine").textContent = inspectedSyms.length
+      ? ("현재 검토 중: " + inspectedSyms.slice(0, 12).join(", ") + (inspectedSyms.length > 12 ? " …" : ""))
+      : "현재 검토 중: -";
+    $("rejectLine").textContent = inspectedSyms.length ? ("조건 미충족: 탈락 " + String(inspectedSyms.length)) : "조건 미충족: -";
     renderShadowTable(rows, out.ok ? "" : (out.message || out.error || ""));
     return;
   }
@@ -357,6 +393,12 @@ async function fetchShadowForStrategy(strategyId) {
     reason: o.signal_reason,
     ts_utc: out.asof_utc,
   }));
+  const rejBySym = (out.shadow && out.shadow.rejection_reasons_by_symbol) || {};
+  const inspectedSyms = rejBySym && typeof rejBySym === "object" ? Object.keys(rejBySym) : [];
+  $("inspectLine").textContent = inspectedSyms.length
+    ? ("현재 검토 중: " + inspectedSyms.slice(0, 12).join(", ") + (inspectedSyms.length > 12 ? " …" : ""))
+    : "현재 검토 중: -";
+  $("rejectLine").textContent = inspectedSyms.length ? ("조건 미충족: 탈락 " + String(inspectedSyms.length)) : "조건 미충족: -";
   renderShadowTable(rows, out.ok ? "" : (out.message || out.error || ""));
 }
 

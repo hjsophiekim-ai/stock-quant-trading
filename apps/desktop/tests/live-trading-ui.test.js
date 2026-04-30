@@ -29,5 +29,7 @@ test("live-trading.html shows unlock flag controls on top", () => {
   assert.ok(html.includes("id=\"liveFlagChk\""));
   assert.ok(html.includes("id=\"secondaryChk\""));
   assert.ok(html.includes("id=\"extraChk\""));
+  assert.ok(html.includes("id=\"inspectLine\""));
+  assert.ok(html.includes("id=\"rejectLine\""));
 });
 
