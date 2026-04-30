@@ -152,6 +152,28 @@ let lastTick = null;
 let lastSellOnly = null;
 let lastLiqPlans = null;
 
+function summarizeSkipReason(summary) {
+  if (!summary || typeof summary !== "object") return "";
+  const sk = summary.skipped_reason || summary.skippedReason || "";
+  if (sk === "not_in_time_window") return "시간대 아님";
+  return "";
+}
+
+function emptyReasonFromCompact(compact, strategyId, kind) {
+  const sid = String(strategyId || "");
+  const m = compact && compact.strategies && compact.strategies[sid];
+  const summary = m && m.summary;
+  const sk = summarizeSkipReason(summary);
+  const counts = summary && typeof summary === "object" ? summary : {};
+  const inspected = Array.isArray(counts.inspected_symbols) ? counts.inspected_symbols.length : 0;
+  const rejected = Number.isFinite(Number(counts.rejected_count)) ? Number(counts.rejected_count) : 0;
+  const parts = [];
+  if (sk) parts.push(sk);
+  if (inspected || rejected) parts.push("검사 " + String(inspected) + " / 탈락 " + String(rejected));
+  if (kind === "auto" && compact && compact.auto && compact.auto.market_notice) parts.push(String(compact.auto.market_notice));
+  return parts.length ? ("현재 조건을 만족한 " + (kind === "shadow" ? "후보가" : "판단 결과가") + " 없습니다. (" + parts.join(" · ") + ")") : "";
+}
+
 function setActiveTab(sid) {
   activeStrategyId = sid;
   for (const b of document.querySelectorAll(".tab")) {
@@ -205,7 +227,18 @@ async function refreshCompact(includeRaw) {
     $("accountSummary").textContent = "계좌 조회 실패: " + String(acc.error || "");
   }
 
-  renderAutoTable((d.auto && d.auto.last_eval_candidates) || []);
+  const sid = activeStrategyId;
+  const autoRows =
+    (d.strategies && d.strategies[sid] && d.strategies[sid].auto_candidates) ||
+    ((d.auto && d.auto.last_eval_candidates) || []);
+  renderAutoTable(autoRows);
+  if ($("autoEmpty").style.display !== "none") {
+    const msg = emptyReasonFromCompact(d, sid, "auto");
+    if (msg) $("autoEmpty").textContent = msg;
+  }
+
+  const shadowRows = (d.strategies && d.strategies[sid] && d.strategies[sid].shadow_candidates) || [];
+  renderShadowTable(shadowRows, emptyReasonFromCompact(d, sid, "shadow"));
   renderAccountTables(acc);
 }
 
